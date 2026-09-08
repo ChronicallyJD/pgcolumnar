@@ -3572,8 +3572,17 @@ rename_projection_declaration_array(Datum value, const char *oldName,
 		}
 	}
 
-	return PointerGetDatum(construct_array(elems, nelems, TEXTOID,
-										   -1, false, TYPALIGN_INT));
+	/*
+	 * resolve_columns() rejects NULL elements before add_projection() records a
+	 * declaration. Preserve the bitmap anyway, so this helper remains safe if a
+	 * catalog row created outside that path contains one.
+	 */
+	return PointerGetDatum(construct_md_array(elems, nulls,
+											 ARR_NDIM(arr),
+											 ARR_DIMS(arr),
+											 ARR_LBOUND(arr),
+											 TEXTOID, -1, false,
+											 TYPALIGN_INT));
 }
 
 /*
@@ -3639,6 +3648,11 @@ PgColumnarRenameProjectionDeclarationColumn(Oid relid, const char *oldName,
 			changed = changed || sortChanged;
 		}
 
+		/*
+		 * This is an unindexed catalog seqscan updated in place. If it encounters
+		 * its updated tuple again, the old name is absent and this idempotent arm
+		 * prevents a second CatalogTupleUpdate.
+		 */
 		if (!changed)
 			continue;
 
