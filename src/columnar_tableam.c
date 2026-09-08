@@ -2475,8 +2475,10 @@ pgcolumnar_reject_set_am_to_columnar(AlterTableStmt *stmt)
  * Projection definitions are extension metadata, not pg_depend objects, so core
  * cannot discover this dependency. Without this check DROP succeeds, the
  * projection retains the old attnum, and its next sorted write asks typcache for
- * the dropped pg_attribute's type OID zero. Refuse at the DDL boundary until
- * projections can participate in DROP ... CASCADE.
+ * the dropped pg_attribute's type OID zero. Dropping a stored column that is not
+ * a sort key is quieter but still wrong: the projection subsequently reads
+ * empty. Refuse either shape at the DDL boundary until projections can
+ * participate in DROP ... CASCADE.
  */
 static void
 pgcolumnar_reject_drop_projected_column(AlterTableStmt *stmt)
@@ -2500,13 +2502,28 @@ pgcolumnar_reject_drop_projected_column(AlterTableStmt *stmt)
 		return;
 
 	/*
-	 * Serialize against add_projection(), which takes ShareUpdateExclusiveLock,
-	 * then retain these locks while core upgrades to AccessExclusiveLock for the
-	 * ALTER. Otherwise a projection could be added between this check and DROP.
+	 * Check ownership before taking our lock or reading projection metadata.
+	 * standard_ProcessUtility has not run yet, so without this ordering a caller
+	 * with no rights on the table can distinguish projected from unprojected
+	 * columns by SQLSTATE and retain a ShareUpdateExclusiveLock until transaction
+	 * end.
+	 */
+	relid = RangeVarGetRelid(stmt->relation, NoLock, true);
+	if (!OidIsValid(relid))
+		return;
+	PgColumnarRequireTableOwnerByOid(relid);
+
+	/*
+	 * add_projection() takes ShareLock, which conflicts with our
+	 * ShareUpdateExclusiveLock. Retain this lock while core upgrades to
+	 * AccessExclusiveLock for the ALTER, so a projection cannot be added between
+	 * this check and DROP. Recheck ownership after locking because ALTER OWNER
+	 * could have raced the unlocked check above.
 	 */
 	relid = RangeVarGetRelid(stmt->relation, ShareUpdateExclusiveLock, true);
 	if (!OidIsValid(relid))
 		return;
+	PgColumnarRequireTableOwnerByOid(relid);
 
 	if (stmt->relation->inh)
 		relations = find_all_inheritors(relid, ShareUpdateExclusiveLock, NULL);
@@ -2551,6 +2568,11 @@ pgcolumnar_reject_drop_projected_column(AlterTableStmt *stmt)
 				if (projection->projectionId == 0)
 					continue;
 
+				/*
+				 * add_projection() requires every sort-key column to appear in
+				 * columns, so this one loop covers both stored-only columns and
+				 * the sort keys whose dropped type would break the writer.
+				 */
 				for (i = 0; i < projection->columnsLen; i++)
 				{
 					if (projection->columns[i] != attnum)

@@ -18,22 +18,31 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 pgc_setup "${1:-/usr/local/pg17/bin/pg_config}"
 
-sqlstate() {
-	local out code
+sqlstate_as() {
+	local role="$1" sql="$2" out code
 	out="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" \
-		-U postgres -d "$PGC_DB" -Atq -v VERBOSITY=verbose \
-		-c "\\set VERBOSITY verbose" -c "$1" 2>&1)"
+		-U "$role" -d "$PGC_DB" -Atq -v VERBOSITY=verbose \
+		-c "\\set VERBOSITY verbose" -c "$sql" 2>&1)"
 	code="$(printf '%s\n' "$out" |
 		sed -n 's/.*ERROR:[[:space:]]*\([0-9A-Z]\{5\}\):.*/\1/p' |
 		head -1)"
 	if [ -n "$code" ]; then printf '%s\n' "$code"; else printf '00000\n'; fi
 }
+sqlstate() { sqlstate_as postgres "$1"; }
 
 psql_run "CREATE TABLE pdc (id int, payload text, sort_key int) USING pgcolumnar;"
 psql_run "SELECT pgcolumnar.add_projection(
 	'pdc', 'by_sort', ARRAY['id','sort_key'], ARRAY['sort_key']);"
 psql_run "INSERT INTO pdc
 	SELECT g, 'row-' || g, g % 10 FROM generate_series(1,1000) g;"
+
+# The pre-statement dependency check must not tell a stranger which column the
+# projection covers, or let that role take the lock retained by the owner path.
+psql_run "CREATE ROLE pdc_nobody LOGIN;"
+check "a non-owner learns nothing from a projected column" \
+	"$(sqlstate_as pdc_nobody 'ALTER TABLE pdc DROP COLUMN sort_key;')" "42501"
+check "the same non-owner error is returned for an unprojected column" \
+	"$(sqlstate_as pdc_nobody 'ALTER TABLE pdc DROP COLUMN payload;')" "42501"
 
 # Red before the fix: PostgreSQL accepts this (00000), and the next INSERT
 # reaches the projection writer with a type OID of zero.
