@@ -2468,6 +2468,116 @@ pgcolumnar_reject_set_am_to_columnar(AlterTableStmt *stmt)
 	}
 }
 
+/*
+ * pgcolumnar_reject_drop_projected_column
+ *		Keep DROP COLUMN from leaving a projection pointed at a dropped attribute.
+ *
+ * Projection definitions are extension metadata, not pg_depend objects, so core
+ * cannot discover this dependency. Without this check DROP succeeds, the
+ * projection retains the old attnum, and its next sorted write asks typcache for
+ * the dropped pg_attribute's type OID zero. Refuse at the DDL boundary until
+ * projections can participate in DROP ... CASCADE.
+ */
+static void
+pgcolumnar_reject_drop_projected_column(AlterTableStmt *stmt)
+{
+	Oid			relid;
+	List	   *relations;
+	ListCell   *cmdCell;
+	bool		hasDrop = false;
+
+	foreach(cmdCell, stmt->cmds)
+	{
+		AlterTableCmd *cmd = (AlterTableCmd *) lfirst(cmdCell);
+
+		if (cmd->subtype == AT_DropColumn)
+		{
+			hasDrop = true;
+			break;
+		}
+	}
+	if (!hasDrop)
+		return;
+
+	/*
+	 * Serialize against add_projection(), which takes ShareUpdateExclusiveLock,
+	 * then retain these locks while core upgrades to AccessExclusiveLock for the
+	 * ALTER. Otherwise a projection could be added between this check and DROP.
+	 */
+	relid = RangeVarGetRelid(stmt->relation, ShareUpdateExclusiveLock, true);
+	if (!OidIsValid(relid))
+		return;
+
+	if (stmt->relation->inh)
+		relations = find_all_inheritors(relid, ShareUpdateExclusiveLock, NULL);
+	else
+		relations = list_make1_oid(relid);
+
+	foreach(cmdCell, stmt->cmds)
+	{
+		AlterTableCmd *cmd = (AlterTableCmd *) lfirst(cmdCell);
+		ListCell   *relCell;
+
+		if (cmd->subtype != AT_DropColumn || cmd->name == NULL)
+			continue;
+
+		foreach(relCell, relations)
+		{
+			Oid			kid = lfirst_oid(relCell);
+			AttrNumber	attnum;
+			Relation	rel;
+			uint64		storageId;
+			List	   *projections;
+			ListCell   *projectionCell;
+
+			if (get_rel_relkind(kid) != RELKIND_RELATION ||
+				!PgColumnarIsColumnarRelation(kid))
+				continue;
+
+			attnum = get_attnum(kid, cmd->name);
+			if (attnum == InvalidAttrNumber)
+				continue;			/* DROP IF EXISTS of a missing column */
+
+			rel = table_open(kid, NoLock);
+			storageId = PgColumnarStorageId(rel);
+			projections = PgColumnarListProjections(storageId);
+
+			foreach(projectionCell, projections)
+			{
+				PgColumnarProjection *projection =
+					(PgColumnarProjection *) lfirst(projectionCell);
+				int			i;
+
+				if (projection->projectionId == 0)
+					continue;
+
+				for (i = 0; i < projection->columnsLen; i++)
+				{
+					if (projection->columns[i] != attnum)
+						continue;
+
+					ereport(ERROR,
+							(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+							 errmsg("cannot drop column \"%s\" because projection \"%s\" depends on it",
+									cmd->name, projection->name),
+							 errdetail("Projection \"%s\" on table \"%s\" stores this column.",
+									   projection->name,
+									   RelationGetRelationName(rel)),
+							 errhint("Drop the projection with pgcolumnar.drop_projection() before dropping the column.")));
+				}
+			}
+
+			/*
+			 * Keep the lock until transaction end; standard_ProcessUtility will
+			 * upgrade it for ALTER TABLE after this hook returns.
+			 */
+			table_close(rel, NoLock);
+		}
+	}
+
+	list_free(relations);
+}
+
 static void
 pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 						 bool readOnlyTree, ProcessUtilityContext context,
@@ -2478,7 +2588,12 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 
 	/* read-only inspection, so readOnlyTree needs no copy of the tree */
 	if (parsetree != NULL && IsA(parsetree, AlterTableStmt))
-		pgcolumnar_reject_set_am_to_columnar((AlterTableStmt *) parsetree);
+	{
+		AlterTableStmt *stmt = (AlterTableStmt *) parsetree;
+
+		pgcolumnar_reject_drop_projected_column(stmt);
+		pgcolumnar_reject_set_am_to_columnar(stmt);
+	}
 
 	if (prev_process_utility_hook)
 		prev_process_utility_hook(pstmt, queryString, readOnlyTree, context,
