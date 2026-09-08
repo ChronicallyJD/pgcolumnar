@@ -2625,6 +2625,71 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 								params, queryEnv, dest, qc);
 
 	/*
+	 * A rewrite loses this relation's declared projections, so re-record them
+	 * (#876, #887).
+	 *
+	 * AFTER the statement, for the same reason the rename block below runs there:
+	 * the rewrite has committed to the catalog by this point, the new storage id
+	 * is readable, and a statement that ERRORED has left nothing to repair.
+	 *
+	 * Here rather than in pgcolumnar_relation_set_new_filelocator, which is where
+	 * #887 proposed it. Measured on 18.4 with that callback logging its own
+	 * relid: TRUNCATE reaches it as the user's relation with the fork attached
+	 * and both projection rows in scope, but a rewriting ALTER TABLE reaches it
+	 * as the TRANSIENT relation make_new_heap builds -- pg_temp_<oid>, no
+	 * columnar fork -- so the rewrite branch is not taken and the old storage id
+	 * and projection list are never in scope. The callback can serve one of the
+	 * two shapes and not the other.
+	 *
+	 * Every relation the statement could have rewritten, and their descendants.
+	 * A TRUNCATE names any number of relations and rewrites all of them
+	 * (measured), and a type change on a PARTITIONED parent rewrites each
+	 * columnar partition while the parent named in the statement is not itself a
+	 * columnar relation (measured: the child loses its projection). Both shapes
+	 * are arms in test/projection_rewrite.sh. find_all_inheritors for the same
+	 * reason the rename block walks it; the statement already holds
+	 * AccessExclusiveLock on the hierarchy, so NoLock takes nothing new.
+	 */
+	if (parsetree != NULL &&
+		(IsA(parsetree, AlterTableStmt) || IsA(parsetree, TruncateStmt)))
+	{
+		List	   *targets = NIL;
+		ListCell   *lc;
+
+		if (IsA(parsetree, TruncateStmt))
+		{
+			foreach(lc, ((TruncateStmt *) parsetree)->relations)
+			{
+				RangeVar   *rv = (RangeVar *) lfirst(lc);
+				Oid			relid = RangeVarGetRelid(rv, NoLock, true);
+
+				if (OidIsValid(relid))
+					targets = lappend_oid(targets, relid);
+			}
+		}
+		else
+		{
+			AlterTableStmt *ats = (AlterTableStmt *) parsetree;
+			Oid			relid = ats->relation ?
+				RangeVarGetRelid(ats->relation, NoLock, true) : InvalidOid;
+
+			if (OidIsValid(relid))
+				targets = lappend_oid(targets, relid);
+		}
+
+		foreach(lc, targets)
+		{
+			List	   *kin = find_all_inheritors(lfirst_oid(lc), NoLock, NULL);
+			ListCell   *lc2;
+
+			foreach(lc2, kin)
+				PgColumnarRerecordProjectionsAfterRewrite(lfirst_oid(lc2));
+			list_free(kin);
+		}
+		list_free(targets);
+	}
+
+	/*
 	 * A column rename must be carried through the ordering mark (#778). The
 	 * mark records its sort key as column NAMES and both ordering self-gates
 	 * compare those against the current attname, so a rename that moves a name

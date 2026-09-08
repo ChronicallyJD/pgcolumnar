@@ -3497,6 +3497,62 @@ PgColumnarInsertProjectionRow(const PgColumnarProjection *proj)
 }
 
 /*
+ * PgColumnarListProjectionDeclarations
+ *		Every declared projection for one relation, by column NAME.
+ *
+ * The declaration is keyed by relation, not by storage id, so it is the only
+ * record of a projection that survives a rewrite -- which is what makes it the
+ * source a post-rewrite re-record must read from (#876, #887). The storage-id
+ * keyed pgcolumnar.projection rows are gone by then.
+ *
+ * Names rather than attnums, deliberately: that is what the declaration holds,
+ * because a dump and restore cannot carry attnums (#266). The caller resolves
+ * them against the relation as it is NOW, which is the behaviour a type change
+ * or an added column needs.
+ */
+List *
+PgColumnarListProjectionDeclarations(Oid relid)
+{
+	Relation	rel = open_columnar_table("projection_declaration",
+										  AccessShareLock);
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	ScanKeyData key[1];
+	SysScanDesc scan;
+	HeapTuple	tuple;
+	List	   *result = NIL;
+
+	ScanKeyInit(&key[0], Anum_projection_declaration_rel, BTEqualStrategyNumber,
+				F_OIDEQ, ObjectIdGetDatum(relid));
+
+	scan = systable_beginscan(rel, InvalidOid, false, NULL, 1, key);
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		PgColumnarProjectionDeclaration *d =
+			palloc0(sizeof(PgColumnarProjectionDeclaration));
+		bool		isnull;
+		Datum		v;
+
+		d->relid = relid;
+		v = heap_getattr(tuple, Anum_projection_declaration_name, tupdesc,
+						 &isnull);
+		d->name = pstrdup(NameStr(*DatumGetName(v)));
+		v = heap_getattr(tuple, Anum_projection_declaration_columns, tupdesc,
+						 &isnull);
+		/* Copied out of the scan: the tuple is not ours past systable_getnext. */
+		d->columns = isnull ? NULL : DatumGetArrayTypePCopy(v);
+		v = heap_getattr(tuple, Anum_projection_declaration_sort_key, tupdesc,
+						 &isnull);
+		d->sortKey = isnull ? NULL : DatumGetArrayTypePCopy(v);
+
+		result = lappend(result, d);
+	}
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	return result;
+}
+
+/*
  * PgColumnarRecordProjectionDeclaration
  *		Record the intent behind a projection: which relation, which name, and
  *		which columns by NAME rather than by attnum (#266).

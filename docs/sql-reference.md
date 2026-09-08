@@ -470,6 +470,18 @@ each table in the database.
 Run this after a logical restore. A second run builds nothing, so it is safe to
 run at any time.
 
+You no longer need it after a rewrite. `TRUNCATE`, a rewriting `ALTER TABLE`, and
+the maintenance rewrites re-record their projections themselves. Two cases still
+need this function. The first is a logical restore. The second is a declaration
+that names a column the table no longer has, because
+`ALTER TABLE ... RENAME COLUMN` does not yet carry the rename into the
+declaration. A rewrite that meets such a declaration reports it as
+
+    WARNING:  could not restore projection "p" on "t" after rewrite
+    DETAIL:   Its declaration names a column the table no longer has.
+
+Correct the declaration, then run this.
+
 ```sql
 SELECT pgcolumnar.rebuild_projections();
 ```

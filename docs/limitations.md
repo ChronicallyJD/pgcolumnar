@@ -510,6 +510,14 @@ or an explicit `VACUUM` marks the group. Turn the feature off with
 
 ## Projections
 
+`ALTER TABLE ... RENAME COLUMN` does not rename the column inside a projection's
+declaration. The projection itself keeps working, because its storage records
+attnums rather than names. What breaks is anything that reads the declaration
+back. There are two such readers. `pgcolumnar.rebuild_projections()` needs the
+declaration after a logical restore. The automatic re-record needs it after a
+rewrite, and reports an unusable declaration as a WARNING. To recover, rename the
+column back, or drop and re-declare the projection.
+
 A projection is an additional sorted copy. Each projection therefore adds write
 cost and storage cost. `pgcolumnar.vacuum` builds the projections again.
 
