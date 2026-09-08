@@ -170,6 +170,40 @@ check "t_trunc_multi: the SECOND table in the statement also survives" \
 	"$(pgc_set_hash "SELECT pgcolumnar.read_projection('t_trunc_two','pp')")" \
 	"$(pgc_set_hash "SELECT a::text||'|'||b FROM t_trunc_two")"
 
+# TRUNCATE ... CASCADE reaches a table through a FOREIGN KEY. That table is not
+# named in the statement and is not an inheritance descendant of anything named, so
+# a repair that walks the statement's relation list plus find_all_inheritors never
+# visits it (@linuxhikerpm, #892 review). The repair therefore records what the
+# table-AM callback actually rewrote instead of re-deriving the statement's reach.
+#
+# The parent here is a HEAP table with no projections of its own, so the only thing
+# that can make this arm pass is the child being repaired.
+echo "-- a columnar table truncated through a foreign-key CASCADE"
+psql_run "CREATE TABLE cas_parent (id int PRIMARY KEY);"
+psql_run "CREATE TABLE cas_child (id int REFERENCES cas_parent(id), v int) USING pgcolumnar;"
+psql_run "SELECT pgcolumnar.add_projection('cas_child','pv',ARRAY['id','v'],ARRAY['v']);"
+psql_run "INSERT INTO cas_parent SELECT g FROM generate_series(1,$N) g;"
+psql_run "INSERT INTO cas_child SELECT g, g%7 FROM generate_series(1,$N) g;"
+check "PREMISE the cascade fixture reads before the truncate" \
+	"$(q "SELECT count(*) FROM pgcolumnar.read_projection('cas_child','pv');")" "$N"
+CAS_SID0="$(q "SELECT pgcolumnar.get_storage_id('cas_child');")"
+psql_run "TRUNCATE cas_parent CASCADE;"
+if [ "$CAS_SID0" = "$(q "SELECT pgcolumnar.get_storage_id('cas_child');")" ]; then
+	# If the cascade did not rewrite the child there is nothing to repair, and the
+	# arm below would pass for the wrong reason.
+	check_unrunnable "cas_child P1 the cascaded child keeps its projection" \
+		UNMET_PRECONDITION "the CASCADE did not rewrite the child"
+else
+	pgc_pass "cas_child: the CASCADE rewrote the child"
+	check "cas_child P1 the cascaded child keeps its projection" \
+		"$(pgc_set_hash "SELECT pgcolumnar.read_projection('cas_child','pv')")" \
+		"$(pgc_set_hash "SELECT id::text||'|'||v::text FROM cas_child")"
+	check "cas_child P2 no retired projection rows" "$(retired_rows)" "0"
+	check "cas_child P3 declaration survives" \
+		"$(q "SELECT count(*) FROM pgcolumnar.projection_declaration
+		       WHERE rel = 'cas_child'::regclass AND name = 'pv';")" "1"
+fi
+
 # A partitioned CHILD, rewritten by a type change on the PARENT. The statement
 # names pt, the rewrite lands on pt1, and pt is not itself a columnar relation --
 # so a fix that looks only at the relation named in the statement never fires

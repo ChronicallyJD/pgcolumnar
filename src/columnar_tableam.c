@@ -102,6 +102,67 @@ static const struct config_enum_entry pgcolumnar_compression_options[] = {
 /* forward declaration of the AM routine so hooks can compare against it */
 static const TableAmRoutine pgcolumnar_am_methods;
 
+/*
+ * Relations this statement actually rewrote, recorded by
+ * pgcolumnar_relation_set_new_filelocator and drained by
+ * pgcolumnar_process_utility so their projections can be re-recorded (#876, #887).
+ *
+ * Recorded rather than re-derived from the statement, because the statement does
+ * not name everything it rewrites. TRUNCATE ... CASCADE reaches a table through a
+ * foreign key: it is neither listed in TruncateStmt->relations nor an inheritance
+ * descendant of anything listed, so a repair that walks the statement misses it
+ * (@linuxhikerpm, #892 review). The callback, by contrast, fires on every relation
+ * whose storage is actually replaced, which is the set we want by definition.
+ *
+ * Only relations that took the rewrite branch land here, so a transient relation
+ * built by make_new_heap never does: at its creation there is no columnar fork and
+ * the branch is not taken. That matters, because such a relation is dropped before
+ * this list is drained.
+ *
+ * TopMemoryContext, because the callback runs inside the statement's context and
+ * the list has to outlive it. Cleared when a utility statement starts, drained and
+ * cleared when one finishes, and cleared at transaction end so an ERROR between
+ * those two points cannot carry a relid into the next statement.
+ */
+static List *pgcolumnar_rewritten_relids = NIL;
+static bool pgcolumnar_xact_cb_registered = false;
+
+static void
+pgcolumnar_forget_rewritten(void)
+{
+	if (pgcolumnar_rewritten_relids != NIL)
+	{
+		list_free(pgcolumnar_rewritten_relids);
+		pgcolumnar_rewritten_relids = NIL;
+	}
+}
+
+static void
+pgcolumnar_rewritten_xact_callback(XactEvent event, void *arg)
+{
+	/* Any transaction end, committed or not: the list belongs to one statement. */
+	pgcolumnar_forget_rewritten();
+}
+
+static void
+pgcolumnar_record_rewritten(Oid relid)
+{
+	MemoryContext old;
+
+	if (!pgcolumnar_xact_cb_registered)
+	{
+		RegisterXactCallback(pgcolumnar_rewritten_xact_callback, NULL);
+		pgcolumnar_xact_cb_registered = true;
+	}
+
+	if (list_member_oid(pgcolumnar_rewritten_relids, relid))
+		return;
+
+	old = MemoryContextSwitchTo(TopMemoryContext);
+	pgcolumnar_rewritten_relids = lappend_oid(pgcolumnar_rewritten_relids, relid);
+	MemoryContextSwitchTo(old);
+}
+
 static object_access_hook_type prev_object_access_hook = NULL;
 static ProcessUtility_hook_type prev_process_utility_hook = NULL;
 static ExecutorEnd_hook_type prev_executor_end_hook = NULL;
@@ -818,6 +879,12 @@ pgcolumnar_relation_set_new_filelocator(Relation rel,
 	if (smgrexists(oldsrel, MAIN_FORKNUM) &&
 		smgrnblocks(oldsrel, MAIN_FORKNUM) >= COLUMNAR_INITIALIZED_NBLOCKS)
 	{
+		/*
+		 * Remember that this relation was rewritten, before the storage tree that
+		 * proves it goes away. pgcolumnar_process_utility drains the list.
+		 */
+		pgcolumnar_record_rewritten(RelationGetRelid(rel));
+
 		pgcolumnar_delete_storage_tree(PgColumnarStorageId(rel));
 
 		/*
@@ -2608,6 +2675,12 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 {
 	Node	   *parsetree = pstmt->utilityStmt;
 
+	/*
+	 * Start from empty: a statement that ERRORED between recording and draining
+	 * must not leave a relid for the next one to act on.
+	 */
+	pgcolumnar_forget_rewritten();
+
 	/* read-only inspection, so readOnlyTree needs no copy of the tree */
 	if (parsetree != NULL && IsA(parsetree, AlterTableStmt))
 	{
@@ -2656,6 +2729,13 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 		List	   *targets = NIL;
 		ListCell   *lc;
 
+		/*
+		 * Everything the callback saw rewritten. This is the set that catches a
+		 * TRUNCATE ... CASCADE, whose extra tables the statement never names.
+		 */
+		foreach(lc, pgcolumnar_rewritten_relids)
+			targets = lappend_oid(targets, lfirst_oid(lc));
+
 		if (IsA(parsetree, TruncateStmt))
 		{
 			foreach(lc, ((TruncateStmt *) parsetree)->relations)
@@ -2663,7 +2743,7 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 				RangeVar   *rv = (RangeVar *) lfirst(lc);
 				Oid			relid = RangeVarGetRelid(rv, NoLock, true);
 
-				if (OidIsValid(relid))
+				if (OidIsValid(relid) && !list_member_oid(targets, relid))
 					targets = lappend_oid(targets, relid);
 			}
 		}
@@ -2673,7 +2753,13 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 			Oid			relid = ats->relation ?
 				RangeVarGetRelid(ats->relation, NoLock, true) : InvalidOid;
 
-			if (OidIsValid(relid))
+			/*
+			 * The named relation as well as the recorded ones. A rewriting ALTER
+			 * reaches the callback on a transient relation, so nothing is recorded
+			 * for it and the statement's own name is the only route to the
+			 * relation that needs repairing.
+			 */
+			if (OidIsValid(relid) && !list_member_oid(targets, relid))
 				targets = lappend_oid(targets, relid);
 		}
 
@@ -2687,6 +2773,7 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 			list_free(kin);
 		}
 		list_free(targets);
+		pgcolumnar_forget_rewritten();
 	}
 
 	/*
