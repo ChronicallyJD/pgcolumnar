@@ -1,8 +1,10 @@
 # Running the pytest harness
 
 This is the issue #432 pilot. It runs beside `test/*.sh`, and replaces nothing.
-The design and the measurements behind each guard are in
-`design/ISSUE_432_PYTEST_HARNESS.md`.
+
+- `TESTS.md` in this directory documents every test and every assertion helper.
+- `design/ISSUE_432_PYTEST_HARNESS.md` holds the design and the measurements
+  behind each guard.
 
 ## Prerequisites
 

@@ -57,6 +57,22 @@ def _empty(v):
     return v is None or (hasattr(v, "__len__") and len(v) == 0)
 
 
+def _plan_nodes(node):
+    """Every node of an EXPLAIN (FORMAT JSON) tree, as parsed by psycopg."""
+    if isinstance(node, dict):
+        yield node
+        for key in ("Plan", "Plans"):
+            child = node.get(key)
+            if isinstance(child, dict):
+                yield from _plan_nodes(child)
+            elif isinstance(child, list):
+                for entry in child:
+                    yield from _plan_nodes(entry)
+    elif isinstance(node, list):
+        for entry in node:
+            yield from _plan_nodes(entry)
+
+
 class Expect:
     """Records assertions, and refuses the ones that could not have failed."""
 
@@ -139,10 +155,19 @@ class Expect:
         """Assert a node exists, by EXACT equality on a typed EXPLAIN JSON field.
 
         `EXPLAIN (FORMAT JSON)` arrives from psycopg as parsed Python, so there is
-        no text to grep. The provider of a columnar scan is `PgColumnarScan`, which
-        is precisely why `grep ColumnarScan` was unfalsifiable: the wanted string
-        is a substring of the real one. Equality on `Custom Plan Provider` cannot
-        be satisfied by a superstring.
+        no text to grep, and equality on a typed field cannot be satisfied by a
+        superstring the way `grep ColumnarScan` was by `PgColumnarScan`.
+
+        BUT `provider="PgColumnarScan"` DOES NOT MEAN "a columnar SCAN". Measured:
+        the vectorized aggregate node reuses the scan's registered methods
+        (`columnar_vector.c:806` assigns `&pgcolumnar_scan_methods`), so every
+        pgcolumnar node reports that provider. With the vector aggregate engaged
+        there is a single Custom Scan node carrying `Columnar Vectorized
+        Aggregates` and NO `Columnar Projected Columns`, and this predicate still
+        says yes. `pgc_is_columnar_scan` says no, because it greps for the marker.
+
+        So use `plan_marker` to ask "did the columnar SCAN run". Use this to ask
+        "is there a pgcolumnar node at all", which is a weaker and rarer question.
         """
         if node_type is None and provider is None:
             raise VacuityError(
@@ -150,22 +175,8 @@ class Expect:
             )
         label = name or f"plan has node_type={node_type!r} provider={provider!r}"
 
-        def walk(node, depth=0):
-            if isinstance(node, dict):
-                yield node
-                for key in ("Plan", "Plans"):
-                    child = node.get(key)
-                    if isinstance(child, dict):
-                        yield from walk(child, depth + 1)
-                    elif isinstance(child, list):
-                        for entry in child:
-                            yield from walk(entry, depth + 1)
-            elif isinstance(node, list):
-                for entry in node:
-                    yield from walk(entry, depth + 1)
-
         seen_types, seen_providers = [], []
-        for node in walk(plan):
+        for node in _plan_nodes(plan):
             nt = node.get("Node Type")
             pv = node.get("Custom Plan Provider")
             if nt is not None:
@@ -230,6 +241,33 @@ class Expect:
         if result.ret == 0:
             raise AssertionError(
                 f"{name}: the inner run exited 0, so nothing refused it."
+            )
+
+    def plan_marker(self, plan, key, name=None, absent=False):
+        """Assert a plan node carries (or does not carry) a Columnar property KEY.
+
+        This is the faithful port of `pgc_is_columnar_scan` (`lib.sh`), which greps
+        `EXPLAIN` output for `Columnar Projected Columns`. That marker is emitted
+        only by the scan's explain callback (`columnar_customscan.c:3631`) and never
+        by either aggregate callback, so its presence is what distinguishes a
+        columnar scan from a vectorized aggregate that absorbed one.
+
+        Presence of a KEY, not equality of a VALUE, because the marker's value is a
+        count that legitimately varies. `absent=True` asserts the opposite, which is
+        how a test pins that a plan is NOT a scan.
+        """
+        label = name or f"plan {'lacks' if absent else 'carries'} {key!r}"
+        found, seen = False, set()
+        for node in _plan_nodes(plan):
+            seen.update(k for k in node if k.startswith("Columnar"))
+            if key in node:
+                found = True
+        self._counted()
+        if absent and found:
+            raise AssertionError(f"{label}: the key is present and should not be.")
+        if not absent and not found:
+            raise AssertionError(
+                f"{label}: no node carries it. Columnar keys present: {sorted(seen)!r}"
             )
 
     # -- the third state ---------------------------------------------------

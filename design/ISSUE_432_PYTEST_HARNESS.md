@@ -172,20 +172,44 @@ a lint rule enforces it. Where a test must catch, it catches the specific class.
 
 ### 5.4 Plan assertions read a typed field, never a substring
 
-Measured on a columnar scan:
+`EXPLAIN (FORMAT JSON)` arrives from psycopg as a parsed Python list, so there is no
+text to grep and no substring to match. That much is straightforward.
+
+**The subtlety cost this harness a defect, so it is recorded rather than
+summarised.** The obvious assertion is exact equality on `Custom Plan Provider`,
+which for a columnar scan is `PgColumnarScan`. That is the string that made
+`grep ColumnarScan` unfalsifiable, so equality on it looks like the fix. It is not
+the fix, because that field does not identify a scan. Measured on 18.4:
 
 ```
-Node Type='Aggregate'      Custom Plan Provider=None
-  Node Type='Custom Scan'  Custom Plan Provider='PgColumnarScan'
+plain scan            Custom Scan  provider='PgColumnarScan'  Columnar Projected Columns present
+ungrouped vector agg  Custom Scan  provider='PgColumnarScan'  Columnar Projected Columns ABSENT
+grouped vector agg    Custom Scan  provider='PgColumnarScan'  Columnar Projected Columns ABSENT
 ```
 
-`EXPLAIN (FORMAT JSON)` arrives as a parsed Python list. The assertion is exact
-equality on `Custom Plan Provider`. A superstring cannot satisfy it. Note that the
-provider name really is `PgColumnarScan`, which is the string that made
-`grep ColumnarScan` unfalsifiable in the first place.
+`columnar_vector.c:806` assigns the vectorized aggregate node
+`&pgcolumnar_scan_methods`, whose `CustomName` is `PgColumnarScan`
+(`columnar_customscan.c:167`), so every pgcolumnar node reports that provider. With
+the aggregate engaged the plan is a single node and the aggregate has absorbed the
+scan, yet the predicate still says a scan is there.
 
-The helper `expect_plan_node(plan, node_type=..., provider=...)` walks the tree and
-refuses a substring argument.
+`pgc_is_columnar_scan` in `lib.sh` does not use the provider. It greps for
+`Columnar Projected Columns`, which only the scan's explain callback emits
+(`columnar_customscan.c:3631`); the aggregate callbacks emit
+`Columnar Vectorized Aggregates`. So the faithful port is marker presence.
+
+Two helpers, and the distinction between them is the point:
+
+- `expect.plan_marker(plan, key, absent=False)` asks whether the columnar SCAN ran.
+  This is the port of `pgc_is_columnar_scan`.
+- `expect.plan_node(plan, node_type=, provider=)` asks whether a pgcolumnar node
+  exists at all, which is a weaker and rarer question.
+
+`PgColumnarAgg` never appears in a plan. It is the `CustomName` of a
+`CustomPathMethods`, and EXPLAIN prints the scan methods' name.
+
+`test_the_provider_name_does_not_identify_a_scan` asserts all of this, so a revert
+to the provider predicate reddens instead of passing quietly.
 
 ### 5.5 A skip must be declared, and a silent skip fails the run
 
@@ -274,10 +298,11 @@ can report a false green makes every later result worthless.
 All of section 8 is implemented and green. The numbers below are runs, not estimates.
 
 ```
-test/pytest/  24 tests   serial: 24 passed    xdist -n 4: 24 passed
+test/pytest/  25 tests   serial: 25 passed    xdist -n 4: 25 passed
 ```
 
-Seventeen of those tests are the layer testing itself. They run pytest inside
+Ten of those tests are the layer testing itself, four of them controls proving a
+guard does not reject legitimate work. They run pytest inside
 pytest through the `pytester` fixture, so each guard is proven to REFUSE rather
 than assumed to. The layer's own tests obey the layer: they use the same recorder
 every other test uses, because an exemption for the tests that prove the guard is
@@ -331,6 +356,17 @@ first attempt used `ps | grep`, which reported a leak that was the grep's own
 enclosing command line. The bracket trick protects the pattern, not the command
 line that contains it.
 
+### The harness's own plan assertion was wrong, and a fan-out design review caught it
+
+The first version asserted `Custom Plan Provider == "PgColumnarScan"` and called it
+the fix for the substring class. It is wider than the bash helper it replaced: it
+answers yes for a vectorized aggregate that absorbed the scan, where
+`pgc_is_columnar_scan` answers no. Section 5.4 has the measurement.
+
+Worth stating plainly, because it is the whole argument of this document in one
+example. Typed results removed the parsing accident and left the harder mistake
+untouched. The assertion was type-correct, exact, and about the wrong thing.
+
 ### Three instrument defects found while building this
 
 Recorded because they are the same class the layer exists to prevent, and all three
@@ -349,6 +385,12 @@ A fourth, in the same family: after the mutation arm, `git checkout` restored th
 source but nothing rebuilt, so the next run tested the MUTATED library against
 clean sources. The harness prints its `.so` fingerprint on every run, which is the
 only reason it was visible.
+
+## 8b. Per-test reference
+
+`test/pytest/TESTS.md` documents every test: what it asserts, the measured fact
+behind it, which helper it uses, and the four controls that exist to catch a guard
+turning into a nuisance. It also lists the traps this corpus records.
 
 ## 9. Verification
 

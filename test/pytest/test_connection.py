@@ -40,16 +40,59 @@ def test_a_columnar_table_round_trips_with_real_types(pgc_conn, expect):
     expect.rows(row[4], [1, 2], "array arrives as a list")
 
 
-def test_the_plan_names_the_columnar_provider(pgc_conn, expect):
-    """EXPLAIN FORMAT JSON arrives parsed, and the provider matches exactly."""
+def _plan(conn, sql, gucs=()):
+    with conn.cursor() as cur:
+        for g in gucs:
+            cur.execute(g)
+        cur.execute(f"EXPLAIN (FORMAT JSON, COSTS OFF) {sql}")
+        return cur.fetchone()[0]
+
+
+def test_the_plan_shows_a_columnar_scan(pgc_conn, expect):
+    """EXPLAIN FORMAT JSON arrives parsed, and the SCAN is identified by its marker.
+
+    By the marker, not by the provider name. See the next test for why.
+    """
     with pgc_conn.cursor() as cur:
         cur.execute("CREATE TABLE p (id int, a int) USING pgcolumnar")
         cur.execute("INSERT INTO p SELECT g, g%10 FROM generate_series(1,500) g")
-        cur.execute("SET enable_seqscan = on")
-        cur.execute("EXPLAIN (FORMAT JSON, COSTS OFF) SELECT count(*) FROM p WHERE a > 5")
-        plan = cur.fetchone()[0]
+    plan = _plan(pgc_conn, "SELECT count(*) FROM p WHERE a > 5")
     expect.text(type(plan).__name__, "list", "the plan arrives as parsed Python")
-    expect.plan_node(plan, provider="PgColumnarScan", name="the columnar provider")
+    expect.plan_marker(plan, "Columnar Projected Columns",
+                       name="the columnar scan ran")
+
+
+def test_the_provider_name_does_not_identify_a_scan(pgc_conn, expect):
+    """Pin the trap: provider equality is WIDER than pgc_is_columnar_scan.
+
+    Measured. `columnar_vector.c:806` assigns the aggregate node
+    `&pgcolumnar_scan_methods`, whose CustomName is `PgColumnarScan`, so every
+    pgcolumnar node reports that provider. With the ungrouped vector aggregate
+    engaged the plan is a SINGLE Custom Scan node carrying `Columnar Vectorized
+    Aggregates` and NO `Columnar Projected Columns` -- the aggregate absorbed the
+    scan. A test asserting the provider would say "there is a columnar scan" about
+    a plan that has none, which is what `pgc_is_columnar_scan` refuses to say.
+
+    This test exists so that reverting to the provider predicate reddens here.
+    """
+    with pgc_conn.cursor() as cur:
+        cur.execute("CREATE TABLE vp (id int, a int) USING pgcolumnar")
+        cur.execute("INSERT INTO vp SELECT g, g%100 FROM generate_series(1,20000) g")
+        cur.execute("ANALYZE vp")
+    plan = _plan(pgc_conn, "SELECT count(*) FROM vp",
+                 ("SET pgcolumnar.enable_vectorization = on",
+                  "SET pgcolumnar.enable_ungrouped_vector_agg = on"))
+
+    # The premise: the vectorized aggregate must actually have engaged, or the rest
+    # of this test is about an ordinary plan and proves nothing.
+    expect.plan_marker(plan, "Columnar Vectorized Aggregates",
+                       name="premise: the vector aggregate engaged")
+    # The provider still matches, which is the trap.
+    expect.plan_node(plan, provider="PgColumnarScan",
+                     name="the provider matches even with no scan node")
+    # And the scan marker is absent, which is what makes the provider wrong here.
+    expect.plan_marker(plan, "Columnar Projected Columns", absent=True,
+                       name="but no columnar SCAN marker is present")
 
 
 def test_each_test_gets_its_own_schema(pgc_conn, expect):
