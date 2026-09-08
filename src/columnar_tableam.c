@@ -2572,6 +2572,9 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 					 */
 					PgColumnarRenameDeclaredSortByColumn(kid, rs->subname,
 														 rs->newname);
+					PgColumnarRenameProjectionDeclarationColumn(kid,
+																rs->subname,
+																rs->newname);
 				}
 				list_free(kin);
 			}

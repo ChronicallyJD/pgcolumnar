@@ -90,6 +90,10 @@ extern void PgColumnarRecordProjectionDeclaration(Oid relid, const char *name,
 												ArrayType *columns,
 												ArrayType *sortKey);
 
+extern void PgColumnarRenameProjectionDeclarationColumn(Oid relid,
+														 const char *oldName,
+														 const char *newName);
+
 extern void PgColumnarDeleteProjectionDeclaration(Oid relid, const char *name);
 
 extern void PgColumnarDeleteProjectionDeclarationsForRel(Oid relid);
