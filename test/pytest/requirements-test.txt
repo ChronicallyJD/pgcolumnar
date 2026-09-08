@@ -1,0 +1,9 @@
+# pgColumnar pytest harness. Pinned so CI installs what was tested, not whatever
+# the runner happens to carry. See design/ISSUE_432_PYTEST_HARNESS.md section 2.
+#
+# psycopg[binary] rather than plain psycopg: the binary wheel carries libpq, so
+# nothing compiles at install time and the harness does not depend on the runner
+# having a libpq development package.
+pytest==9.1.1
+pytest-xdist==3.8.0
+psycopg[binary]==3.3.5
