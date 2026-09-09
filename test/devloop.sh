@@ -95,7 +95,7 @@ fi
 if (
 	. "$BUILD/test/lib.sh"
 	pgc_write_source_stamp \
-		"$(pgc_source_stamp_path "$BUILD" "$(pgc_major_of "$PGC")")" \
+		"$(pgc_source_stamp_path "$BUILD" "$PGC")" \
 		"$(pgc_source_fingerprint "$BUILD")"
 ); then
 	:

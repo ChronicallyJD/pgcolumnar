@@ -726,7 +726,7 @@ for pgc in "${CONFIGS[@]}"; do
 	if (
 		. "$builddir/test/lib.sh"
 		pgc_write_source_stamp \
-			"$(pgc_source_stamp_path "$builddir" "$major")" \
+			"$(pgc_source_stamp_path "$builddir" "$pgc")" \
 			"$(pgc_source_fingerprint "$builddir")"
 	); then
 		:
