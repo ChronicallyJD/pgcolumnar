@@ -522,20 +522,20 @@ WARNING.
 
 To recover, call `pgcolumnar.add_projection()` again with the same projection name
 and columns the table has. That replaces the declaration and materialises the
-projection. `pgcolumnar.rebuild_projections()` cannot recover this state, because
-it re-runs the same declaration and raises the same missing-column error, and
-`pgcolumnar.drop_projection()` cannot either, because it refuses with `42704` when
-the projection row is exactly what is absent.
+projection. `pgcolumnar.rebuild_projections()` cannot recover this state. It
+re-runs the same declaration and raises the same missing-column error.
+`pgcolumnar.drop_projection()` cannot either. It refuses with `42704`, because the
+projection row is exactly what is absent.
 
 A rewrite that does not pass through `ProcessUtility` is not re-recorded, and needs
 `pgcolumnar.rebuild_projections()` by hand.
 
 One such rewrite ships with PostgreSQL. A `TRUNCATE` replicated to a subscriber is
-applied by the logical replication worker, which calls `ExecuteTruncateGuts`
+applied by the logical replication worker. That worker calls `ExecuteTruncateGuts`
 directly rather than going through `ProcessUtility`
 (`src/backend/replication/logical/worker.c`, `apply_handle_truncate`, checked
 against PostgreSQL 18.4). The subscriber's table is rewritten and nothing observes
-it, so a projection on a subscriber table is lost by a replicated `TRUNCATE`. Run
+it. So a replicated `TRUNCATE` loses a projection on a subscriber table. Run
 `pgcolumnar.rebuild_projections()` on the subscriber after one.
 
 A projection is an additional sorted copy. Each projection therefore adds write

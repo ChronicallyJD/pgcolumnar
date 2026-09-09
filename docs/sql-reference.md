@@ -475,10 +475,9 @@ You no longer need it after a rewrite. `TRUNCATE`, a rewriting `ALTER TABLE`,
 projections themselves.
 
 Two cases still need this function. The first is a logical restore. The second is
-a rewrite that does not pass through `ProcessUtility`, and so is never observed:
-a `TRUNCATE` replicated to a subscriber is applied by the logical replication
-worker calling `ExecuteTruncateGuts` directly. Run this on the subscriber after
-one.
+a rewrite that does not pass through `ProcessUtility`, so nothing observes it. A
+`TRUNCATE` replicated to a subscriber is one: the logical replication worker calls
+`ExecuteTruncateGuts` directly. Run this on the subscriber after one.
 
 A third case looks like this function's job and is not. A declaration that names a
 column the table no longer has is reported by a rewrite as
