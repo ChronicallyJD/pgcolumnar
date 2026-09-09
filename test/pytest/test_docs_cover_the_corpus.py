@@ -175,6 +175,11 @@ def _named_modes():
         chunks[head] = set(MODE_ID.findall(chunk))
     refused = next((v for k, v in chunks.items() if k.startswith("2.")), set())
     not_refused = next((v for k, v in chunks.items() if k.startswith("3.")), set())
+    # Section 3 keeps a back-reference to every mode that moved into section 2
+    # ("`X` is now closed"), so a mode can be named in both. Section 2 wins: a
+    # refused mode is refused. Without this the same id is counted in two states
+    # and the totals stop adding up -- measured at 25 + 50 against 72 named.
+    not_refused = not_refused - refused
     return refused, not_refused, set().union(*chunks.values()) if chunks else set()
 
 

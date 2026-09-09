@@ -195,8 +195,25 @@ _mi_row() {	# _mi_row FILE LABEL -> the number, or "" if the row is absent
 		| awk -F'|' 'NF > 2 { v = $(NF - 1); gsub(/[^0-9]/, "", v); print v }'
 }
 
+# Section 3 keeps a back-reference to every mode that moved into section 2
+# ("`X` is now closed"), so a mode can be named in both. Section 2 wins, and
+# section 3's total is what it names MINUS what section 2 claims. Counting the
+# back-references as unrefused puts one mode in two states: measured at 25 + 50
+# against 72 named, which is three ids counted twice.
+_mi_idlist() {	# _mi_idlist FILE PREFIX -> the ids themselves, one per line, sorted
+	local f="$1" pre="$2"
+	awk -v p="^## $pre" '
+		$0 ~ p        { inside = 1; next }
+		/^## /        { inside = 0 }
+		inside        { print }
+	' "$f" 2>/dev/null \
+		| grep -oE '`[a-z0-9]+(-[a-z0-9]+){2,}`' \
+		| sort -u
+}
+
 _mi_ref="$(_mi_ids "$_mi_doc" '2\.')"
-_mi_not="$(_mi_ids "$_mi_doc" '3\.')"
+_mi_not="$(comm -23 <(_mi_idlist "$_mi_doc" '3\.') <(_mi_idlist "$_mi_doc" '2\.') \
+	| grep -c . || true)"
 
 # The same trap as the sweep above: a counter that finds nothing agrees with a
 # document that claims nothing, and both look like success.
