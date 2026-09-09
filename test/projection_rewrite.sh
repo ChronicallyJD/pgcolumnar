@@ -381,15 +381,42 @@ check "renamed: and the projection survives a later rewrite" \
 	"$(pgc_set_hash "SELECT pgcolumnar.read_projection('renamed','pp')")" \
 	"$(pgc_set_hash "SELECT a2::text||'|'||b FROM renamed")"
 
-echo "-- rebuild_projections stays the documented manual recovery (#876)"
+# rebuild_projections stays the documented manual recovery (#876), and this arm has
+# to make the projection GENUINELY ABSENT to test it.
+#
+# The earlier version truncated and then called rebuild_projections. Once the repair
+# in this PR landed, the TRUNCATE was already repaired automatically, so the
+# comparison passed whether or not rebuild_projections did anything: it passed with
+# the function gutted (@jdatcmd, #892 review). A test named after a function it does
+# not exercise is worse than no test, because the name is what a reader trusts.
+#
+# So the projection rows are deleted directly, which is what a logical restore
+# leaves: pg_dump carries pgcolumnar.projection_declaration and cannot carry the
+# storage, and that is the case the function was written for. Its RETURN VALUE is
+# asserted, not merely the end state, because the count is the direct evidence it
+# did the work.
+echo "-- rebuild_projections rebuilds a projection whose storage is absent (#876)"
 psql_run "CREATE TABLE rec (id int, a int, b text) USING pgcolumnar;"
 psql_run "INSERT INTO rec SELECT g, g%50, 'b'||g FROM generate_series(1,$N) g;"
 psql_run "SELECT pgcolumnar.add_projection('rec','pp',ARRAY['a','b'],ARRAY['a']);"
-psql_run "TRUNCATE rec; INSERT INTO rec SELECT g, g%9, 'y'||g FROM generate_series(1,200) g;"
-psql_run "SELECT pgcolumnar.rebuild_projections('rec');" >/dev/null 2>&1
-check "rebuild_projections still repairs a lost projection" \
+check "PREMISE the projection reads before it is removed" \
+	"$(q "SELECT count(*) FROM pgcolumnar.read_projection('rec','pp');")" "$N"
+# Simulate the restored state: the declaration survives, the storage does not.
+psql_run "DELETE FROM pgcolumnar.projection
+           WHERE storage_id = pgcolumnar.get_storage_id('rec') AND projection_id > 0;"
+check "PREMISE the projection is now genuinely absent" \
+	"$(q "SELECT count(*) FROM pgcolumnar.projection
+	       WHERE storage_id = pgcolumnar.get_storage_id('rec') AND projection_id > 0;")" "0"
+check "PREMISE and the declaration survived, so a rebuild is possible" \
+	"$(q "SELECT count(*) FROM pgcolumnar.projection_declaration
+	       WHERE rel = 'rec'::regclass AND name = 'pp';")" "1"
+check "rebuild_projections reports rebuilding exactly one projection" \
+	"$(q "SELECT pgcolumnar.rebuild_projections('rec');")" "1"
+check "and the rebuilt projection matches the base table" \
 	"$(pgc_set_hash "SELECT pgcolumnar.read_projection('rec','pp')")" \
 	"$(pgc_set_hash "SELECT a::text||'|'||b FROM rec")"
-check "and leaves no retired projection rows" "$(retired_rows)" "0"
+check "and it leaves no retired projection rows" "$(retired_rows)" "0"
+check "a second call rebuilds nothing, so it is safe to run at any time" \
+	"$(q "SELECT pgcolumnar.rebuild_projections('rec');")" "0"
 
 pgc_summary
