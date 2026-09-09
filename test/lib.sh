@@ -200,7 +200,7 @@ pgc_build_and_install() {
 	# against, so a suite measuring an edited tree reported "matches the binary
 	# under test". A red arm caught it, which is the only reason this exists.
 	pgc_write_source_stamp \
-		"$(pgc_source_stamp_path "$_pgc_bi_src" "$_pgc_bi_major")" \
+		"$(pgc_source_stamp_path "$_pgc_bi_src" "$_pgc_bi_cfg")" \
 		"$(pgc_source_fingerprint "$_pgc_bi_src")"
 	return 0
 }
@@ -284,7 +284,7 @@ pgc_setup() {
 	# And verify it, whether this run built or skipped. A skipped build is exactly
 	# when the binary can be older than the source.
 	_pgc_fresh_recorded="$(pgc_read_source_stamp \
-		"$(pgc_source_stamp_path "$PGC_SRCDIR" "$PGC_MAJOR")")"
+		"$(pgc_source_stamp_path "$PGC_SRCDIR" "$PGC_PG_CONFIG")")"
 	_pgc_fresh_current="$(pgc_source_fingerprint "$PGC_SRCDIR")"
 	case "$(pgc_freshness_verdict "$_pgc_fresh_recorded" "$_pgc_fresh_current")" in
 		fresh)
@@ -656,7 +656,27 @@ pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash
 		done < <(pgc_source_build_dirs "$dir")
 		find "$dir" -maxdepth 1 -type f \( -name 'Makefile' -o -name '*.control' \
 			-o -name '*.sql' \) -print0 2>/dev/null
-	} | sort -z | xargs -0 cat 2>/dev/null | md5sum | cut -c1-12
+	} | sort -z | while IFS= read -r -d '' _pgc_fp_f; do
+		# EACH FILE'S PATH AND ITS OWN DIGEST, not the concatenated stream.
+		#
+		# `xargs -0 cat | md5sum` hashed the bytes of every file run together,
+		# so it could not see a change that PRESERVES the stream while moving
+		# bytes between translation units. Two files, `static int x=1;` and
+		# `static int x=2;`, both compile; move the second into the first and
+		# empty it and the source no longer compiles, while the hash does not
+		# move (@linuxhikerpm, #898 review):
+		#
+		#     before_hash=bfce474cc159 after_hash=bfce474cc159
+		#     initial_compile=0 repartitioned_compile=1
+		#     error: redefinition of 'x'
+		#
+		# A skip-build run then printed "matches the binary under test" for
+		# source that cannot produce any binary at all. The path makes the
+		# partition part of the input, and the per-file digest is an
+		# unambiguous boundary between one file's bytes and the next's.
+		printf '%s %s\n' "${_pgc_fp_f#"$dir"/}" \
+			"$(md5sum < "$_pgc_fp_f" 2>/dev/null | cut -d' ' -f1)"
+	done | md5sum | cut -c1-12
 }
 
 # fresh   the binary was built from this source
@@ -742,7 +762,18 @@ pgc_running_binary_verdict() {	# pgc_running_binary_verdict SO_EPOCH PM_EPOCH
 }
 
 pgc_write_source_stamp() {	# pgc_write_source_stamp FILE HASH
-	printf '%s\n' "${2:-}" > "${1:-/dev/null}" 2>/dev/null || true
+	# NO `|| true`. It was there, and it made both controllers' warning branches
+	# UNREACHABLE: run_all_versions.sh and devloop.sh each wrap this in `if (...)`
+	# and promise to say so when the stamp cannot be written, and each carries a
+	# comment saying "NOT || true" -- while the function they call swallowed the
+	# status (@linuxhikerpm, #898 review). Driven against an unwritable target:
+	#
+	#     write_rc=0 exists=no
+	#
+	# The stamp absent, nothing warned, every child suite degraded to UNVERIFIED.
+	# A comment that argues for a guarantee the code does not provide is worse
+	# than no comment, because it stops the next person checking.
+	printf '%s\n' "${2:-}" > "${1:-/dev/null}" 2>/dev/null
 }
 
 pgc_read_source_stamp() {	# pgc_read_source_stamp FILE -> hash or empty
@@ -762,8 +793,37 @@ pgc_major_of() {	# pgc_major_of PG_CONFIG -> major
 	"$1" --version | sed -E 's/^[^0-9]*([0-9]+).*/\1/'
 }
 
-pgc_source_stamp_path() {	# pgc_source_stamp_path DIR MAJOR
-	printf '%s/.pgc_source_stamp.%s\n' "${1:-.}" "${2:-0}"
+pgc_source_stamp_path() {	# pgc_source_stamp_path DIR PG_CONFIG
+	# KEYED BY THE INSTALLATION, NOT ONLY THE MAJOR. The key was
+	# `.pgc_source_stamp.<major>`, and the comment above it already said that one
+	# tree installs into several prefixes each with its own binary -- so the key
+	# discarded the distinction the comment drew (@linuxhikerpm, #898 review).
+	#
+	# Not hypothetical on this box: pg18a, pg18n and pg18_san are three PG18
+	# installations with different pkglibdirs, and all three resolved to
+	# `.pgc_source_stamp.18`. Build current source into one prefix, then run
+	# PGC_SKIP_BUILD=1 against another, and the fingerprint matches while the
+	# binary is stale -- and the postmaster arm passes too, because the freshly
+	# started server is newer than the old .so. The run then reports fresh while
+	# executing the other prefix's binary, which is this file's whole subject.
+	#
+	# pkglibdir rather than the pg_config path, because that is where the .so
+	# actually lands: two pg_configs pointing at one prefix ARE the same
+	# installation and should share a stamp.
+	local _pgc_sp_dir="${1:-.}" _pgc_sp_cfg="${2:-}"
+	local _pgc_sp_major _pgc_sp_lib _pgc_sp_id
+	_pgc_sp_major="$(pgc_major_of "$_pgc_sp_cfg" 2>/dev/null)"
+	_pgc_sp_lib="$("$_pgc_sp_cfg" --pkglibdir 2>/dev/null)"
+	# An unreadable pg_config gets a key that matches nothing rather than one
+	# every broken config shares: `unknown` would alias them together, which is
+	# the defect being fixed, one level down.
+	if [ -n "$_pgc_sp_lib" ]; then
+		_pgc_sp_id="$(printf '%s' "$_pgc_sp_lib" | md5sum | cut -c1-8)"
+	else
+		_pgc_sp_id="nolib$(printf '%s' "$_pgc_sp_cfg" | md5sum | cut -c1-3)"
+	fi
+	printf '%s/.pgc_source_stamp.%s.%s\n' \
+		"$_pgc_sp_dir" "${_pgc_sp_major:-0}" "$_pgc_sp_id"
 }
 
 pgc_write_build_stamp() {

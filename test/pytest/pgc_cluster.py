@@ -409,7 +409,19 @@ def source_fingerprint(srcdir):
     srcdir = pathlib.Path(srcdir)
     paths = []
     for d in source_build_dirs(srcdir):
-        paths += list(d.glob("*.c")) + list(d.glob("*.h"))
+        # EACH BUILD DIRECTORY'S Makefile TOO, not only its sources. The shell
+        # implementation hashes `*.c`, `*.h` AND `Makefile` per directory; this
+        # read only the sources, so editing `objstore/Makefile` -- which changes
+        # how that module is built -- moved the shell hash and not this one:
+        #
+        #     baseline                  shell=45be41a5c47b  python=bea88c7d79ca
+        #     objstore/Makefile edited  shell=cfb8f4553041  python=bea88c7d79ca
+        #
+        # `build_once` then certified a stale module as current. That is
+        # @linuxhikerpm's #897 finding one layer over: they found the module's
+        # sources missing here, and the module's Makefile was still missing
+        # after that was fixed. The docstring claimed parity throughout.
+        paths += list(d.glob("*.c")) + list(d.glob("*.h")) + list(d.glob("Makefile"))
     paths = sorted(
         paths
         + [p for p in (srcdir / "Makefile",) if p.exists()]
