@@ -204,6 +204,56 @@ else
 		       WHERE rel = 'cas_child'::regclass AND name = 'pv';")" "1"
 fi
 
+# ProcessUtility is RE-ENTRANT, and the repair records what it must fix in a
+# process-global list. An AFTER TRUNCATE trigger whose function runs any utility
+# statement calls the hook again from inside the outer statement, after the callback
+# has already recorded the truncated relation (@jdatcmd, #892 review).
+#
+# Measured with the callback logging its own order, before this was fixed:
+#     entry: clearing, had 0        the outer TRUNCATE starts
+#     record: relid=16573           the cascaded child is recorded
+#     entry: clearing, had 1        the trigger's nested utility clears it
+#     drain: recorded=0             the outer drain has nothing left
+#
+# A DIRECTLY NAMED table survives that, because the statement's own relation list is
+# a second source, which is why this arm composes the nested utility with a CASCADE.
+# For a cascaded table the recorded list is the only route, so the two together are
+# what leave the projection absent. Either alone passes.
+echo "-- a cascade whose trigger runs a nested utility statement"
+psql_run "CREATE TABLE reent_parent (id int PRIMARY KEY);"
+psql_run "CREATE TABLE reent_child (id int REFERENCES reent_parent(id), v int) USING pgcolumnar;"
+psql_run "SELECT pgcolumnar.add_projection('reent_child','pv',ARRAY['id','v'],ARRAY['v']);"
+psql_run "INSERT INTO reent_parent SELECT g FROM generate_series(1,$N) g;"
+psql_run "INSERT INTO reent_child SELECT g, g%7 FROM generate_series(1,$N) g;"
+psql_run "CREATE FUNCTION reent_nested_utility() RETURNS trigger LANGUAGE plpgsql AS \$\$
+BEGIN
+    -- A utility statement, so it re-enters the hook. Permanent, so the premise
+    -- below can see from another session that it really ran; a TEMP table would
+    -- vanish with the trigger's session and the premise would silently read 0.
+    CREATE TABLE IF NOT EXISTS reent_marker (x int);
+    RETURN NULL;
+END\$\$;"
+psql_run "CREATE TRIGGER reent_child_trunc AFTER TRUNCATE ON reent_child
+          FOR EACH STATEMENT EXECUTE FUNCTION reent_nested_utility();"
+check "PREMISE the trigger is installed on the cascaded child" \
+	"$(q "SELECT count(*) FROM pg_trigger WHERE tgrelid='reent_child'::regclass AND NOT tgisinternal;")" "1"
+check "PREMISE the projection reads before the truncate" \
+	"$(q "SELECT count(*) FROM pgcolumnar.read_projection('reent_child','pv');")" "$N"
+REENT_SID0="$(q "SELECT pgcolumnar.get_storage_id('reent_child');")"
+psql_run "TRUNCATE reent_parent CASCADE;"
+check "PREMISE the nested utility statement really ran" \
+	"$(q "SELECT count(*) FROM pg_class WHERE relname='reent_marker';")" "1"
+if [ "$REENT_SID0" = "$(q "SELECT pgcolumnar.get_storage_id('reent_child');")" ]; then
+	check_unrunnable "reent_child P1 the projection survives a nested utility" \
+		UNMET_PRECONDITION "the CASCADE did not rewrite the child"
+else
+	pgc_pass "reent_child: the CASCADE rewrote the child"
+	check "reent_child P1 the projection survives a nested utility" \
+		"$(pgc_set_hash "SELECT pgcolumnar.read_projection('reent_child','pv')")" \
+		"$(pgc_set_hash "SELECT id::text||'|'||v::text FROM reent_child")"
+	check "reent_child P2 no retired projection rows" "$(retired_rows)" "0"
+fi
+
 # A partitioned CHILD, rewritten by a type change on the PARENT. The statement
 # names pt, the rewrite lands on pt1, and pt is not itself a columnar relation --
 # so a fix that looks only at the relation named in the statement never fires

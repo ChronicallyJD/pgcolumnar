@@ -127,6 +127,30 @@ static const TableAmRoutine pgcolumnar_am_methods;
 static List *pgcolumnar_rewritten_relids = NIL;
 static bool pgcolumnar_xact_cb_registered = false;
 
+/*
+ * How deep we are in nested pgcolumnar_process_utility calls.
+ *
+ * ProcessUtility is RE-ENTRANT. An AFTER TRUNCATE trigger whose function runs any
+ * utility statement calls it again from inside the outer statement, after the
+ * callback has already recorded the truncated relation. Measured with the callback
+ * logging its own order:
+ *
+ *     entry: clearing, had 0          the outer TRUNCATE starts
+ *     record: relid=16573             the cascaded child is recorded
+ *     entry: clearing, had 1          the trigger's nested utility clears it
+ *     drain: recorded=0               the outer drain has nothing left
+ *
+ * A directly named table survives that, because the statement's own relation list
+ * supplies it as a second source. A table reached by FK CASCADE does not: the
+ * recorded list is its only route, so the projection stays absent and
+ * read_projection raises 42704. Reproduced with a trigger on the cascaded child.
+ *
+ * So the list is cleared only when the OUTERMOST utility statement begins, and a
+ * drain removes the relids it repaired rather than emptying the list, because an
+ * inner statement must not discard what an outer one is still holding.
+ */
+static int pgcolumnar_utility_depth = 0;
+
 static void
 pgcolumnar_forget_rewritten(void)
 {
@@ -142,6 +166,7 @@ pgcolumnar_rewritten_xact_callback(XactEvent event, void *arg)
 {
 	/* Any transaction end, committed or not: the list belongs to one statement. */
 	pgcolumnar_forget_rewritten();
+	pgcolumnar_utility_depth = 0;
 }
 
 static void
@@ -2676,10 +2701,13 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 	Node	   *parsetree = pstmt->utilityStmt;
 
 	/*
-	 * Start from empty: a statement that ERRORED between recording and draining
-	 * must not leave a relid for the next one to act on.
+	 * Start from empty, but only for the OUTERMOST statement: a statement that
+	 * ERRORED between recording and draining must not leave a relid for the next
+	 * one, while a NESTED statement must not discard what its caller is holding.
 	 */
-	pgcolumnar_forget_rewritten();
+	if (pgcolumnar_utility_depth == 0)
+		pgcolumnar_forget_rewritten();
+	pgcolumnar_utility_depth++;
 
 	/* read-only inspection, so readOnlyTree needs no copy of the tree */
 	if (parsetree != NULL && IsA(parsetree, AlterTableStmt))
@@ -2690,12 +2718,21 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 		pgcolumnar_reject_set_am_to_columnar(stmt);
 	}
 
-	if (prev_process_utility_hook)
-		prev_process_utility_hook(pstmt, queryString, readOnlyTree, context,
-								  params, queryEnv, dest, qc);
-	else
-		standard_ProcessUtility(pstmt, queryString, readOnlyTree, context,
-								params, queryEnv, dest, qc);
+	PG_TRY();
+	{
+		if (prev_process_utility_hook)
+			prev_process_utility_hook(pstmt, queryString, readOnlyTree, context,
+									  params, queryEnv, dest, qc);
+		else
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree, context,
+									params, queryEnv, dest, qc);
+	}
+	PG_CATCH();
+	{
+		pgcolumnar_utility_depth--;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	/*
 	 * A rewrite loses this relation's declared projections, so re-record them
@@ -2772,9 +2809,19 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 				PgColumnarRerecordProjectionsAfterRewrite(lfirst_oid(lc2));
 			list_free(kin);
 		}
+
+		/*
+		 * Forget only what was repaired here. Emptying the list would discard a
+		 * relid an OUTER statement recorded and has not drained yet, which is the
+		 * same defect as clearing on entry from a nested call.
+		 */
+		foreach(lc, targets)
+			pgcolumnar_rewritten_relids =
+				list_delete_oid(pgcolumnar_rewritten_relids, lfirst_oid(lc));
 		list_free(targets);
-		pgcolumnar_forget_rewritten();
 	}
+
+	pgcolumnar_utility_depth--;
 
 	/*
 	 * A column rename must be carried through the ordering mark (#778). The
