@@ -141,7 +141,7 @@ pgc_setup() {
 	# A behavior that exists only from some major is core's, not this extension's,
 	# and a check written against the newer one fails on the older ones for a
 	# reason that is not a defect. Branch on this rather than deriving it again.
-	PGC_MAJOR="$("$PGC_PG_CONFIG" --version | sed -E 's/^[^0-9]*([0-9]+).*/\1/')"
+	PGC_MAJOR="$(pgc_major_of "$PGC_PG_CONFIG")"
 	# Derived from this process rather than a fixed 54329: two suites run at
 	# once on one box otherwise start on the same port, and the loser reports a
 	# wall of ERROR: database "regress" already exists with no named check
@@ -378,30 +378,7 @@ pgc_setup() {
 	# the impossible case is the rest.
 	# The server is up, so now ask whether it is RUNNING the binary we verified on
 	# disk. A cp is not enough: shared_preload_libraries maps the .so at start.
-	{
-		local _so_path _so_epoch _pm_epoch
-		_so_path="$("$PGC_PG_CONFIG" --pkglibdir)/pgcolumnar.so"
-		_so_epoch="$(stat -c %Y "$_so_path" 2>/dev/null || echo '')"
-		_pm_epoch="$(psql_admin_scalar \
-			"SELECT floor(extract(epoch from pg_postmaster_start_time()))::bigint;" \
-			2>/dev/null | tr -dc '0-9')"
-		case "$(pgc_running_binary_verdict "$_so_epoch" "$_pm_epoch")" in
-			fresh)
-				echo "-- server: started after the binary was installed"
-				;;
-			predates)
-				echo "FATAL: this server was already running when the binary changed" >&2
-				echo "       .so installed at epoch $_so_epoch, postmaster started $_pm_epoch" >&2
-				echo "       shared_preload_libraries maps the library at start, so the" >&2
-				echo "       backends are executing older code than the file on disk." >&2
-				echo "       Restart the cluster; a reinstall alone does not reload it." >&2
-				exit 1
-				;;
-			unknown)
-				echo "-- server: could not compare binary and postmaster timestamps"
-				;;
-		esac
-	}
+	pgc_check_running_binary "$("$PGC_PG_CONFIG" --pkglibdir)/pgcolumnar.so" || exit 1
 
 	{
 		local _exists
@@ -611,10 +588,36 @@ pgc_build_needs_clean() {
 # The build inputs, hashed. Sources, headers, the Makefile, the control file and the
 # SQL that ships: anything whose change should invalidate a binary. Sorted, because a
 # directory listing is not ordered and an unordered input makes the hash unstable.
+# pgc_source_build_dirs DIR -> one source directory per line
+#
+# DERIVED, NOT LISTED. The first version read $dir/src only, and objstore/ is a
+# SEPARATE shared library that the top-level Makefile builds and installs by
+# recursion. Editing objstore/columnar_objstore_module.c left the fingerprint
+# unchanged, so objstore_module, objstore_sink_write and objstore_stash_recovery
+# could measure a stale module while the suite printed "matches the binary under
+# test" (@jdatcmd, #898 review). A stale binary under an explicit assurance is
+# worse than one under no assurance, because the line is what stops the next
+# person checking.
+#
+# A remembered list would have the same defect again the next time a module is
+# added, so this returns every directory that has its own Makefile. That is the
+# same rule the build itself follows.
+pgc_source_build_dirs() {	# pgc_source_build_dirs DIR -> dirs
+	local dir="${1:-.}"
+	printf '%s\n' "$dir/src"
+	find "$dir" -mindepth 2 -maxdepth 2 -type f -name Makefile \
+		-printf '%h\n' 2>/dev/null | grep -v "^$dir/src$" || true
+}
+
 pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash
 	local dir="${1:-.}"
+	local d
 	{
-		find "$dir/src" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \) -print0 2>/dev/null
+		while IFS= read -r d; do
+			[ -n "$d" ] || continue
+			find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \
+				-o -name 'Makefile' \) -print0 2>/dev/null
+		done < <(pgc_source_build_dirs "$dir")
 		find "$dir" -maxdepth 1 -type f \( -name 'Makefile' -o -name '*.control' \
 			-o -name '*.sql' \) -print0 2>/dev/null
 	} | sort -z | xargs -0 cat 2>/dev/null | md5sum | cut -c1-12
@@ -649,6 +652,52 @@ pgc_freshness_verdict() {	# pgc_freshness_verdict RECORDED CURRENT -> verdict
 # fresh     the server started after the binary was installed
 # predates  the binary is newer than the server, so the server has older code
 # unknown   one of the two timestamps could not be read
+# pgc_check_running_binary SO_PATH
+#
+# The runtime half of the freshness check: does the RUNNING server postdate the
+# library on disk? Extracted from pgc_setup so it can be driven, because the
+# verdict function alone could not be.
+#
+# WHY THAT MATTERS. Every suite initdb's a fresh cluster and starts it after the
+# install, so through any shipped path the postmaster is always newer than the
+# .so and `predates` is UNREACHABLE. selftest 340 fed the verdict function
+# fixture values and proved its arithmetic; the CALL SITE could have been deleted
+# with every check still passing (@jdatcmd, #898 review). That is this project's
+# own rule about a helper a suite merely sources.
+#
+# Taking the path as an argument is what makes it reachable: the selftest points
+# it at a file it has just touched, so the stat, the pg_postmaster_start_time()
+# query, the verdict and the refusal all run for real and only the path is
+# redirected. Nothing has to touch the installed library to prove the guard
+# fires.
+#
+# Returns non-zero rather than calling exit, so a caller that is not a suite can
+# turn it into its own kind of failure. pgc_setup passes the status through.
+pgc_check_running_binary() {	# pgc_check_running_binary SO_PATH -> 0|1
+	local _so_path="$1" _so_epoch _pm_epoch
+	_so_epoch="$(stat -c %Y "$_so_path" 2>/dev/null || echo '')"
+	_pm_epoch="$(psql_admin_scalar \
+		"SELECT floor(extract(epoch from pg_postmaster_start_time()))::bigint;" \
+		2>/dev/null | tr -dc '0-9')"
+	case "$(pgc_running_binary_verdict "$_so_epoch" "$_pm_epoch")" in
+		fresh)
+			echo "-- server: started after the binary was installed"
+			;;
+		predates)
+			echo "FATAL: this server was already running when the binary changed" >&2
+			echo "       .so installed at epoch $_so_epoch, postmaster started $_pm_epoch" >&2
+			echo "       shared_preload_libraries maps the library at start, so the" >&2
+			echo "       backends are executing older code than the file on disk." >&2
+			echo "       Restart the cluster; a reinstall alone does not reload it." >&2
+			return 1
+			;;
+		unknown)
+			echo "-- server: could not compare binary and postmaster timestamps"
+			;;
+	esac
+	return 0
+}
+
 pgc_running_binary_verdict() {	# pgc_running_binary_verdict SO_EPOCH PM_EPOCH
 	local so="${1:-}" pm="${2:-}"
 	case "$so" in '' | *[!0-9]*) echo unknown; return ;; esac
@@ -667,6 +716,16 @@ pgc_read_source_stamp() {	# pgc_read_source_stamp FILE -> hash or empty
 
 # The stamp lives beside the tree that built the binary, keyed by major, because one
 # tree installs into several prefixes and each has its own binary.
+# pgc_major_of PG_CONFIG -> major version number
+#
+# One definition, because devloop.sh now writes a stamp whose PATH is keyed on
+# the major and pgc_setup reads it back. Two copies of this sed would be two
+# answers to "which major", and the failure would be a stamp written where
+# nothing looks for it -- a silent UNVERIFIED rather than an error.
+pgc_major_of() {	# pgc_major_of PG_CONFIG -> major
+	"$1" --version | sed -E 's/^[^0-9]*([0-9]+).*/\1/'
+}
+
 pgc_source_stamp_path() {	# pgc_source_stamp_path DIR MAJOR
 	printf '%s/.pgc_source_stamp.%s\n' "${1:-.}" "${2:-0}"
 }
