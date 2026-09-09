@@ -197,4 +197,81 @@ check "a full rewrite keeps every row, and they are still readable" \
 	"5000/5000/5000"
 psql_run "DROP TABLE tc_rw;"
 
+# ---------------------------------------------------------------------------
+# THE IN-PLACE TRUNCATE, which is a different code path from every arm above.
+#
+# PostgreSQL truncates a relation created in the CURRENT transaction in place:
+# a rollback discards the whole relation, so there is no reason to mint a new
+# relfilenode. Measured on 18.4:
+#
+#   created in the same transaction:  before relfilenode=16567 storage=10000000000
+#                                     after  relfilenode=16567 storage=10000000000
+#   created in an earlier transaction: before relfilenode=16570 storage=10000000001
+#                                     after  relfilenode=16573 storage=10000000002
+#
+# So pgcolumnar_relation_set_new_filelocator never runs, and the teardown the
+# arms above exercise never happens. The AM gets
+# pgcolumnar_relation_nontransactional_truncate instead, which cleared the BASE
+# storage and left the projection's own storage untouched:
+#
+#   row_group before  : storage 10000000000 groups 1   (base)
+#   row_group before  : storage 10000000001 groups 1   (projection)
+#   row_group AFTER   : storage 10000000001 groups 1   <-- base cleared, projection kept
+#
+# The next write to the projection then collided with the row groups the
+# truncate should have removed:
+#
+#   ERROR:  duplicate key value violates unique constraint "row_group_pkey"
+#   DETAIL:  Key (storage_id, group_number)=(10000000001, 2) already exists.
+#
+# The write AFTER the truncate is what makes it observable, so this arm has one.
+# Without it the leaked rows sit there and every check still passes (#896).
+echo "-- an in-place TRUNCATE must clear the projection's storage too (#896)"
+psql_run "CREATE TABLE tcl_inplace_pre (id int);" >/dev/null
+inplace_out="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" \
+	-U postgres -d "$PGC_DB" -v ON_ERROR_STOP=0 -qAt -c "
+BEGIN;
+CREATE TABLE tcl_inplace (id int, a int, b text) USING pgcolumnar;
+INSERT INTO tcl_inplace SELECT g, g % 50, 'b' || g FROM generate_series(1, 2000) g;
+SELECT pgcolumnar.add_projection('tcl_inplace','tcl_ip',ARRAY['a','b'],ARRAY['a']);
+TRUNCATE tcl_inplace;
+INSERT INTO tcl_inplace SELECT g, g % 50, 'c' || g FROM generate_series(1, 500) g;
+COMMIT;" 2>&1)"
+
+# PREMISE: the transaction has to have committed, or every check below is
+# vacuous -- a rolled-back transaction leaves no table and no rows to count.
+check "PREMISE the in-place transaction committed" \
+	"$(printf '%s\n' "$inplace_out" | grep -c 'row_group_pkey')" "0"
+check "PREMISE the table exists after it" \
+	"$(q "SELECT count(*) FROM pg_class WHERE relname = 'tcl_inplace';" | tail -1)" "1"
+check "the rows written after the in-place truncate are all there" \
+	"$(q "SELECT count(*) FROM tcl_inplace;" | tail -1)" "500"
+check "and the projection reads them back" \
+	"$(q "SELECT count(*) FROM pgcolumnar.read_projection('tcl_inplace','tcl_ip');" | tail -1)" "500"
+check "the projection agrees with the base table" \
+	"$(pgc_set_hash "SELECT pgcolumnar.read_projection('tcl_inplace','tcl_ip')")" \
+	"$(pgc_set_hash "SELECT a::text||'|'||b FROM tcl_inplace")"
+# The leak itself, counted directly rather than inferred from the error. The
+# projection's storage must describe the 500 rows written AFTER the truncate and
+# nothing else. Before the fix it held the pre-truncate group as well, which is
+# what the next write collided with.
+#
+# Asserted as one group holding 500 rows, not as a group NUMBER: measured after
+# the fix, the base gets group 1 and the projection gets group 2, because
+# PgColumnarResetMetapage resets the base's counter and the projection's storage
+# has no metapage to reset. That asymmetry is not a defect and an arm that
+# pinned the number would fail for the wrong reason.
+inplace_proj_storage="$(q "SELECT proj_storage_id FROM pgcolumnar.projection
+	 WHERE storage_id = pgcolumnar.get_storage_id('tcl_inplace'::regclass)
+	   AND projection_id > 0;" | tail -1)"
+check "PREMISE the projection has its own storage, distinct from the base" \
+	"$(awk -v p="$inplace_proj_storage" -v b="$(q "SELECT pgcolumnar.get_storage_id('tcl_inplace'::regclass);" | tail -1)" \
+	     'BEGIN { print (p != "" && p != b) ? "yes" : "no" }')" "yes"
+check "the projection storage holds exactly one row group after the truncate" \
+	"$(q "SELECT count(*) FROM pgcolumnar.row_group
+	       WHERE storage_id = $inplace_proj_storage;" | tail -1)" "1"
+check "and that group describes only the rows written after it" \
+	"$(q "SELECT coalesce(sum(row_count),0) FROM pgcolumnar.row_group
+	       WHERE storage_id = $inplace_proj_storage;" | tail -1)" "500"
+
 pgc_summary
