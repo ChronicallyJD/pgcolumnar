@@ -254,3 +254,39 @@ def test_a_run_with_nothing_unrunnable_still_exits_zero(pytester, expect):
     )
     result = pytester.runpytest("-p", "pgc_vacuity")
     expect.num(result.ret, 0, "an ordinary green run is untouched")
+
+
+def test_layer_rejects_psycopgs_no_count_sentinel(pytester, expect):
+    """cursor.rowcount is -1 when no count is available, and 1 for an unfetched
+    SELECT. Both are numbers, so expect.num compares them happily."""
+    pytester.makepyfile(
+        """
+        def test_rowcount_sentinel(expect):
+            expect.rowcount(-1, -1, "a count that is not a count")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "the -1 sentinel is refused", failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*no row count available*"])
+
+
+def test_layer_rejects_a_broad_except_in_a_test_file(pytester, expect):
+    """The layer forbade this in a comment, which enforces nothing.
+
+    After any failed statement psycopg raises InFailedSqlTransaction for every
+    later one, so one `except Exception` hides the real error and all its
+    successors. Measured: a test using the forbidden shape passed with no complaint.
+    """
+    pytester.makepyfile(
+        """
+        def test_swallows(expect):
+            try:
+                raise RuntimeError("the real failure")
+            except Exception:
+                pass
+            expect.num(1, 1, "and then asserts something harmless")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a broad except must not be collectable")
+    result.stderr.fnmatch_lines(["*catches Exception broadly*"])
