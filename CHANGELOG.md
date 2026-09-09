@@ -6,8 +6,8 @@ pre-release; the version marker is `1.0-alpha3`, recorded in `VERSION`. New tabl
 are written in the native on-disk format, PGCN v1. For the forward-looking plan see
 [design/ROADMAP.md](design/ROADMAP.md); for full history see the git log.
 
-The extension's `default_version` is `1.0-alpha3`, which is in development and not
-yet tagged; the latest published pre-release is `v1.0-alpha2`. Upgrade scripts from
+The extension's `default_version` is `1.0-alpha3`, which is tagged as
+`v1.0-alpha3` and is the latest published pre-release. Upgrade scripts from
 every previously shipped version ship with it (`1.0-dev`, which the v1.0-alpha tag
 installed, `1.0-alpha`, and `1.0-alpha2`), so a single
 `ALTER EXTENSION pgcolumnar UPDATE` reaches `1.0-alpha3` from any of them. Older
@@ -20,7 +20,7 @@ true until the next version shipped.
 
 - `ALTER TABLE ... RENAME COLUMN` now carries the new name into
   `pgcolumnar.projection_declaration`, for the named relation and for every
-  inheritance descendant (#888).
+  inheritance descendant, including a `PARTITION OF` child (#888).
 
   The materialized projection stores attnums, so it already followed a rename
   without any catalog change. The declaration deliberately stores NAMES, because
@@ -32,6 +32,23 @@ true until the next version shipped.
   The descendant half is held by an arm that was proved able to fail: changing
   the walk to use the named relation instead of each descendant takes
   `test/projection_rename_restore.sh` from 8 passed to 6 passed and 2 failed.
+
+- `ALTER TABLE ... DROP COLUMN` is now refused when a projection depends on the
+  column, instead of leaving the table unreadable (#891).
+
+  Dropping a column any projection stores left the table broken, in one of two
+  ways. Dropping the **sort-key** column produced
+  `ERROR: type with OID 0 does not exist` on the next `INSERT`. Dropping any
+  other stored column let writes continue while `pgcolumnar.read_projection`
+  raised `cache lookup failed for type 0` and `pgcolumnar.rebuild_projections()`
+  reported repairing nothing -- the quieter and worse half, because it tells an
+  operator there was nothing to do.
+
+  The refusal raises `2BP01` (`dependent_objects_still_exist`) and names the
+  projection, so the remedy is to drop the projection first. One loop covers
+  sort keys too, because `add_projection()` requires every sort-key column to
+  appear in the stored columns. `DROP COLUMN IF EXISTS` of a column that is not
+  there is unaffected.
 
 ## [1.0-alpha3] - 2026-09-02
 
