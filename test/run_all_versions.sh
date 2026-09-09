@@ -92,6 +92,7 @@ SUITES=(
 	groupagg_table_sizing
 	hardening
 	harness_selftest
+	hilbert_cluster
 	hilbert_curve
 	iceberg_catalog
 	iceberg_data_files

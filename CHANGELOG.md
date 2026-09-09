@@ -2,19 +2,71 @@
 
 All notable changes to pgColumnar are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). pgColumnar is
-pre-release; the version marker is `1.0-alpha3`, recorded in `VERSION`. New tables
+pre-release; the version marker is `1.0-alpha4`, recorded in `VERSION`. New tables
 are written in the native on-disk format, PGCN v1. For the forward-looking plan see
 [design/ROADMAP.md](design/ROADMAP.md); for full history see the git log.
 
-The extension's `default_version` is `1.0-alpha3`, which is tagged as
-`v1.0-alpha3` and is the latest published pre-release. Upgrade scripts from
+The extension's `default_version` is `1.0-alpha4`, which is in development and not
+yet tagged; `v1.0-alpha3` is the latest published pre-release. Upgrade scripts from
 every previously shipped version ship with it (`1.0-dev`, which the v1.0-alpha tag
-installed, `1.0-alpha`, and `1.0-alpha2`), so a single
-`ALTER EXTENSION pgcolumnar UPDATE` reaches `1.0-alpha3` from any of them. Older
+installed, `1.0-alpha`, `1.0-alpha2`, and `1.0-alpha3`), so a single
+`ALTER EXTENSION pgcolumnar UPDATE` reaches `1.0-alpha4` from any of them. Older
 notes in this file describe `default_version` as pinned at an earlier version, each
 true until the next version shipped.
 
 ## [Unreleased]
+
+### Added
+
+- Hilbert clustering: `pgcolumnar.cluster_hilbert` and
+  `pgcolumnar.recluster_hilbert` (#889).
+
+  **Two verbs rather than a parameter on the existing two.** PostgreSQL refuses
+  to extend `cluster(regclass, VARIADIC name[])` in either direction: a defaulted
+  parameter cannot precede a `VARIADIC` one, and an array-plus-kind overload
+  makes the documented `cluster('t','a','b')` call ambiguous. Both were measured
+  on 18.4. The new verbs match their siblings element for element in argument
+  types, variadic element type, return type and volatility, so a caller switches
+  between them by name alone.
+
+  **What the curve buys.** Z-order jumps a long way in key space at a bit
+  boundary; a Hilbert curve does not. Keys that are close in the data therefore
+  stay closer in storage, the min/max zone maps over the clustered columns are
+  tighter, and a range filter reads fewer chunk groups. The key is the same width
+  and sorts through the same `bytea` comparator, so nothing downstream of the
+  sort knows which curve produced it.
+
+  **The curve is sticky.** `sorted_kind` is the table's declared intent, not a
+  property of each call:
+
+  - plain `recluster` on a Hilbert table over the same key is a no-op returning
+    0, not a silent conversion back to Z-order;
+  - `recluster_hilbert` on a Z-ordered table over the same columns rewrites it;
+  - `vacuum_sorted` leaves a Hilbert table alone rather than sorting it
+    lexicographically and relabelling it;
+  - the maintenance daemon dispatches on the recorded kind, so a Hilbert table
+    is re-clustered with Hilbert instead of being converted on a timer;
+  - naming the other verb, or reclustering on a different key, is how a table
+    changes curve.
+
+  Held by `test/hilbert_cluster.sh` (181 arms) over the SQL surface, the recorded
+  kind, both self-gates and the daemon, and by `test/hilbert_curve.sh` (184 arms)
+  over the encoder itself.
+
+- `test/projection_rewrite.sh`, 84 checks. Nothing in the tree asserted that a
+  projection answers after a rewrite, which is why this was silent.
+
+  Every arm compares a `pgc_set_hash` of `read_projection` against the base table
+  rather than checking that the call did not raise, so a projection re-recorded
+  EMPTY fails -- which matters because the correct end state after a bare
+  `TRUNCATE` is an empty projection that answers. Every arm also asserts what its
+  operation DID (`REWROTE`, `NOOP` or `FAILED`) and reports its properties as
+  `UNMET_PRECONDITION` rather than as passes when it did not: an operation that
+  failed or no-opped leaves the storage id unchanged and `read_projection`
+  answering, which is indistinguishable from a path that handles projections
+  correctly. Three arms carry `pgcolumnar.vacuum`, `vacuum_sorted` and `cluster`,
+  which already re-record for themselves, so a future fix moved into the table-AM
+  callback reddens here instead of double-recording.
 
 ### Fixed
 
@@ -138,23 +190,6 @@ true until the next version shipped.
 - The `42704` hint no longer names a rewrite as the likely cause, since a rewrite
   now re-records. It names the two cases that remain: a declaration that no longer
   resolves, and the implicit base projection, which is not readable by name at all.
-
-### Added
-
-- `test/projection_rewrite.sh`, 84 checks. Nothing in the tree asserted that a
-  projection answers after a rewrite, which is why this was silent.
-
-  Every arm compares a `pgc_set_hash` of `read_projection` against the base table
-  rather than checking that the call did not raise, so a projection re-recorded
-  EMPTY fails -- which matters because the correct end state after a bare
-  `TRUNCATE` is an empty projection that answers. Every arm also asserts what its
-  operation DID (`REWROTE`, `NOOP` or `FAILED`) and reports its properties as
-  `UNMET_PRECONDITION` rather than as passes when it did not: an operation that
-  failed or no-opped leaves the storage id unchanged and `read_projection`
-  answering, which is indistinguishable from a path that handles projections
-  correctly. Three arms carry `pgcolumnar.vacuum`, `vacuum_sorted` and `cluster`,
-  which already re-record for themselves, so a future fix moved into the table-AM
-  callback reddens here instead of double-recording.
 
 ## [1.0-alpha3] - 2026-09-02
 

@@ -63,10 +63,12 @@ PG_FUNCTION_INFO_V1(pgcolumnar_relation_storageid);
 PG_FUNCTION_INFO_V1(pgcolumnar_vacuum);
 PG_FUNCTION_INFO_V1(pgcolumnar_vacuum_sorted);
 PG_FUNCTION_INFO_V1(pgcolumnar_cluster);
+PG_FUNCTION_INFO_V1(pgcolumnar_cluster_hilbert);
 PG_FUNCTION_INFO_V1(pgcolumnar_compact);
 PG_FUNCTION_INFO_V1(pgcolumnar_expire);
 PG_FUNCTION_INFO_V1(pgcolumnar_compact_rewrite);
 PG_FUNCTION_INFO_V1(pgcolumnar_recluster);
+PG_FUNCTION_INFO_V1(pgcolumnar_recluster_hilbert);
 PG_FUNCTION_INFO_V1(pgcolumnar_truncate);
 PG_FUNCTION_INFO_V1(pgcolumnar_debug_advance_reserved_offset);
 PG_FUNCTION_INFO_V1(pgcolumnar_debug_set_metapage_version);
@@ -203,14 +205,34 @@ PgColumnarRequireTableOwnerByOid(Oid relid)
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_TABLE, get_rel_name(relid));
 }
 
-/* Z-order helpers (defined later, used by the online recluster below) */
+/* Clustering helpers (defined later, used by the online recluster below) */
 static bool cluster_type_supported(Oid typid);
 static bool group_has_live_null(Relation rel, NativeRowGroupMetadata *rg,
 								AttrNumber attno);
+
+/*
+ * One row's clustering key, for one curve. Both curves produce the same width
+ * from the same ordinals and differ only by the transpose, so a rewrite picks
+ * the function once and the read loop below is identical for either (#889).
+ */
+typedef bytea *(*ClusterKeyFn) (Datum *values, bool *isnull, AttrNumber *atts,
+								int ncols, TupleDesc tupdesc);
+
 static bytea *cluster_zorder_key(Datum *values, bool *isnull, AttrNumber *atts,
 								 int ncols, TupleDesc tupdesc);
+static bytea *cluster_hilbert_key(Datum *values, bool *isnull, AttrNumber *atts,
+								  int ncols, TupleDesc tupdesc);
+static ClusterKeyFn cluster_key_fn(const char *curve);
+static const char *cluster_inherited_curve(Relation rel, int ncols,
+										   AttrNumber *atts);
+static void pgcolumnar_compact_relation_curve(Relation rel, int ncols,
+											  AttrNumber *atts,
+											  const char *curve);
 /* Names an ordering rewrite records as its key (defined later, #415) */
 static List *sort_key_names(TupleDesc tupdesc, AttrNumber *atts, int ncols);
+static bool sort_key_matches(TupleDesc tupdesc, AttrNumber *atts, int ncols,
+							 List *recorded);
+static bool relation_is_hilbert(Relation rel);
 static bool vacuum_sorted_gate_is_noop(Relation rel, int ncols,
 									   AttrNumber *atts);
 
@@ -553,22 +575,30 @@ record_online_sorted_extent(Relation rel, uint64 storageId,
 
 /*
  * pgcolumnar_recluster_online
- *		Re-establish global Z-order clustering over the relation's live rows
+ *		Re-establish global clustering on `curve` over the relation's live rows
  *		online (Phase F3c): read all live rows under a snapshot taken after
- *		advisory-locking every group, Morton-sort them, write them back as fresh
- *		groups with online index maintenance, and retire the old groups in the same
- *		transaction. Holds ShareUpdateExclusiveLock (the caller's), so reads never
- *		block; deletes to the reclustered groups serialize and retry via the F3b
- *		conflict protocol. Returns the number of groups retired.
+ *		advisory-locking every group, sort them on the curve key, write them back
+ *		as fresh groups with online index maintenance, and retire the old groups
+ *		in the same transaction. Holds ShareUpdateExclusiveLock (the caller's), so
+ *		reads never block; deletes to the reclustered groups serialize and retry
+ *		via the F3b conflict protocol. Returns the number of groups retired.
+ *
+ *		`curve` is one of the COLUMNAR_CURVE_* names and decides three things
+ *		together, which is why it is one parameter rather than three: the key
+ *		this rewrite sorts on, the kind its self-gate compares against, and the
+ *		kind it records. Splitting them is how a table gets laid on one curve and
+ *		labelled the other.
  */
 static int64
-pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts)
+pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts,
+							const char *curve)
 {
+	ClusterKeyFn keyfn = cluster_key_fn(curve);
 	uint64		storageId = PgColumnarStorageId(rel);
 	Oid			relid = RelationGetRelid(rel);
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	int			natts = tupdesc->natts;
-	AttrNumber	zAtt = (AttrNumber) (natts + 1);
+	AttrNumber	keyAtt = (AttrNumber) (natts + 1);
 	Snapshot	listSnap;
 	List	   *rgList;
 	ListCell   *lc;
@@ -628,41 +658,30 @@ pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts)
 	qsort(oldGroups, nGroups, sizeof(RetiredGroup), retired_group_cmp);
 
 	/*
-	 * Self-gate (#415): if the whole live relation is already the Z-order run
+	 * Self-gate (#415): if the whole live relation is already THIS curve's run
 	 * over exactly these columns -- nothing appended past the recorded run, same
 	 * kind, same key -- there is nothing to recluster. Return before locking and
 	 * rewriting every group, so a scheduler (or a user) can call recluster
 	 * speculatively without paying a full rewrite each time. Any mismatch
-	 * (appended groups, a different key, a lexicographic or unknown run) falls
-	 * through to the full reorg below, so re-clustering by a new key still works.
+	 * (appended groups, a different key, a lexicographic or unknown run, or a
+	 * run on the OTHER curve) falls through to the full reorg below, so
+	 * re-clustering by a new key and switching curves both still work.
+	 *
+	 * The kind compared is `curve`, the curve this call will lay, and NOT the
+	 * literal 'zorder' it was before #889. Comparing against a fixed literal
+	 * gates a Hilbert recluster on a Z-order label, which reads as "already
+	 * clustered" for a table that is not on this curve at all.
 	 */
 	{
 		int64		sfrom,
 					sthrough;
 		List	   *skey;
 		char	   *skind;
-		bool		sameKey = false;
+		bool		sameKey;
 
 		PgColumnarGetSortedInfo(storageId, &sfrom, &sthrough, &skey, &skind);
-		if (skind != NULL && strcmp(skind, "zorder") == 0 &&
-			list_length(skey) == ncols)
-		{
-			ListCell   *klc;
-
-			sameKey = true;
-			i = 0;
-			foreach(klc, skey)
-			{
-				const char *want = NameStr(TupleDescAttr(tupdesc, atts[i] - 1)->attname);
-
-				if (strcmp((char *) lfirst(klc), want) != 0)
-				{
-					sameKey = false;
-					break;
-				}
-				i++;
-			}
-		}
+		sameKey = (skind != NULL && strcmp(skind, curve) == 0 &&
+				   sort_key_matches(tupdesc, atts, ncols, skey));
 		if (sameKey && sfrom >= 0 && sthrough >= 0 &&
 			(int64) oldGroups[0].groupNumber >= sfrom &&
 			(int64) oldGroups[nGroups - 1].groupNumber <= sthrough)
@@ -685,7 +704,7 @@ pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts)
 	augdesc = CreateTemplateTupleDesc(natts + 1);
 	for (i = 1; i <= natts; i++)
 		TupleDescCopyEntry(augdesc, (AttrNumber) i, tupdesc, (AttrNumber) i);
-	TupleDescInitEntry(augdesc, zAtt, "__zorder", BYTEAOID, -1, 0);
+	TupleDescInitEntry(augdesc, keyAtt, "__curvekey", BYTEAOID, -1, 0);
 #if PG_VERSION_NUM >= 190000
 	/* PG19 requires a manually-built TupleDesc to be finalized before use, which
 	 * computes firstNonCachedOffsetAttr (asserted by the tuple routines) after the
@@ -695,7 +714,7 @@ pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts)
 
 	tce = lookup_type_cache(BYTEAOID, TYPECACHE_LT_OPR);
 	byteaLt = tce->lt_opr;
-	tsort = tuplesort_begin_heap(augdesc, 1, &zAtt, &byteaLt, &sortColl,
+	tsort = tuplesort_begin_heap(augdesc, 1, &keyAtt, &byteaLt, &sortColl,
 								 &nullsFirst, maintenance_work_mem, NULL,
 								 COLUMNAR_TUPLESORT_NONACCESS);
 
@@ -707,14 +726,14 @@ pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts)
 	while (PgColumnarReadNextRow(readState, readSlot->tts_values,
 							   readSlot->tts_isnull, &rowNumber))
 	{
-		bytea	   *zkey;
+		bytea	   *ckey;
 
 		CHECK_FOR_INTERRUPTS();
 		memcpy(putSlot->tts_values, readSlot->tts_values, natts * sizeof(Datum));
 		memcpy(putSlot->tts_isnull, readSlot->tts_isnull, natts * sizeof(bool));
-		zkey = cluster_zorder_key(readSlot->tts_values, readSlot->tts_isnull,
-								  atts, ncols, tupdesc);
-		putSlot->tts_values[natts] = PointerGetDatum(zkey);
+		ckey = keyfn(readSlot->tts_values, readSlot->tts_isnull,
+					 atts, ncols, tupdesc);
+		putSlot->tts_values[natts] = PointerGetDatum(ckey);
 		putSlot->tts_isnull[natts] = false;
 		ExecStoreVirtualTuple(putSlot);
 		tuplesort_puttupleslot(tsort, putSlot);
@@ -770,7 +789,7 @@ pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts)
 
 	/* record how far the reordered run reaches (#311) and BY WHAT (#415) */
 	record_online_sorted_extent(rel, storageId, writeState, stripeMark,
-								sort_key_names(tupdesc, atts, ncols), "zorder");
+								sort_key_names(tupdesc, atts, ncols), curve);
 
 	PopActiveSnapshot();
 	UnregisterSnapshot(snap);
@@ -781,17 +800,46 @@ pgcolumnar_recluster_online(Relation rel, int ncols, AttrNumber *atts)
 }
 
 /*
- * pgcolumnar_recluster
- *		SQL: pgcolumnar.recluster(tablename regclass, VARIADIC columns name[]).
- *		The lazy online counterpart to cluster(): re-establish global Z-order
- *		clustering under ShareUpdateExclusiveLock (concurrent reads and writes),
- *		not the AccessExclusiveLock the eager cluster() reorg takes. Returns the
- *		number of groups reclustered.
+ * cluster_curve_label
+ *		The curve's name as it appears in an error message. One place, so the
+ *		two verbs cannot describe the same refusal differently.
  */
-Datum
-pgcolumnar_recluster(PG_FUNCTION_ARGS)
+static const char *
+cluster_curve_label(const char *curve)
 {
-	Oid			relid = PG_GETARG_OID(0);
+	return (strcmp(curve, COLUMNAR_CURVE_HILBERT) == 0) ? "Hilbert" : "Z-order";
+}
+
+/*
+ * cluster_verb_validate
+ *		The argument checking every clustering entry point does, once (#889).
+ *
+ *		cluster(), recluster(), cluster_hilbert() and recluster_hilbert() take
+ *		the identical arguments and must refuse the identical inputs with the
+ *		identical SQLSTATEs. That was ~90 lines duplicated per verb; at four
+ *		verbs it is the shape in which two of them drift apart, and
+ *		test/hilbert_cluster.sh S1 asserts each new verb's state against the
+ *		state its sibling raises on the byte-identical input precisely because
+ *		that drift is silent.
+ *
+ *		On return the relation is open under `lockmode`, *ncolsp holds the column
+ *		count and the returned array holds their attribute numbers. Every refusal
+ *		below closes the relation first, and ownership is checked BEFORE
+ *		table_open (#568) so an unprivileged caller never joins the lock queue.
+ *
+ *		The SQLSTATEs, which are the contract:
+ *		  22004 a null table name
+ *		  22023 no columns, more than eight, or a null column name
+ *		  42809 not a columnar table
+ *		  42703 no such column
+ *		  0A000 a column whose type has no order-preserving ordinal
+ *		  42501 the caller does not own the table
+ */
+static AttrNumber *
+cluster_verb_validate(FunctionCallInfo fcinfo, const char *curve,
+					  LOCKMODE lockmode, Relation *relp, int *ncolsp)
+{
+	Oid			relid;
 	ArrayType  *colArray;
 	Datum	   *colDatums;
 	bool	   *colNulls;
@@ -799,7 +847,6 @@ pgcolumnar_recluster(PG_FUNCTION_ARGS)
 	Relation	rel;
 	TupleDesc	tupdesc;
 	AttrNumber *atts;
-	int64		reclustered;
 	int			i;
 
 	if (PG_ARGISNULL(0))
@@ -811,6 +858,7 @@ pgcolumnar_recluster(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("at least one clustering column is required")));
 
+	relid = PG_GETARG_OID(0);
 	colArray = PG_GETARG_ARRAYTYPE_P(1);
 	deconstruct_array(colArray, NAMEOID, NAMEDATALEN, false, 'c',
 					  &colDatums, &colNulls, &ncols);
@@ -821,16 +869,17 @@ pgcolumnar_recluster(PG_FUNCTION_ARGS)
 	if (ncols > 8)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("Z-order clustering supports at most 8 columns")));
+				 errmsg("%s clustering supports at most 8 columns",
+						cluster_curve_label(curve))));
 
+	/* Ownership before the lock (#568), as in pgcolumnar_vacuum. */
 	PgColumnarRequireTableOwnerByOid(relid);
 
-	/* the lazy lock: concurrent reads and writes during the recluster */
-	rel = table_open(relid, ShareUpdateExclusiveLock);
+	rel = table_open(relid, lockmode);
 
 	if (!PgColumnarIsColumnarRelation(relid))
 	{
-		table_close(rel, ShareUpdateExclusiveLock);
+		table_close(rel, lockmode);
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("relation \"%s\" is not a columnar table",
@@ -847,7 +896,7 @@ pgcolumnar_recluster(PG_FUNCTION_ARGS)
 
 		if (colNulls[i])
 		{
-			table_close(rel, ShareUpdateExclusiveLock);
+			table_close(rel, lockmode);
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("clustering column name cannot be null")));
@@ -857,7 +906,7 @@ pgcolumnar_recluster(PG_FUNCTION_ARGS)
 		if (attno == InvalidAttrNumber || attno <= 0 ||
 			TupleDescAttr(tupdesc, attno - 1)->attisdropped)
 		{
-			table_close(rel, ShareUpdateExclusiveLock);
+			table_close(rel, lockmode);
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_COLUMN),
 					 errmsg("column \"%s\" does not exist in table \"%s\"",
@@ -866,22 +915,112 @@ pgcolumnar_recluster(PG_FUNCTION_ARGS)
 		att = TupleDescAttr(tupdesc, attno - 1);
 		if (!cluster_type_supported(att->atttypid))
 		{
-			table_close(rel, ShareUpdateExclusiveLock);
+			table_close(rel, lockmode);
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("column \"%s\" of type %s cannot be used as a clustering key",
 							colname, format_type_be(att->atttypid)),
-					 errhint("Z-order clustering supports integer, date/time, boolean, and floating-point columns. "
+					 errhint("%s clustering supports integer, date/time, boolean, and floating-point columns. "
 							 "For a text or other btree-orderable key, use pgcolumnar.vacuum_sorted() "
-							 "(lexicographic sort on the given columns), optionally declared via set_options(..., sort_by => ...).")));
+							 "(lexicographic sort on the given columns), optionally declared via set_options(..., sort_by => ...).",
+							 cluster_curve_label(curve))));
 		}
 		atts[i] = attno;
 	}
 
-	reclustered = pgcolumnar_recluster_online(rel, ncols, atts);
+	*relp = rel;
+	*ncolsp = ncols;
+	return atts;
+}
+
+/*
+ * recluster_verb
+ *		The body behind pgcolumnar.recluster and pgcolumnar.recluster_hilbert.
+ *
+ *		`curve` is NULL for the plain verb, which names no curve and therefore
+ *		INHERITS the table's own (the ruling on #889: see
+ *		cluster_inherited_curve). recluster_hilbert names its curve, so it never
+ *		inherits -- naming the verb is how a curve is switched.
+ */
+static int64
+recluster_verb(FunctionCallInfo fcinfo, const char *curve)
+{
+	Relation	rel;
+	int			ncols;
+	AttrNumber *atts;
+	int64		reclustered;
+
+	/* the lazy lock: concurrent reads and writes during the recluster */
+	atts = cluster_verb_validate(fcinfo,
+								 curve ? curve : COLUMNAR_CURVE_ZORDER,
+								 ShareUpdateExclusiveLock, &rel, &ncols);
+
+	if (curve == NULL)
+		curve = cluster_inherited_curve(rel, ncols, atts);
+
+	reclustered = pgcolumnar_recluster_online(rel, ncols, atts, curve);
 
 	table_close(rel, NoLock);
-	PG_RETURN_INT64(reclustered);
+	return reclustered;
+}
+
+/*
+ * cluster_verb
+ *		The body behind pgcolumnar.cluster and pgcolumnar.cluster_hilbert. Same
+ *		curve rule as recluster_verb, under AccessExclusiveLock.
+ */
+static void
+cluster_verb(FunctionCallInfo fcinfo, const char *curve)
+{
+	Relation	rel;
+	int			ncols;
+	AttrNumber *atts;
+
+	atts = cluster_verb_validate(fcinfo,
+								 curve ? curve : COLUMNAR_CURVE_ZORDER,
+								 AccessExclusiveLock, &rel, &ncols);
+
+	if (curve == NULL)
+		curve = cluster_inherited_curve(rel, ncols, atts);
+
+	pgcolumnar_compact_relation_curve(rel, ncols, atts, curve);
+
+	/* keep the lock until end of transaction */
+	table_close(rel, NoLock);
+}
+
+/*
+ * pgcolumnar_recluster
+ *		SQL: pgcolumnar.recluster(tablename regclass, VARIADIC columns name[]).
+ *		The lazy online counterpart to cluster(): re-establish global clustering
+ *		under ShareUpdateExclusiveLock (concurrent reads and writes), not the
+ *		AccessExclusiveLock the eager cluster() reorg takes. Returns the number
+ *		of groups reclustered.
+ *
+ *		Z-order, unless the table is already on another curve over exactly these
+ *		columns, in which case that curve is maintained (#889). This verb names
+ *		no curve, so it does not silently re-declare one.
+ */
+Datum
+pgcolumnar_recluster(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(recluster_verb(fcinfo, NULL));
+}
+
+/*
+ * pgcolumnar_recluster_hilbert
+ *		SQL: pgcolumnar.recluster_hilbert(tablename regclass,
+ *		VARIADIC columns name[]). recluster() on the Hilbert curve (#889).
+ *
+ *		A separate verb rather than a parameter because PostgreSQL cannot extend
+ *		the existing signature in either direction: a defaulted parameter cannot
+ *		precede a VARIADIC one, and an array-plus-kind overload makes the
+ *		documented recluster('t','a','b') call ambiguous.
+ */
+Datum
+pgcolumnar_recluster_hilbert(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(recluster_verb(fcinfo, COLUMNAR_CURVE_HILBERT));
 }
 
 /*
@@ -1091,6 +1230,49 @@ cluster_zorder_key(Datum *values, bool *isnull, AttrNumber *atts, int ncols,
 	return result;
 }
 
+/*
+ * Build the Hilbert key for one row (#889).
+ *
+ * The same ordinals, the same packer and the same 8*ncols width as the Z-order
+ * key; the whole difference between the two curves is the transpose in the
+ * middle. Skilling's observation is that the Hilbert index IS the MSB-first
+ * interleave of the transposed coordinates, so memcmp order over the result is
+ * Hilbert order for exactly the reason it is Z-order above, and every caller
+ * downstream -- the tuplesort, the bytea comparator, the writer -- is unchanged.
+ *
+ * The transpose is held by test/hilbert_curve.sh against the properties that
+ * define a Hilbert curve, and against frozen hex.
+ */
+static bytea *
+cluster_hilbert_key(Datum *values, bool *isnull, AttrNumber *atts, int ncols,
+					TupleDesc tupdesc)
+{
+	int			keybytes = ncols * 8;
+	bytea	   *result = (bytea *) palloc(VARHDRSZ + keybytes);
+	uint64	   *ord = cluster_key_ordinals(values, isnull, atts, ncols, tupdesc);
+
+	SET_VARSIZE(result, VARHDRSZ + keybytes);
+	cluster_hilbert_transpose(ord, ncols);
+	cluster_pack_interleave(ord, ncols, (unsigned char *) VARDATA(result));
+
+	pfree(ord);
+	return result;
+}
+
+/*
+ * The key builder for a named curve, resolved ONCE per rewrite rather than per
+ * row. An unrecognised name is a programming error, not user input: every call
+ * site passes one of the two constants.
+ */
+static ClusterKeyFn
+cluster_key_fn(const char *curve)
+{
+	if (strcmp(curve, COLUMNAR_CURVE_HILBERT) == 0)
+		return cluster_hilbert_key;
+	Assert(strcmp(curve, COLUMNAR_CURVE_ZORDER) == 0);
+	return cluster_zorder_key;
+}
+
 
 /*
  * pgcolumnar_relation_storageid
@@ -1157,6 +1339,100 @@ sort_key_names(TupleDesc tupdesc, AttrNumber *atts, int ncols)
 		names = lappend(names,
 						pstrdup(NameStr(TupleDescAttr(tupdesc, atts[i] - 1)->attname)));
 	return names;
+}
+
+/*
+ * sort_key_matches
+ *		Is the key RECORDED on this storage exactly atts[0 .. ncols-1], in this
+ *		order?
+ *
+ *		The inverse of sort_key_names, and the comparison all three gates make:
+ *		the online recluster's, vacuum_sorted's, and the sticky-curve resolver's.
+ *		Written once because three copies of a loop that must agree is how two of
+ *		them drift.
+ *
+ *		Order matters: (a,b) and (b,a) are different layouts under either curve,
+ *		so this is a sequence comparison and not a set one.
+ */
+static bool
+sort_key_matches(TupleDesc tupdesc, AttrNumber *atts, int ncols, List *recorded)
+{
+	ListCell   *lc;
+	int			i = 0;
+
+	if (list_length(recorded) != ncols)
+		return false;
+
+	foreach(lc, recorded)
+	{
+		const char *want = NameStr(TupleDescAttr(tupdesc, atts[i] - 1)->attname);
+
+		if (strcmp((char *) lfirst(lc), want) != 0)
+			return false;
+		i++;
+	}
+	return true;
+}
+
+/*
+ * relation_is_hilbert
+ *		Is this relation's recorded layout the Hilbert curve, over ANY key?
+ *
+ *		The key is not compared, on purpose. This answers "is this table
+ *		clustered on a curve that a lexicographic rewrite would destroy", and
+ *		that is true of every Hilbert key, not only the one the caller happened
+ *		to name.
+ */
+static bool
+relation_is_hilbert(Relation rel)
+{
+	int64		sfrom,
+				sthrough;
+	List	   *skey;
+	char	   *skind;
+
+	PgColumnarGetSortedInfo(PgColumnarStorageId(rel), &sfrom, &sthrough,
+							&skey, &skind);
+
+	return (skind != NULL && strcmp(skind, COLUMNAR_CURVE_HILBERT) == 0);
+}
+
+/*
+ * cluster_inherited_curve
+ *		The curve the PLAIN verbs -- cluster() and recluster() -- lay on this
+ *		relation.
+ *
+ *		THE CURVE IS STICKY (the owner's ruling on #889). sorted_kind is the
+ *		table's DECLARED INTENT, not a property of each call. cluster() and
+ *		recluster() name no curve, so on a table already laid on one over
+ *		exactly the key they were handed they MAINTAIN it, rather than
+ *		converting it to Z-order and relabelling it. That conversion is what the
+ *		ruling forbids: it is silent, it is not what the caller asked for, and
+ *		nothing in the call says it happened.
+ *
+ *		A DIFFERENT key is the explicit re-declaration, so nothing is inherited
+ *		there and the plain verbs' own curve applies. recluster('t','b','a') on a
+ *		Hilbert table over (a,b) is therefore an honest switch back to Z-order,
+ *		which is what keeps "sticky" from meaning "unescapable".
+ *
+ *		Switching curves on the SAME key is done by naming the other verb.
+ */
+static const char *
+cluster_inherited_curve(Relation rel, int ncols, AttrNumber *atts)
+{
+	int64		sfrom,
+				sthrough;
+	List	   *skey;
+	char	   *skind;
+
+	PgColumnarGetSortedInfo(PgColumnarStorageId(rel), &sfrom, &sthrough,
+							&skey, &skind);
+
+	if (skind != NULL && strcmp(skind, COLUMNAR_CURVE_HILBERT) == 0 &&
+		sort_key_matches(RelationGetDescr(rel), atts, ncols, skey))
+		return COLUMNAR_CURVE_HILBERT;
+
+	return COLUMNAR_CURVE_ZORDER;
 }
 
 /*
@@ -1437,20 +1713,29 @@ pgcolumnar_compact_relation(Relation rel, int nsortkeys, AttrNumber *sortAtts)
 }
 
 /*
- * pgcolumnar_compact_relation_zorder
- *		Rewrite every live row of a columnar relation ordered by the Z-order
- *		(Morton) code over atts[0..ncols-1] (Phase F2). Mirrors
+ * pgcolumnar_compact_relation_curve
+ *		Rewrite every live row of a columnar relation ordered by `curve`'s
+ *		space-filling code over atts[0..ncols-1] (Phase F2, #889). Mirrors
  *		pgcolumnar_compact_relation, but sorts by a computed key carried as a
  *		trailing bytea column of an augmented tuple, so the sort still spills to
  *		disk through tuplesort. The relation is already open AccessExclusiveLock.
+ *
+ *		`curve` picks the key builder AND is the kind recorded at the end, for
+ *		the same reason it is one parameter in the online path: a table laid on
+ *		one curve and labelled the other gates wrongly forever afterwards. It was
+ *		named _zorder while Z-order was the only curve; the name went with the
+ *		parameter, because a function called _zorder that lays Hilbert is the
+ *		same trap in a different place.
  */
 static void
-pgcolumnar_compact_relation_zorder(Relation rel, int ncols, AttrNumber *atts)
+pgcolumnar_compact_relation_curve(Relation rel, int ncols, AttrNumber *atts,
+								  const char *curve)
 {
+	ClusterKeyFn keyfn = cluster_key_fn(curve);
 	Oid			relid = RelationGetRelid(rel);
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	int			natts = tupdesc->natts;
-	AttrNumber	zAtt = (AttrNumber) (natts + 1);
+	AttrNumber	keyAtt = (AttrNumber) (natts + 1);
 	uint64		oldStorageId;
 	Snapshot	snapshot;
 	PgColumnarReadState *readState;
@@ -1481,11 +1766,11 @@ pgcolumnar_compact_relation_zorder(Relation rel, int ncols, AttrNumber *atts)
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	PushActiveSnapshot(snapshot);
 
-	/* augmented descriptor: the table's columns plus a trailing bytea Z-order key */
+	/* augmented descriptor: the table's columns plus a trailing bytea curve key */
 	augdesc = CreateTemplateTupleDesc(natts + 1);
 	for (i = 1; i <= natts; i++)
 		TupleDescCopyEntry(augdesc, (AttrNumber) i, tupdesc, (AttrNumber) i);
-	TupleDescInitEntry(augdesc, zAtt, "__zorder", BYTEAOID, -1, 0);
+	TupleDescInitEntry(augdesc, keyAtt, "__curvekey", BYTEAOID, -1, 0);
 #if PG_VERSION_NUM >= 190000
 	/* PG19 requires a manually-built TupleDesc to be finalized before use, which
 	 * computes firstNonCachedOffsetAttr (asserted by the tuple routines) after the
@@ -1495,7 +1780,7 @@ pgcolumnar_compact_relation_zorder(Relation rel, int ncols, AttrNumber *atts)
 
 	tce = lookup_type_cache(BYTEAOID, TYPECACHE_LT_OPR);
 	byteaLt = tce->lt_opr;
-	tsort = tuplesort_begin_heap(augdesc, 1, &zAtt, &byteaLt, &sortColl,
+	tsort = tuplesort_begin_heap(augdesc, 1, &keyAtt, &byteaLt, &sortColl,
 								 &nullsFirst, maintenance_work_mem, NULL,
 								 COLUMNAR_TUPLESORT_NONACCESS);
 
@@ -1507,14 +1792,14 @@ pgcolumnar_compact_relation_zorder(Relation rel, int ncols, AttrNumber *atts)
 	while (PgColumnarReadNextRow(readState, readSlot->tts_values,
 							   readSlot->tts_isnull, &rowNumber))
 	{
-		bytea	   *zkey;
+		bytea	   *ckey;
 
 		CHECK_FOR_INTERRUPTS();
 		memcpy(putSlot->tts_values, readSlot->tts_values, natts * sizeof(Datum));
 		memcpy(putSlot->tts_isnull, readSlot->tts_isnull, natts * sizeof(bool));
-		zkey = cluster_zorder_key(readSlot->tts_values, readSlot->tts_isnull,
-								  atts, ncols, tupdesc);
-		putSlot->tts_values[natts] = PointerGetDatum(zkey);
+		ckey = keyfn(readSlot->tts_values, readSlot->tts_isnull,
+					 atts, ncols, tupdesc);
+		putSlot->tts_values[natts] = PointerGetDatum(ckey);
 		putSlot->tts_isnull[natts] = false;
 		ExecStoreVirtualTuple(putSlot);
 		tuplesort_puttupleslot(tsort, putSlot);
@@ -1556,7 +1841,7 @@ pgcolumnar_compact_relation_zorder(Relation rel, int ncols, AttrNumber *atts)
 		}
 	}
 
-	/* write the live rows back in Z-order; the trailing key column is ignored */
+	/* write the live rows back in curve order; the trailing key column is ignored */
 	writeState = PgColumnarGetWriteState(rel);
 	while (tuplesort_gettupleslot(tsort, true, false, augSlot, NULL))
 	{
@@ -1572,8 +1857,8 @@ pgcolumnar_compact_relation_zorder(Relation rel, int ncols, AttrNumber *atts)
 	}
 	PgColumnarFlushWriteStateForRelation(relid);
 
-	/* Z-order is an order, so the same extent applies (see record_sorted_extent). */
-	record_sorted_extent(rel, sort_key_names(tupdesc, atts, ncols), "zorder");
+	/* A curve is an order, so the same extent applies (see record_sorted_extent). */
+	record_sorted_extent(rel, sort_key_names(tupdesc, atts, ncols), curve);
 
 	tuplesort_end(tsort);
 	ExecDropSingleTupleTableSlot(augSlot);
@@ -1702,7 +1987,6 @@ vacuum_sorted_gate_is_noop(Relation rel, int ncols, AttrNumber *atts)
 	Snapshot	snap;
 	List	   *rgList;
 	ListCell   *lc;
-	int			i;
 	bool		noop = true;
 
 	PgColumnarGetSortedInfo(storageId, &sfrom, &sthrough, &skey, &skind);
@@ -1710,17 +1994,8 @@ vacuum_sorted_gate_is_noop(Relation rel, int ncols, AttrNumber *atts)
 	/* 1 + 2: a lexicographic run over exactly this key */
 	if (skind == NULL || strcmp(skind, "lexicographic") != 0)
 		return false;
-	if (list_length(skey) != ncols)
+	if (!sort_key_matches(tupdesc, atts, ncols, skey))
 		return false;
-	i = 0;
-	foreach(lc, skey)
-	{
-		const char *want = NameStr(TupleDescAttr(tupdesc, atts[i] - 1)->attname);
-
-		if (strcmp((char *) lfirst(lc), want) != 0)
-			return false;
-		i++;
-	}
 	if (sfrom < 0 || sthrough < 0)
 		return false;
 
@@ -1934,11 +2209,37 @@ pgcolumnar_vacuum_sorted(PG_FUNCTION_ARGS)
 	}
 
 	/*
+	 * THE CURVE IS STICKY, so vacuum_sorted leaves a Hilbert table alone (the
+	 * owner's ruling on #889).
+	 *
+	 * sorted_kind is the table's declared intent. A lexicographic rewrite would
+	 * destroy a Hilbert layout AND relabel it 'lexicographic', so the table
+	 * would afterwards claim an ordering nobody asked for and the recluster
+	 * gates would agree with the label. That pair -- rewrite and relabel -- is
+	 * what the ruling names as the defect.
+	 *
+	 * It is a NO-OP, not a refusal. vacuum_sorted is what the maintenance
+	 * daemon and an operator's cron both call across a whole database; raising
+	 * there turns one clustered table into a failing maintenance pass for
+	 * everything behind it. Skipping is reported at DEBUG1, exactly as the #760
+	 * gate below reports its own skip.
+	 *
+	 * Z-order is deliberately NOT included. Re-sorting a Z-ordered table
+	 * lexicographically is behaviour that shipped and is pinned by
+	 * test/vacuum_sorted_gate.sh; the ruling is about Hilbert, and widening it
+	 * to every curve is a separate decision with its own removal proof.
+	 */
+	if (relation_is_hilbert(rel))
+		ereport(DEBUG1,
+				(errmsg("pgcolumnar: \"%s\" is clustered on the Hilbert curve, skipping the lexicographic rewrite",
+						RelationGetRelationName(rel))));
+
+	/*
 	 * Self-gate (#760): skip the rewrite when the relation is already exactly
 	 * this lexicographic run with nothing appended and nothing to reclaim. See
 	 * vacuum_sorted_gate_is_noop for why the reclaim half is not optional.
 	 */
-	if (vacuum_sorted_gate_is_noop(rel, ncols, sortAtts))
+	else if (vacuum_sorted_gate_is_noop(rel, ncols, sortAtts))
 		ereport(DEBUG1,
 				(errmsg("pgcolumnar: \"%s\" is already sorted on this key with nothing to reclaim, skipping rewrite",
 						RelationGetRelationName(rel))));
@@ -1955,7 +2256,9 @@ pgcolumnar_vacuum_sorted(PG_FUNCTION_ARGS)
  * pgcolumnar_cluster
  *		SQL: pgcolumnar.cluster(tablename regclass, VARIADIC columns name[]).
  *		Physically reorders a columnar table by the Z-order (Morton) space-filling
- *		curve over the named columns (Phase F2, spec 9). Unlike vacuum_sorted's
+ *		curve over the named columns (Phase F2, spec 9) -- or by the curve the
+ *		table is already laid on over exactly those columns, which this verb
+ *		maintains rather than re-declaring (#889). Unlike vacuum_sorted's
  *		single lead-column sort, Z-order clustering tightens the min/max zone maps
  *		of ALL clustered columns at once, so multi-column range and point
  *		predicates skip far more vectors and chunks. Results are unchanged; this
@@ -1972,100 +2275,27 @@ pgcolumnar_vacuum_sorted(PG_FUNCTION_ARGS)
 Datum
 pgcolumnar_cluster(PG_FUNCTION_ARGS)
 {
-	Oid			relid = PG_GETARG_OID(0);
-	ArrayType  *colArray;
-	Datum	   *colDatums;
-	bool	   *colNulls;
-	int			ncols;
-	Relation	rel;
-	TupleDesc	tupdesc;
-	AttrNumber *atts;
-	int			i;
+	cluster_verb(fcinfo, NULL);
+	PG_RETURN_VOID();
+}
 
-	if (PG_ARGISNULL(0))
-		ereport(ERROR,
-				(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
-				 errmsg("table name cannot be null")));
-	if (PG_ARGISNULL(1))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("at least one clustering column is required")));
-
-	colArray = PG_GETARG_ARRAYTYPE_P(1);
-	deconstruct_array(colArray, NAMEOID, NAMEDATALEN, false, 'c',
-					  &colDatums, &colNulls, &ncols);
-	if (ncols < 1)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("at least one clustering column is required")));
-	if (ncols > 8)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("Z-order clustering supports at most 8 columns")));
-
-	/* Ownership before the AccessExclusiveLock (#568), as in pgcolumnar_vacuum. */
-	PgColumnarRequireTableOwnerByOid(relid);
-
-	rel = table_open(relid, AccessExclusiveLock);
-
-	if (!PgColumnarIsColumnarRelation(relid))
-	{
-		table_close(rel, AccessExclusiveLock);
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("relation \"%s\" is not a columnar table",
-						RelationGetRelationName(rel))));
-	}
-
-	tupdesc = RelationGetDescr(rel);
-	atts = palloc(ncols * sizeof(AttrNumber));
-
-	for (i = 0; i < ncols; i++)
-	{
-		char	   *colname;
-		AttrNumber	attno;
-		Form_pg_attribute att;
-
-		if (colNulls[i])
-		{
-			table_close(rel, AccessExclusiveLock);
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("clustering column name cannot be null")));
-		}
-
-		colname = NameStr(*DatumGetName(colDatums[i]));
-		attno = get_attnum(relid, colname);
-		if (attno == InvalidAttrNumber || attno <= 0 ||
-			TupleDescAttr(tupdesc, attno - 1)->attisdropped)
-		{
-			table_close(rel, AccessExclusiveLock);
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_COLUMN),
-					 errmsg("column \"%s\" does not exist in table \"%s\"",
-							colname, RelationGetRelationName(rel))));
-		}
-
-		att = TupleDescAttr(tupdesc, attno - 1);
-		if (!cluster_type_supported(att->atttypid))
-		{
-			table_close(rel, AccessExclusiveLock);
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("column \"%s\" of type %s cannot be used as a clustering key",
-							colname, format_type_be(att->atttypid)),
-					 errhint("Z-order clustering supports integer, date/time, boolean, and floating-point columns. "
-							 "For a text or other btree-orderable key, use pgcolumnar.vacuum_sorted() "
-							 "(lexicographic sort on the given columns), optionally declared via set_options(..., sort_by => ...).")));
-		}
-		atts[i] = attno;
-	}
-
-	pgcolumnar_compact_relation_zorder(rel, ncols, atts);
-
-	/* keep the lock until end of transaction */
-	table_close(rel, NoLock);
-
+/*
+ * pgcolumnar_cluster_hilbert
+ *		SQL: pgcolumnar.cluster_hilbert(tablename regclass,
+ *		VARIADIC columns name[]). cluster() on the Hilbert curve (#889).
+ *
+ *		Hilbert keeps neighbouring keys neighbouring in storage more tightly than
+ *		Morton order does -- Morton's jumps at a bit boundary are what a Hilbert
+ *		curve has none of -- so the min/max zone maps over the clustered columns
+ *		are tighter and a range predicate skips more vectors. Everything else,
+ *		including the key width and the sort, is identical to cluster().
+ *
+ *		A separate verb rather than a parameter: see pgcolumnar_recluster_hilbert.
+ */
+Datum
+pgcolumnar_cluster_hilbert(PG_FUNCTION_ARGS)
+{
+	cluster_verb(fcinfo, COLUMNAR_CURVE_HILBERT);
 	PG_RETURN_VOID();
 }
 

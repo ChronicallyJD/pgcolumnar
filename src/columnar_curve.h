@@ -23,6 +23,22 @@
 #define COLUMNAR_CURVE_H
 
 /*
+ * The two curve names, as recorded in pgcolumnar.storage.sorted_kind and as
+ * compared by every self-gate.
+ *
+ * They are constants because the string is written at one end of the system and
+ * compared at the other: a rewrite records the kind, and a later call gates on
+ * it. A typo in either half is accepted silently -- the catalog takes any text,
+ * and strcmp against a misspelt literal simply never matches -- so the gate
+ * refuses forever, invisibly, and the only symptom is a verb that always does
+ * the full work. Spelling the name once makes that a compile error instead.
+ *
+ * 'lexicographic', the third kind, is vacuum_sorted's and is not a curve.
+ */
+#define COLUMNAR_CURVE_ZORDER	"zorder"
+#define COLUMNAR_CURVE_HILBERT	"hilbert"
+
+/*
  * Transform ncols 64-bit coordinates in place, from axes to the Hilbert
  * transpose (Skilling 2004, AxestoTranspose, at b = 64).
  */
