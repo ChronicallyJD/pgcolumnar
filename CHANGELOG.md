@@ -252,6 +252,36 @@ true until the next version shipped.
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
+- A pytest harness beside the bash suites, with a layer that refuses tests which
+  assert nothing (#432).
+
+  `test/pytest/` connects through `psycopg` rather than parsing `psql` output, so a
+  test can assert the TYPE as well as the value: `psql -At` returns text, and an
+  `int4` `1` and a `text` `'1'` are the same string to a bash oracle.
+
+  This ports ONE bash suite. `test/` carries 4,429 anchored assertions across 256
+  suites, so this is 0.18% of them and is not coverage. The layer is the point.
+
+  A pytest run fails open in several ways this project has already been bitten by:
+  a test that asserts nothing passes, a filter that selects nothing exits 0, and a
+  fixture that skips greens every test under it. `pgc_vacuity.py` is loaded for
+  every run and refuses those shapes, along with an empty result compared with an
+  empty result, a value compared against itself, a plan matched by substring rather
+  than by typed key, an absence claim over an empty plan, `cursor.rowcount` of
+  `-1`, and a broad `except` found by walking the AST rather than by line regex.
+  `xfail_strict` is on, and `--pgc-expect-tests N` asserts the run's own shape and
+  refuses `N = 0`.
+
+  Every refusal has a red test in `test_layer.py` that runs pytest inside pytest
+  and asserts on the INNER run's outcome, which is what proves a guard refuses
+  rather than assuming it. Each records the bare-pytest behaviour it exists to
+  stop; every one of those measurements exited 0. Four of the ten are positive
+  controls, so a guard that starts rejecting good tests reddens there first.
+
+  Not registered in `test/run_all_versions.sh`. That would add a `psycopg` build
+  dependency to every CI leg for 0.18% of the assertions; `test/pytest/README.md`
+  records what registering would cost and what has to be true first.
+
 
 - A nanosecond Arrow import says how many values lost precision, and still
   imports every row.
