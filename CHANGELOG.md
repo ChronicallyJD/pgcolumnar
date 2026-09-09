@@ -56,7 +56,18 @@ true until the next version shipped.
   binary check driven against a live cluster, and devloop writing the stamp.
   `harness_selftest` goes from 261 checks to 288, both measured.
 
+- `IN (...)` and `= ANY(array)` now test each listed value against row-group
+  zone maps and bloom filters instead of reducing the list to its `[min,max]`
+  hull (#752).
 
+  A scattered list whose hull spans a table could previously read every row
+  group. The set is now one internal predicate whose element tests are a
+  disjunction, while the outer predicate list remains a conjunction. The
+  executor still rechecks exact membership, so pruning remains conservative.
+
+  Per-element evaluation is capped at 128 non-NULL entries. Larger lists retain
+  the bounded two-key hull because exact vector refinement otherwise costs
+  elements times rows.
 - Hilbert clustering: `pgcolumnar.cluster_hilbert` and
   `pgcolumnar.recluster_hilbert` (#889).
 

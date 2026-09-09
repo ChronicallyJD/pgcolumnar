@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**121 tests in 9 files.** One hundred and six of them test the harness rather than the
+**122 tests in 10 files.** One hundred and seven of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -35,9 +35,10 @@ behaviour, the source of that number is named.
 - [9. test_ordered.py: the ordered oracle](#9-test_orderedpy-the-ordered-oracle)
 - [10. test_runshape.py: the shape of the run itself](#10-test_runshapepy-the-shape-of-the-run-itself)
 - [11. test_zonemap_boundaries.py: exact boundaries](#11-test_zonemap_boundariespy-exact-boundaries)
-- [12. Adding a test](#12-adding-a-test)
-- [13. What this corpus does NOT yet refuse](#13-what-this-corpus-does-not-yet-refuse)
-- [14. Traps this corpus records](#14-traps-this-corpus-records)
+- [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
+- [13. Adding a test](#13-adding-a-test)
+- [14. What this corpus does NOT yet refuse](#14-what-this-corpus-does-not-yet-refuse)
+- [15. Traps this corpus records](#15-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -879,7 +880,29 @@ remove no group. This distinguishes correctness coverage from
 pruning-effectiveness coverage rather than relying on incidental fixtures
 elsewhere in the matrix.
 
-## 12. Adding a test
+## 12. test_saop_element_pushdown.py: scattered set pruning
+
+### `test_scattered_saop_prunes_each_element`
+
+Ports the #752 additions to `test/native_saop_pushdown.sh`. A monotonic 40,000-row
+fixture has twenty row groups. The scattered set `{100,20100,38100}` spans the
+table, so its old `[min,max]` hull removes zero groups while per-element pruning
+removes seventeen. The contiguous `{100,101,102}` set is the negative control:
+its hull and its elements both remove nineteen groups. Exact 128- and 129-element
+arms pin both sides of the bounded fallback.
+
+A by-reference text set with three values plus NULL pins the NULL compaction
+whose absence dereferences a null Datum. Its integer companion proves NULL
+removal retains pruning. The `ov` fixture gives every group the same `[10,88]`
+zone, so a set of absent odd values can remove groups only through the
+per-element bloom loop.
+
+The shell and pytest forms were both run red before implementation (`0`, wanted
+`17`), green afterward, then red again with the per-element threshold mutated to
+zero. The fixture row count and columnar plan marker are premises, and both query
+answers are checked independently of the pruning counters.
+
+## 13. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -906,7 +929,7 @@ elsewhere in the matrix.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 13. What this corpus does NOT yet refuse
+## 14. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
@@ -918,7 +941,7 @@ Read it before adding a test. The gaps most likely to affect a new test are that
 same family satisfies it, and that a write is not required to have written anything.
 Both are named there with the refusal each needs.
 
-## 14. Traps this corpus records
+## 15. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.
