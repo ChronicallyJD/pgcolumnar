@@ -33,6 +33,34 @@ true until the next version shipped.
   the walk to use the named relation instead of each descendant takes
   `test/projection_rename_restore.sh` from 8 passed to 6 passed and 2 failed.
 
+- An in-place `TRUNCATE` now clears each projection's storage as well as the base
+  (#896).
+
+  PostgreSQL truncates a relation created in the current transaction in place,
+  because a rollback discards the relation anyway. Measured on 18.4: the
+  relfilenode and the storage id are both unchanged across such a `TRUNCATE`,
+  where a table from an earlier transaction gets fresh ones. So
+  `relation_set_new_filelocator` never runs, and the teardown that retires a
+  projection's storage never happens.
+
+  `pgcolumnar_relation_nontransactional_truncate` cleared only the base storage.
+  The projection's row groups survived, and the next write to the projection
+  collided with them:
+
+      ERROR:  duplicate key value violates unique constraint "row_group_pkey"
+      DETAIL:  Key (storage_id, group_number)=(10000000001, 2) already exists.
+
+  The whole transaction rolled back, so `TRUNCATE` and reload in one transaction
+  was unavailable on any table carrying a projection. It needed four things
+  together: the table created in the same transaction, a projection, the
+  `TRUNCATE`, and a write after it. Each was isolated by a control.
+
+  **The `pgcolumnar.projection` rows are kept, deliberately.** This is not
+  `pgcolumnar_delete_storage_tree`, which also deletes them. That is right for a
+  rewrite, where the base storage id changes and the rows are re-recorded under
+  the new one. Here the metapage keeps its storage id, so the rows still describe
+  this relation correctly; only their content is being truncated away.
+
 - `ALTER TABLE ... DROP COLUMN` is now refused when a projection depends on the
   column, instead of leaving the table unreadable (#891).
 

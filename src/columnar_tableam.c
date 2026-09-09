@@ -958,8 +958,36 @@ static void
 pgcolumnar_relation_nontransactional_truncate(Relation rel)
 {
 	uint64		storageId = PgColumnarStorageId(rel);
+	List	   *projs = PgColumnarListProjections(storageId);
+	ListCell   *lc;
 
 	PgColumnarDeleteMetadata(storageId);
+
+	/*
+	 * A projection keeps its own storage id, so clearing the base storage is
+	 * not enough. This path cleared only the base and left every projection's
+	 * row groups in place; the next write to the projection then collided with
+	 * them (#896):
+	 *
+	 *     ERROR:  duplicate key value violates unique constraint "row_group_pkey"
+	 *     DETAIL:  Key (storage_id, group_number)=(10000000001, 2) already exists.
+	 *
+	 * The PROJECTION ROWS THEMSELVES STAY, which is why this is not
+	 * pgcolumnar_delete_storage_tree. That function also deletes the
+	 * pgcolumnar.projection rows, and it is right to for a rewrite: the base
+	 * storage id changes there, so the rows are retired and re-recorded under
+	 * the new id. Here the metapage keeps its storage id, so the projection
+	 * rows still describe this relation correctly. Only their CONTENT is being
+	 * truncated away.
+	 */
+	foreach(lc, projs)
+	{
+		PgColumnarProjection *p = (PgColumnarProjection *) lfirst(lc);
+
+		if (p->projStorageId != storageId)
+			PgColumnarDeleteMetadata(p->projStorageId);
+	}
+	list_free(projs);
 
 	/*
 	 * The same stale-write-state hazard as the rewrite path above, reached the
