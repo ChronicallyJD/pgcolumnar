@@ -645,10 +645,29 @@ pgc_source_build_dirs() {	# pgc_source_build_dirs DIR -> dirs
 		-printf '%h\n' 2>/dev/null | grep -v "^$dir/src$" || true
 }
 
-pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash
+# A value no md5sum digest can be, so it cannot be confused with one.
+_pgc_fp_failed='PGC_FINGERPRINT_DIGEST_FAILED'
+
+pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash, or EMPTY if it could not be computed
 	local dir="${1:-.}"
-	local d
-	{
+	local d out
+	# ONE TREE HASHES ONE WAY, HOWEVER THE PATH IS SPELLED. `${f#"$dir"/}` below
+	# strips a prefix that has to match character for character, so `$dir` with a
+	# trailing slash, or with a `/./` segment, or reached through a symlink, put
+	# the full ABSOLUTE path into the digest instead of the tree-relative one and
+	# the same tree hashed three different ways (@OffgridwithJD). Canonicalised
+	# ONCE here rather than defended at each call site, so a future caller cannot
+	# reintroduce it: the writer and the reader reach the tree by different routes
+	# and a disagreement between them is a FATAL about nothing.
+	#
+	# pgc_norm_path rather than a second `cd && pwd -P` of my own. This file has
+	# spent the day proving that two implementations of one idea drift, and a
+	# private copy here would be the third normaliser in one tree. Its fallback
+	# hands back the raw path for a directory that cannot be entered, which needs
+	# no special case: nothing is found under it, `out` is empty, and the guard
+	# below returns no fingerprint.
+	dir="$(pgc_norm_path "$dir")"
+	out="$({
 		while IFS= read -r d; do
 			[ -n "$d" ] || continue
 			find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \
@@ -674,9 +693,47 @@ pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash
 		# source that cannot produce any binary at all. The path makes the
 		# partition part of the input, and the per-file digest is an
 		# unambiguous boundary between one file's bytes and the next's.
-		printf '%s %s\n' "${_pgc_fp_f#"$dir"/}" \
-			"$(md5sum < "$_pgc_fp_f" 2>/dev/null | cut -d' ' -f1)"
-	done | md5sum | cut -c1-12
+		#
+		# A DIGEST THAT FAILED MUST NOT LOOK LIKE ONE THAT SUCCEEDED. This was
+		# `$(md5sum < "$f" 2>/dev/null | cut -d' ' -f1)` inline, so a failed
+		# md5sum -- a fork that hits EAGAIN, an OOM kill, a loaded runner --
+		# contributed an EMPTY digest and the function returned a confident
+		# WRONG hash with status 0. One stubbed failure among many, on one
+		# unchanged tree, gave three different answers:
+		#
+		#     baseline                   c8e6b23db1c9
+		#     one digest empty (call 2)  22897add806e
+		#     one digest empty (call 3)  58c76fdab962
+		#
+		# On the READ side that costs one suite at random, which is what #902's
+		# PG18 leg showed. On the WRITE side it is worse and deterministic: a
+		# failed digest while the controller stamps bakes a wrong hash, and every
+		# suite in the batch then reports `stale` -- a FATAL naming a stale binary
+		# -- against a tree that is perfectly clean (@OffgridwithJD, measured:
+		# 5 of 5 suites stale on a correct tree).
+		_pgc_fp_h="$(md5sum < "$_pgc_fp_f" 2>/dev/null | cut -d' ' -f1)"
+		[ -n "$_pgc_fp_h" ] || { printf '%s\n' "$_pgc_fp_failed"; break; }
+		printf '%s %s\n' "${_pgc_fp_f#"$dir"/}" "$_pgc_fp_h"
+	done)"
+	# Empty rather than a hash, which pgc_freshness_verdict turns into `unknown`
+	# and the controller prints as "freshness UNVERIFIED" -- already designed, and
+	# already deliberately not a failure. The asymmetry is the whole argument: a
+	# false UNVERIFIED costs a line of output, a false FATAL costs a matrix AND
+	# teaches people to re-run past a freshness check, which is the failure this
+	# controller exists to prevent.
+	case "$out" in *"$_pgc_fp_failed"*) printf ''; return 0 ;; esac
+	# A tree with no hashable file cannot be verified, so it gets no fingerprint
+	# either. This also keeps the line below off an empty `out`, whose trailing
+	# newline would otherwise be the ONLY input to md5sum.
+	[ -n "$out" ] || { printf ''; return 0; }
+	# THE TRAILING NEWLINE IS LOAD-BEARING. The old code piped the loop straight
+	# into md5sum, so the stream md5sum saw ended with one; `$(...)` strips it.
+	# Without `printf '%s\n'` here the same unchanged tree hashes differently
+	# before and after this change, every stamp already on disk reads `stale`, and
+	# a fix for false FATALs becomes a false FATAL for everyone holding a built
+	# worktree (@OffgridwithJD, caught before it shipped). The matrix could not
+	# have caught it: it copies a fresh tree and re-stamps every run.
+	printf '%s\n' "$out" | md5sum | cut -c1-12
 }
 
 # fresh   the binary was built from this source

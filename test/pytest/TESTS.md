@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**78 tests in 6 files.** Sixty-three of them test the harness rather than the
+**84 tests in 6 files.** Sixty-nine of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -428,6 +428,52 @@ one of `fresh`, `predates` or `unknown`, and `unknown` is what an unreadable mti
 an unreadable postmaster start time, or a non-numeric epoch all produce. The
 boundary arm is separate on purpose: mtime resolution is one second, so a run fast
 enough to install and start within the same second must not refuse itself.
+
+### The fingerprint's own integrity, and why it needed six more arms
+
+Six tests, added with the fix that closed three defects in `pgc_source_fingerprint`
+itself. The subject is the instrument every other arm in this section depends on:
+if the fingerprint can be wrong, `never report on source you did not build` reports
+on nothing.
+
+`test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one` drives the
+real shell function with a **stub `md5sum` that is the real one except on its Nth
+call**, where it fails with no output — a fork that hits `EAGAIN`, an OOM kill, a
+loaded runner. The old code substituted that empty digest into the hash and
+returned status 0, so one unchanged tree produced three different confident
+answers. The premise arm requires the stub to agree with the real `md5sum` when
+nothing is configured to fail, or the test would be measuring the stub.
+
+`test_a_failed_digest_gives_unverified_and_never_a_false_stale` is the property
+that matters. `stale` is the FATAL; `unknown` prints `freshness UNVERIFIED` and
+runs the suites. The asymmetry is the whole argument for the change: a false
+UNVERIFIED costs a line of output, a false FATAL costs a matrix **and** teaches
+people to re-run past a freshness check, which is the failure this controller
+exists to prevent.
+
+`test_one_tree_hashes_one_way_however_the_path_is_spelled` pins five spellings —
+trailing slash, `/./`, `/src/..`, a symlink, and a relative `.` — against the plain
+path. Three of them disagreed before the fix, because `${f#"$dir"/}` strips a
+prefix that has to match character for character.
+
+`test_the_fix_does_not_rebaseline_stamps_already_on_disk` is a **compatibility**
+assertion rather than a tidiness one, and it is the arm that would have caught the
+worst version of this change. Detecting a failed digest means capturing the
+per-file lines to inspect them, and `$(...)` strips the trailing newline that the
+old straight pipe into `md5sum` included. Without restoring it, the same unchanged
+tree hashes differently before and after the fix, every stamp already on disk reads
+`stale`, and a fix for false FATALs becomes a false FATAL for everyone holding a
+built worktree. The matrix cannot catch that: it copies a fresh tree and re-stamps
+every run, so it lands on developers and on nobody's CI. The arm transcribes the
+previous implementation and requires the same answer.
+
+`test_the_fingerprint_still_moves_on_a_real_change` is the control without which
+the spelling arms are vacuous — "every spelling agrees" is satisfied perfectly by a
+fingerprint that ignores its input.
+
+`test_a_tree_with_nothing_hashable_reports_no_fingerprint` closes the last one: the
+hash of an empty stream is a stable, comparable value, so two trees with no source
+would have *matched*.
 
 ## 6. test_docs_cover_the_corpus.py: this document, checked
 
