@@ -8,6 +8,12 @@ file covers the tests themselves.
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
+That total counts test FUNCTIONS, which is what `test_docs_cover_the_corpus.py`
+compares against this document. A run reports test ITEMS and prints a larger
+number -- 96 at the time of writing -- because two functions in section 9 are
+parametrized over four query-box sizes each. Pass the ITEM count to
+`--pgc-expect-tests`, not the total above.
+
 That ratio is not an accident of taste. Two of those files exist because a reviewer
 neutered the guards one at a time and found most of them deletable with the suite
 still green, and because the corpus once reported 25 passed against source carrying
