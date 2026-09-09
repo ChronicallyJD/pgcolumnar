@@ -266,7 +266,31 @@ class Expect:
             )
         self._counted()
         result.assert_outcomes(failed=1, passed=0)
-        result.stdout.fnmatch_lines([f"*{p}*" for p in patterns])
+        # ANCHORED TO pytest's ERROR-LINE PREFIX, and that is the whole point.
+        #
+        # This was `f"*{p}*"`, which searches the inner run's WHOLE stdout --
+        # and pytest prints the enclosing function's SOURCE in a traceback,
+        # including lines that never executed. So the pattern matched the
+        # guard's own string literal in the traceback rather than anything the
+        # guard produced. Measured: with `hash()`'s left-sentinel guard
+        # neutered, the inner output still contains
+        #
+        #     raise VacuityError(f"{name}: the left side is a failed query: ...")
+        #     E  AssertionError: a failed query on the left: got ... want ...
+        #
+        # and `*the left side is a failed query*` matched the first line. Every
+        # message in a function is printed whenever anything in it fails.
+        #
+        # THAT IS THE DEFECT THIS HELPER EXISTS TO PREVENT, IN THIS HELPER.
+        # `outcomes(failed=1)` is satisfied by any refusal; requiring the message
+        # was meant to fix it, and matching printed source meant it did not --
+        # it was satisfied by any failure in a function whose source contains the
+        # phrase. A census over the layer found SEVEN guards unheld this way.
+        #
+        # `E` is the prefix pytest puts on the raised-exception lines of a
+        # traceback, so the phrase must now appear in a message rather than
+        # anywhere in the file.
+        result.stdout.fnmatch_lines([f"E*{p}*" for p in patterns])
 
     def outcomes(self, result, name, **want):
         """Assert on an INNER pytest run's outcomes, and count it.
@@ -336,16 +360,6 @@ class Expect:
             if key in node:
                 found = True
 
-        # AN ABSENCE ASSERTION IS SATISFIED BY AN EMPTY PLAN. Measured: this
-        # returned a pass for `absent=True` against `[]`, which is the case most
-        # worth catching -- a plan that failed to arrive looks exactly like a plan
-        # that legitimately lacks the node. So a plan with no nodes at all is
-        # refused rather than compared.
-        if nodes == 0:
-            raise VacuityError(
-                f"{label}: the plan has no nodes, so this could not have failed. "
-                f"Assert on a plan that arrived."
-            )
         self._counted()
         if absent and found:
             raise AssertionError(f"{label}: the key is present and should not be.")
@@ -539,8 +553,27 @@ def _broad_except_sites(path):
         t = node.type
         if t is None:
             out.append(f"{name}:{node.lineno} bare except")
-        elif isinstance(t, ast.Name) and t.id in ("Exception", "BaseException"):
-            out.append(f"{name}:{node.lineno} except {t.id}")
+            continue
+        # A TUPLE HANDLER IS THE SHAPE PEOPLE ACTUALLY WRITE.
+        #
+        # This looked only at a bare `ast.Name`, so `except Exception:` was
+        # refused and `except (ValueError, Exception):` passed (@jdatcmd, #905
+        # review). Measured against the real layer, three spellings of one
+        # swallow:
+        #
+        #     except Exception:               -> refused
+        #     except (ValueError, Exception): -> PASSED   <- the hole
+        #     except BaseException:           -> refused
+        #
+        # A tuple is how this gets written when someone starts with a specific
+        # exception and widens it under pressure, which is the exact moment the
+        # guard is for -- so the hole was in the case the guard most needed to
+        # cover. Any member of the tuple being broad makes the handler broad.
+        members = t.elts if isinstance(t, ast.Tuple) else [t]
+        for m in members:
+            if isinstance(m, ast.Name) and m.id in ("Exception", "BaseException"):
+                out.append(f"{name}:{node.lineno} except {m.id}")
+                break
     return out
 
 

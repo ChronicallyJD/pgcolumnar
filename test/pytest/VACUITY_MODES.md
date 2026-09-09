@@ -25,12 +25,40 @@ attacks**. That number is not evidence that these refusals survive attack, and t
 document is the synthesis the failed stage would have produced, written by hand from
 the stage outputs that did complete.
 
-So: 79 modes, **73 demonstrated by a run**. 74 refusals designed, every one of them
+So: 79 modes produced by the run, of which **72 are named here** (see 1a), and **73 demonstrated by a run**. 74 refusals designed, every one of them
 stating a residual. None of the 74 has been adversarially tested.
+
+## 1a. How to count a mode in this document
+
+**A mode is a backticked kebab-case identifier of three or more words**, such as
+`collected-but-nothing-asserted`. That is the counting rule, stated because the
+document had none and its numbers therefore could not be checked — which is a
+poor property for a document about claims that cannot be checked.
+
+Counted that way, and this is a measurement of the file rather than a
+recollection of the run:
+
+| | modes |
+| --- | ---: |
+| named in section 2, refused today | 21 |
+| named in section 3, not refused | 51 |
+| **named in this document** | **72** |
+| produced by the enumeration run | 79 |
+| **named nowhere here** | **7** |
+
+**The enumeration produced 79; this document names 72 of them.** The other seven
+were counted by the run and never transcribed, so they cannot be cited, checked
+or built against. They are not a secret reserve of coverage — they are a gap in
+this file.
+
+The run's own split was 23 refused and 56 not, against the 21 and 51 named here.
+Those differ by exactly the seven that were never written down. Where the two
+disagree, **the named ids are the record** and the run's totals are history:
+an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-23 of the 79. Each is enforced by a mechanism, not a convention, and each has a red
+21 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -59,7 +87,7 @@ than reasoning about it, and all three had passed silently before:
 
 ## 3. What it does not refuse
 
-56 modes, **50 of them demonstrated by a run**. 52 have a refusal already designed.
+56 modes by the run's count, **51 of them named below**, **50 demonstrated by a run**. 52 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -194,5 +222,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 23 demonstrated modes. It is not known to be
+adversary. The layer is known to refuse 21 demonstrated modes -- the ids named in section 2,
+not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.

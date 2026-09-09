@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-Seventy-seven of them test the harness rather than the
+**96 tests in 6 files.** Eighty-one of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -632,6 +632,10 @@ many times.
 | `test_the_stated_totals_are_the_totals_on_disk` | the bold totals line matches the corpus |
 | `test_a_fully_documented_corpus_reports_nothing_missing` | **control**: no false positive on a complete document |
 | `test_an_undocumented_test_is_named_rather_than_passed_over` | the exact shape that shipped: file named, one test inside it not |
+| `test_the_mode_inventory_states_its_own_totals_correctly` | the totals in VACUITY_MODES.md section 1a are the modes on disk |
+| `test_the_readme_and_the_inventory_agree_on_what_is_refused` | README.md quotes the inventory's number, so the two cannot drift apart again |
+| `test_the_inventory_accounts_for_every_mode_the_run_found` | the admitted gap row is the run's total minus what is written down |
+| `test_the_prose_totals_match_the_counted_modes` | every sentence stating what the layer refuses today carries the counted number, not just the table |
 | `test_an_undocumented_file_is_caught_with_the_tests_inside_it` | how 29 tests went missing at once |
 | `test_a_document_with_no_totals_line_states_none` | absent totals report `None`, which must not read as "they match" |
 | `test_a_stated_total_that_disagrees_with_disk_is_visible` | the count arm's own red |
@@ -790,7 +794,7 @@ an arm where the two differ is void rather than reported.
 ## 10. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 23
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 21
 of them.** The other 56, of which 50 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
