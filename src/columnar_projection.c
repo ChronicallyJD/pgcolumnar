@@ -397,11 +397,65 @@ PgColumnarRerecordProjectionsAfterRewrite(Oid relid)
 		return;
 
 	/*
-	 * ShareLock, matching add_projection: the back-fill below reads every live
-	 * row, so concurrent writers must be held off exactly as they are when a
-	 * projection is first created. The statement that rewrote this relation
-	 * already holds AccessExclusiveLock, so this takes nothing new.
+	 * DECIDE FIRST, UNDER AccessShareLock, AND ONLY THEN TAKE ShareLock.
+	 *
+	 * The repair is reached for every AlterTableStmt on a relation with a declared
+	 * projection, not only for one that rewrote it. Measured: three metadata-only
+	 * statements -- SET (fillfactor), ALTER COLUMN SET STATISTICS,
+	 * SET (autovacuum_enabled) -- opened the relation with ShareLock three times
+	 * with nothing to repair (@jdatcmd, #892 review).
+	 *
+	 * ShareLock conflicts with RowExclusiveLock. The old comment justified it as
+	 * "the statement already holds AccessExclusiveLock, so this takes nothing new",
+	 * which is true of a rewriting statement and false of the metadata-only ones
+	 * that also arrive here. So the cheap question is asked under AccessShareLock,
+	 * which conflicts with nothing a writer takes, and the heavier lock is taken
+	 * only when there is a projection to materialise.
 	 */
+	rel = table_open(relid, AccessShareLock);
+	storageId = PgColumnarStorageId(rel);
+	existing = PgColumnarListProjections(storageId);
+
+	{
+		bool		anyMissing = false;
+
+		foreach(lc, decls)
+		{
+			PgColumnarProjectionDeclaration *d =
+				(PgColumnarProjectionDeclaration *) lfirst(lc);
+			ListCell   *lc2;
+			bool		present = false;
+
+			foreach(lc2, existing)
+			{
+				PgColumnarProjection *p = (PgColumnarProjection *) lfirst(lc2);
+
+				if (p->projectionId > 0 && strcmp(p->name, d->name) == 0)
+				{
+					present = true;
+					break;
+				}
+			}
+			if (!present)
+			{
+				anyMissing = true;
+				break;
+			}
+		}
+
+		if (!anyMissing)
+		{
+			table_close(rel, AccessShareLock);
+			return;
+		}
+	}
+
+	/*
+	 * There is work to do, so now take the lock the back-fill needs: it reads
+	 * every live row, and concurrent writers must be held off exactly as they are
+	 * when a projection is first created.
+	 */
+	table_close(rel, AccessShareLock);
 	rel = table_open(relid, ShareLock);
 	storageId = PgColumnarStorageId(rel);
 	existing = PgColumnarListProjections(storageId);
@@ -446,7 +500,51 @@ PgColumnarRerecordProjectionsAfterRewrite(Oid relid)
 			continue;
 		}
 
-		materialize_projection(rel, d->name, d->columns, d->sortKey);
+		/*
+		 * A repair that cannot finish must not abort the statement that triggered
+		 * it. declaration_resolves above catches the one failure mode we know
+		 * about; materialize_projection can raise for others, and anything it
+		 * raises would otherwise propagate into a statement that succeeds on main
+		 * (@jdatcmd, #892 review).
+		 *
+		 * An internal subtransaction is the only way to catch and continue: after
+		 * an ERROR the transaction is unusable until it is rolled back, so this is
+		 * the same shape plpgsql's EXCEPTION uses.
+		 */
+		{
+			MemoryContext oldcxt = CurrentMemoryContext;
+			ResourceOwner oldowner = CurrentResourceOwner;
+
+			BeginInternalSubTransaction(NULL);
+			PG_TRY();
+			{
+				materialize_projection(rel, d->name, d->columns, d->sortKey);
+				ReleaseCurrentSubTransaction();
+				MemoryContextSwitchTo(oldcxt);
+				CurrentResourceOwner = oldowner;
+			}
+			PG_CATCH();
+			{
+				ErrorData  *edata;
+
+				MemoryContextSwitchTo(oldcxt);
+				edata = CopyErrorData();
+				FlushErrorState();
+				RollbackAndReleaseCurrentSubTransaction();
+				MemoryContextSwitchTo(oldcxt);
+				CurrentResourceOwner = oldowner;
+
+				ereport(WARNING,
+						(errcode(edata->sqlerrcode),
+						 errmsg("could not restore projection \"%s\" on \"%s\" after rewrite",
+								d->name, get_rel_name(relid)),
+						 errdetail("%s", edata->message),
+						 errhint("Call pgcolumnar.rebuild_projections(%s) once the cause is fixed.",
+								 quote_literal_cstr(get_rel_name(relid)))));
+				FreeErrorData(edata);
+			}
+			PG_END_TRY();
+		}
 		/* the new row must be visible to the next iteration's id/name check */
 		CommandCounterIncrement();
 		existing = PgColumnarListProjections(PgColumnarStorageId(rel));

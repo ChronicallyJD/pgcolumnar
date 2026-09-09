@@ -2761,7 +2761,8 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 	 * AccessExclusiveLock on the hierarchy, so NoLock takes nothing new.
 	 */
 	if (parsetree != NULL &&
-		(IsA(parsetree, AlterTableStmt) || IsA(parsetree, TruncateStmt)))
+		(IsA(parsetree, AlterTableStmt) || IsA(parsetree, TruncateStmt) ||
+		 IsA(parsetree, RefreshMatViewStmt)))
 	{
 		List	   *targets = NIL;
 		ListCell   *lc;
