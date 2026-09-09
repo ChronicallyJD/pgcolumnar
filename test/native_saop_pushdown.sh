@@ -7,12 +7,10 @@
 # and the scan read every row group, while every comparable predicate shape
 # (equality, range, anchored LIKE, parameterized scalar) already pruned (#704).
 #
-# The fix derives a conservative [min, max] range over the array's non-NULL
-# elements and emits two range keys. The executor still rechecks exact
-# membership on surviving rows, so pruning can only be conservative: a group
-# inside the range but holding none of the listed values is read and filtered,
-# never skipped wrongly. A NULL element cannot make `= ANY` true, so ignoring
-# NULLs for the range is exact.
+# The fix keeps up to 128 non-NULL elements as one set predicate. A group
+# survives when any element can lie in its zone map and bloom filter; the
+# executor still rechecks exact membership. Larger sets retain the bounded
+# [min,max] hull.
 #
 # The correctness hazards, each with an arm below: a negated SAOP must build no
 # keys (NOT IN admits everything outside the list); an empty or all-NULL array
@@ -40,7 +38,7 @@ q "SET pgcolumnar.stripe_row_limit=2000;
      FROM generate_series(1,40000) g;
    CREATE TABLE thr (lo int[]); INSERT INTO thr VALUES ('{39100}'),('{100,200}');" >/dev/null
 
-psql_c() { env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres -d "$PGC_DB" -At -c "$1" 2>&1; }
+psql_c() { env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres -d "$PGC_DB" -At -v ON_ERROR_STOP=1 -c "$1" 2>&1; }
 
 # Chunk groups removed by a query, from EXPLAIN ANALYZE. Prints the count, or
 # NOSCAN when the plan did not use the columnar scan at all -- so a plan-shape
@@ -87,8 +85,14 @@ check "a contiguous IN-list agrees with its hull (19 removed)" \
 check "contiguous per-element pruning keeps the exact answer" \
 	"$(q 'SELECT count(*) FROM t WHERE ts IN (100, 101, 102);')" "3"
 
-# Bound the O(elements * rows) exact-refinement path. Above 128 non-NULL
-# elements the builder deliberately keeps the old two-key hull.
+# Pin both sides of the O(elements * rows) bound.
+limit_list="$(seq -s, 1 128)"
+limit_plan="$(psql_c "EXPLAIN (ANALYZE, TIMING off, SUMMARY off)
+	SELECT count(*) FROM t WHERE ts IN ($limit_list);")"
+check "exactly 128 elements still use one set filter" \
+	"$(sed -n 's/.*Columnar Pushed-Down Filters: \([0-9]*\).*/\1/p' <<<"$limit_plan" | head -1)" "1"
+
+# Above 128 non-NULL elements the builder deliberately keeps the old two-key hull.
 large_list="$(seq -s, 1 129)"
 large_plan="$(psql_c "EXPLAIN (ANALYZE, TIMING off, SUMMARY off)
 	SELECT count(*) FROM t WHERE ts IN ($large_list);")"
@@ -102,6 +106,18 @@ check "a NULL element is ignored for the range, not a bailout (19 removed)" \
 
 check "NULL-element count is exact" \
 	"$(q 'SELECT count(*) FROM t WHERE ts = ANY (ARRAY[39100, NULL]::int[]);')" "1"
+
+check "a multi-value integer set strips NULL and still prunes 17 groups" \
+	"$(groups_removed 'SELECT count(*) FROM t WHERE ts = ANY (ARRAY[100,20100,38100,NULL]::int[]);')" "17"
+check "the multi-value integer NULL set stays exact" \
+	"$(q 'SELECT count(*) FROM t WHERE ts = ANY (ARRAY[100,20100,38100,NULL]::int[]);')" "3"
+
+check "a by-reference text set strips NULL without crashing (17 removed)" \
+	"$(groups_removed "SELECT count(*) FROM t
+		WHERE txt = ANY (ARRAY['00000100','00020100','00038100',NULL]::text[]);")" "17"
+check "the by-reference text NULL set stays exact" \
+	"$(q "SELECT count(*) FROM t
+		WHERE txt = ANY (ARRAY['00000100','00020100','00038100',NULL]::text[]);")" "3"
 
 check "a cross-type element array (int col, bigint[] list) prunes (19 removed)" \
 	"$(groups_removed "SELECT count(*) FROM t WHERE ts = ANY ('{39100,39200}'::bigint[]);")" "19"
@@ -136,6 +152,13 @@ check "fixture premise: 25 is inside every group's range (range keys prune 0)" \
 
 check "fixture premise: equality on the overlap column bloom-prunes all 20" \
 	"$(groups_removed 'SELECT count(*) FROM t WHERE ov = 25;')" "20"
+
+# Every group's zone map is [10,88], so only the set's bloom loop can exclude
+# these three absent odd values.
+check "a multi-value set bloom-prunes all overlapping groups" \
+	"$(groups_removed "SELECT count(*) FROM t WHERE ov = ANY ('{25,27,29}'::int[]);")" "20"
+check "the bloom-only multi-value set returns the exact empty answer" \
+	"$(q "SELECT count(*) FROM t WHERE ov = ANY ('{25,27,29}'::int[]);")" "0"
 
 # `IN (25)` parses to plain `= 25` (the parser collapses a one-element list),
 # so it exercises the OpExpr path; the `= ANY('{25,25}')` arm below is the
@@ -242,36 +265,13 @@ check "a correlated PARAM_EXEC array is not mis-pruned (results stay correct)" \
 	"$(q 'SELECT sum(c) FROM thr, LATERAL (SELECT count(*) c FROM t WHERE t.ts = ANY (thr.lo)) s;')" \
 	"3"
 
-# --- an array scan key must be refused before one can be built ------------
+# --- array keys have one dedicated arm; all other special flags are refused --
 #
-# This is a source assertion, in the style of native_fetch_cache.sh, and the
-# reason is the same one that suite records: there is no behavioural test to
-# write, because nothing in the extension can currently produce the shape. The
-# builder above collapses every multi-element array into two range keys, so no
-# SK_SEARCHARRAY key ever reaches pgcolumnar_make_predicates.
-#
-# It is guarded anyway, because the defect it prevents is silent. Such a key
-# holds an ARRAY in sk_argument. Unrejected, it becomes a SkipPredicate whose
-# compareValue is the array's Datum, and the column's scalar btree comparison
-# then runs against a pointer to an array header. That is not a wrong answer a
-# suite could catch, it is a comparison of unrelated things.
-#
-# THE ASSERTION IS ABOUT THE EXPRESSION, NOT ABOUT THE FILE, and that distinction
-# is the whole check. An earlier draft grepped each flag name over the whole
-# file, which is a claim about the file: deleting SK_ISNULL from the guard while
-# naming it in a nearby comment left the suite printing
-# "PASS  and it still refuses SK_ISNULL" on a tree that no longer refused it.
-# Measured, not supposed. The convention this very guard introduces -- explain in
-# prose why a flag is rejected -- is what would blind a file-wide grep for the
-# next flag anyone documents.
-#
-# So the reject expression is extracted once and membership is asserted inside
-# it. Extraction is a premise, because an expression that failed to extract is
-# an empty string and every "is this flag in it" test would then compare one
-# blank with another and pass (#823).
+# A SEARCHARRAY key holds an array in sk_argument, so it must reach the dedicated
+# deconstruction arm rather than the scalar compareValue path.
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src"
 
-check "premise: the predicate builder has exactly one sk_flags reject guard" \
+check "premise: plain-key special flags have one reject expression" \
 	"$(grep -c 'key->sk_flags & (SK_ISNULL' "$SRC/columnar_reader.c")" "1"
 
 # From the `if (key->sk_flags & (` line through the closing `))`, comments
@@ -290,6 +290,10 @@ for _f in SK_ISNULL SK_ROW_HEADER SK_ROW_MEMBER SK_ROW_END SK_SEARCHNULL \
 	check "the predicate builder's reject expression contains $_f" \
 		"$(case "$guard" in *"$_f"*) echo yes ;; *) echo "absent from <$guard>" ;; esac)" "yes"
 done
+
+check "SK_SEARCHARRAY reaches the dedicated array predicate arm" \
+	"$(grep -c 'out\[n\]\.searchArray = (key->sk_flags & SK_SEARCHARRAY)' \
+		"$SRC/columnar_reader.c")" "1"
 
 check "backend alive" "$(q 'SELECT 1;')" "1"
 

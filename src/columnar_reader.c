@@ -785,11 +785,14 @@ pgcolumnar_make_predicates(SkipPredicate *out, int nkeys, ScanKey keys,
 			for (j = 0; j < nelems; j++)
 				if (!nulls[j])
 					elems[kept++] = elems[j];
+			/*
+			 * The only producer emits SEARCHARRAY after proving at least two
+			 * distinct non-NULL values; zero/one-value arrays take earlier paths.
+			 */
+			Assert(kept >= 2);
 			out[n].arrayValues = elems;
 			out[n].arrayValueCount = kept;
 			MemoryContextSwitchTo(old);
-			if (kept == 0)
-				continue;
 		}
 
 		/*

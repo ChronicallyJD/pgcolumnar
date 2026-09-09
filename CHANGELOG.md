@@ -58,8 +58,7 @@ true until the next version shipped.
 
   Per-element evaluation is capped at 128 non-NULL entries. Larger lists retain
   the bounded two-key hull because exact vector refinement otherwise costs
-  elements times rows. Set predicates are also never promoted ahead of scalar
-  predicates by the adaptive ordering heuristic.
+  elements times rows.
 - Hilbert clustering: `pgcolumnar.cluster_hilbert` and
   `pgcolumnar.recluster_hilbert` (#889).
 

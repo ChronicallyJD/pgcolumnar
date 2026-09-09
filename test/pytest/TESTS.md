@@ -484,7 +484,7 @@ interchangeable:
 So the `.sh` copy is the enforcement and this one is what a person running the
 corpus by hand gets, with the offenders arriving as a Python list rather than as a
 string assembled by shell. Both are written in the same change, per the rule in
-section 9.
+section 10.
 
 This guard reddened on its own arrival, which is the only reason it is known to
 work here: adding this file moved the corpus from `(54, 5)` to `(62, 6)` and the
@@ -597,8 +597,14 @@ Ports the #752 additions to `test/native_saop_pushdown.sh`. A monotonic 40,000-r
 fixture has twenty row groups. The scattered set `{100,20100,38100}` spans the
 table, so its old `[min,max]` hull removes zero groups while per-element pruning
 removes seventeen. The contiguous `{100,101,102}` set is the negative control:
-its hull and its elements both remove nineteen groups. A 129-element list proves
-the bounded fallback still emits two hull keys and returns every expected row.
+its hull and its elements both remove nineteen groups. Exact 128- and 129-element
+arms pin both sides of the bounded fallback.
+
+A by-reference text set with three values plus NULL pins the NULL compaction
+whose absence dereferences a null Datum. Its integer companion proves NULL
+removal retains pruning. The `ov` fixture gives every group the same `[10,88]`
+zone, so a set of absent odd values can remove groups only through the
+per-element bloom loop.
 
 The shell and pytest forms were both run red before implementation (`0`, wanted
 `17`), green afterward, then red again with the per-element threshold mutated to
