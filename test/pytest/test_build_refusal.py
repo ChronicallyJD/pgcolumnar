@@ -336,10 +336,17 @@ def test_make_cluster_leaves_nothing_behind_when_setup_fails(tmp_path, expect):
     import glob
     before = set(glob.glob("/tmp/pgc-pytest-*"))
 
+    # NARROW, and named rather than caught broadly. The broad-except guard that
+    # arrives with the vacuity inventory refuses `except Exception` here and is
+    # right to: after one failed statement psycopg raises for every later one, so
+    # a broad catch hides the real error and all its successors. A missing
+    # pg_config raises FileNotFoundError out of the subprocess layer; anything
+    # else escapes and fails the test loudly, which is what should happen to an
+    # error this arm did not predict.
     raised = "no"
     try:
         make_cluster("/nonexistent/bin/pg_config", "gw77")
-    except Exception:
+    except (FileNotFoundError, RuntimeError, OSError):
         raised = "yes"
 
     expect.text(raised, "yes", "premise: setup really failed, so the arm is not vacuous")

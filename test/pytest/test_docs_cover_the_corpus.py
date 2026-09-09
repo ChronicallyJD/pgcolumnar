@@ -151,3 +151,108 @@ def test_a_stated_total_that_disagrees_with_disk_is_visible(tmp_path, expect):
                 "while the fixture on disk holds 2 in 1")
     expect.num(int(stated_totals(doc) == (sum(len(v) for v in found.values()), len(found))), 0,
                "a stated total that disagrees with disk does not compare equal")
+
+
+# ---------------------------------------------------------------------------
+# VACUITY_MODES.md counts itself, and the count is checked.
+#
+# @jdatcmd found README.md and VACUITY_MODES.md disagreeing about how many modes
+# the layer refuses, and could not check either because the document offered NO
+# COUNTING RULE. A document whose subject is claims that cannot be checked should
+# not make one. Section 1a now defines a mode as a backticked kebab id of three
+# or more words; this asserts the numbers 1a states are the numbers on disk.
+
+MODE_ID = re.compile(r"`([a-z0-9]+(?:-[a-z0-9]+){2,})`")
+MODES_DOC = HERE / "VACUITY_MODES.md"
+
+
+def _named_modes():
+    """-> (refused, not_refused, all) per section 1a's rule."""
+    text = MODES_DOC.read_text()
+    chunks = {}
+    for chunk in re.split(r"^## ", text, flags=re.M):
+        head = chunk.splitlines()[0] if chunk.strip() else ""
+        chunks[head] = set(MODE_ID.findall(chunk))
+    refused = next((v for k, v in chunks.items() if k.startswith("2.")), set())
+    not_refused = next((v for k, v in chunks.items() if k.startswith("3.")), set())
+    return refused, not_refused, set().union(*chunks.values()) if chunks else set()
+
+
+def test_the_mode_inventory_states_its_own_totals_correctly(expect):
+    """The numbers in section 1a must be the numbers on disk.
+
+    Not a tidiness check: these totals are how a reader decides whether a gap is
+    covered, and they were wrong in two files at once with no way to tell.
+    """
+    refused, not_refused, allm = _named_modes()
+    expect.at_least(len(allm), 20, "premise: the counting rule finds modes at all")
+
+    doc = MODES_DOC.read_text()
+    for label, got in (("refused today", len(refused)),
+                       ("not refused", len(not_refused)),
+                       ("named in this document", len(allm))):
+        row = re.search(rf"\|[^|\n]*{re.escape(label)}[^|\n]*\|\s*\**(\d+)", doc)
+        expect.text(repr(row is not None), "True",
+                    f"section 1a states a total for {label!r}")
+        expect.num(int(row.group(1)), got,
+                   f"the stated total for {label!r} is the number on disk")
+
+
+def test_the_readme_and_the_inventory_agree_on_what_is_refused(expect):
+    """They did not, and neither could be checked against anything.
+
+    README.md said 23 refused while the inventory named 21 — the run's number
+    against the document's, with nothing to distinguish them.
+    """
+    refused, _, _ = _named_modes()
+    readme = (HERE / "README.md").read_text()
+    expect.at_least(readme.count(f"{len(refused)} refused"), 1,
+                    "README.md quotes the number of modes actually named as refused")
+
+
+def test_the_inventory_accounts_for_every_mode_the_run_found(expect):
+    """The 'named nowhere here' row is the gap this document admits to.
+
+    It is arithmetic between numbers the document states, so it can go stale on
+    its own: an editor who transcribes a missing mode updates the named total and
+    leaves the gap row claiming a gap that has closed. The enumeration's own 79 is
+    history -- it is not on disk, and this does not pretend to check it.
+    """
+    doc = MODES_DOC.read_text()
+
+    def row(label):
+        m = re.search(rf"\|[^|\n]*{re.escape(label)}[^|\n]*\|\s*\**(\d+)", doc)
+        expect.text(repr(m is not None), "True", f"section 1a states {label!r}")
+        return int(m.group(1))
+
+    refused, not_refused, _ = _named_modes()
+    expect.num(len(refused) + len(not_refused), row("named in this document"),
+               "the two section totals sum to the document total")
+    expect.num(row("produced by the enumeration run") - row("named in this document"),
+               row("named nowhere here"),
+               "the admitted gap is the run's total minus what is written down")
+
+
+def test_the_prose_totals_match_the_counted_modes(expect):
+    """Section 1a's table was not the only place a total lived.
+
+    Three sentences outside it still asserted the run's 23 after the table said 21 --
+    section 2's opening, the closing paragraph, and TESTS.md. A table that is checked
+    and prose that is not means the drift simply moves into the prose, which is where
+    it was in the first place.
+
+    The run's own 23 appears once on purpose, as history, and is not touched here:
+    what is gated is every sentence that states what the layer refuses TODAY.
+    """
+    refused, _, _ = _named_modes()
+    n = len(refused)
+    for path, pattern in (
+        (MODES_DOC, r"(\d+) of the 79"),
+        (MODES_DOC, r"known to refuse (\d+) demonstrated modes"),
+        (HERE / "TESTS.md", r"This layer refuses (\d+)"),
+    ):
+        m = re.search(pattern, path.read_text())
+        expect.text(repr(m is not None), "True",
+                    f"{path.name} states a refused total matching {pattern!r}")
+        expect.num(int(m.group(1)), n,
+                   f"{path.name}: the prose total is the number of ids named")
