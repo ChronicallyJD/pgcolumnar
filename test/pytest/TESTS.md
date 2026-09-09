@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**90 tests in 6 files.** Seventy-five of them test the harness rather than the
+Seventy-seven of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -33,7 +33,8 @@ behaviour, the source of that number is named.
 - [7. test_connection.py: the cluster and the direct connection](#7-test_connectionpy-the-cluster-and-the-direct-connection)
 - [8. test_native_projection.py: the ported suite](#8-test_native_projectionpy-the-ported-suite)
 - [9. Adding a test](#9-adding-a-test)
-- [10. Traps this corpus records](#10-traps-this-corpus-records)
+- [10. What this corpus does NOT yet refuse](#10-what-this-corpus-does-not-yet-refuse)
+- [11. Traps this corpus records](#11-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -90,7 +91,7 @@ Python, where encoding or collation could make identical rows hash differently.
 
 ## 3. test_layer.py: the guards, testing themselves
 
-These fourteen run pytest inside pytest through the `pytester` fixture. Each
+These eighteen run pytest inside pytest through the `pytester` fixture. Each
 writes a small test file, runs it with the plugin loaded, and asserts on the INNER
 run's outcome. That is what proves a guard REFUSES, rather than assuming it.
 
@@ -113,12 +114,37 @@ one of those eight measurements exited 0.
 | `test_an_unrunnable_test_names_its_reason_and_its_detail` | the `UNRUN` line carries reason and detail | nothing was printed at all |
 | `test_a_real_failure_outranks_an_unrunnable_test` | a run with both exits 1, not 67 | — |
 | `test_a_run_with_nothing_unrunnable_still_exits_zero` | **control**: a green run is untouched | — |
+| `test_layer_rejects_an_absence_assertion_over_an_empty_plan` | an absence claim over `[]` is refused | it passes: nothing is there to find |
+| `test_layer_allows_an_absence_assertion_over_a_real_plan` | **control**: `absent=True` still works on a plan that arrived | — |
+| `test_layer_rejects_psycopgs_no_count_sentinel` | `rowcount` of `-1` is refused | `-1` and `1` are both numbers, so `num` compares them happily |
+| `test_layer_rejects_a_broad_except_in_a_test_file` | a broad `except` is uncollectable | it was forbidden in a COMMENT, which enforces nothing |
 
-Five of the fourteen are controls rather than guards. They are not decoration. A guard
+Six of the eighteen are controls rather than guards. They are not decoration. A guard
 with a bad false-positive rate gets switched off, and then the guard it replaced is
 gone too. `test_a_counted_assertion_passes` and
 `test_layer_matches_the_exact_provider` exist so that a guard which starts
 rejecting good tests reddens here first.
+
+The last four came from checking the layer against the 79-mode inventory in
+`VACUITY_MODES.md` rather than from reasoning about it, and **all three guards they
+added had been passing silently**. Two are worth stating in full because the shape
+recurs.
+
+**`plan_marker(absent=True)` returned a pass against `[]`.** An absence assertion is
+satisfied by nothing being there at all, which is the case most worth catching: a
+plan that failed to arrive looks exactly like a plan that legitimately lacks the
+node. Absence claims need a premise that the thing which could carry the marker
+exists — the same reason `at_least` refuses a floor of zero.
+
+**A broad `except` was forbidden in a comment, which enforces nothing.** After any
+failed statement psycopg raises `InFailedSqlTransaction` for every later one, so a
+single `except Exception` hides the real error and all its successors. Written first
+as a line regex, the guard immediately rejected this layer's own tests, because the
+forbidden shape appears inside a `pytester.makepyfile` string. It now parses with
+`ast`, where a handler inside a string literal is not an `ExceptHandler` node. **A
+line regex over source cannot tell code from a string** — the same mistake as
+matching a plan by substring, and a guard that rejects legitimate tests is a guard
+somebody switches off.
 
 The escape hatches are deliberately more expensive to type than the honest form.
 `allow_empty` takes a reason, not `True`. `--pgc-expect-tests` takes the real
@@ -761,7 +787,19 @@ an arm where the two differ is void rather than reported.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 10. Traps this corpus records
+## 10. What this corpus does NOT yet refuse
+
+`VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 23
+of them.** The other 56, of which 50 were demonstrated, are listed there with the
+refusal design each would need and the order worth building them in.
+
+Read it before adding a test, because the gap most likely to affect a new test is
+that the port has **no ordered oracle**: a claim about `ORDER BY` compared with
+sorted lists cannot fail on order, and `lib.sh` closes that with `pgc_seq_hash` and
+`diff_query_ordered` while the port has nothing.
+
+## 11. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.

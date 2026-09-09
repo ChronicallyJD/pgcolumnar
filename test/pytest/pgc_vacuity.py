@@ -19,7 +19,9 @@ were added for issue #418 after "empty compared with empty" printed PASS, and
 `check_num` refuses two identical md5 hashes for the same reason.
 """
 
+import ast
 import numbers
+import pathlib
 
 import pytest
 
@@ -107,6 +109,24 @@ class Expect:
         self._counted()
         if got != want:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
+
+    # -- row counts ---------------------------------------------------------
+    def rowcount(self, got, want, name):
+        """Compare a row count, refusing psycopg's "no count available" sentinel.
+
+        cursor.rowcount is -1 when the statement produced no count, and measured on
+        a live server it is 1 for an unfetched SELECT -- neither is a number of
+        rows. Both are numbers, so expect.num compares them happily: num(-1, -1)
+        passes. A count that matters should come from count(*) or from len() of the
+        rows actually fetched.
+        """
+        for side, v in (("left", got), ("right", want)):
+            if v == -1:
+                raise VacuityError(
+                    f"{name}: the {side} side is -1, which is psycopg's "
+                    f"\"no row count available\" and not a number of rows."
+                )
+        self.num(got, want, name)
 
     # -- row sets ----------------------------------------------------------
     def rows(self, got, want, name, allow_empty=None):
@@ -315,6 +335,17 @@ class Expect:
             seen.update(k for k in node if k.startswith("Columnar"))
             if key in node:
                 found = True
+
+        # AN ABSENCE ASSERTION IS SATISFIED BY AN EMPTY PLAN. Measured: this
+        # returned a pass for `absent=True` against `[]`, which is the case most
+        # worth catching -- a plan that failed to arrive looks exactly like a plan
+        # that legitimately lacks the node. So a plan with no nodes at all is
+        # refused rather than compared.
+        if nodes == 0:
+            raise VacuityError(
+                f"{label}: the plan has no nodes, so this could not have failed. "
+                f"Assert on a plan that arrived."
+            )
         self._counted()
         if absent and found:
             raise AssertionError(f"{label}: the key is present and should not be.")
@@ -482,6 +513,37 @@ def pytest_collection_finish(session):
         )
 
 
+# A broad except in a test swallows the failure the test exists to find.
+#
+# After ANY failed statement psycopg raises InFailedSqlTransaction for every later
+# one, so a single `except Exception` around a test body hides the real error AND
+# every error after it. The layer used to forbid this in a comment, which enforces
+# nothing: measured, a test using the forbidden shape passed with no complaint.
+#
+# PARSED, NOT GREPPED. The first version matched lines with a regex and immediately
+# fired on this file's own tests, because they contain the forbidden shape inside a
+# `pytester.makepyfile` string. A guard that rejects a legitimate test is a guard
+# somebody switches off, and a line regex over source cannot tell code from a string
+# literal -- the same mistake as matching a plan by substring. ast can: a handler
+# inside a string is not an ExceptHandler node.
+def _broad_except_sites(path):
+    try:
+        tree = ast.parse(pathlib.Path(path).read_text())
+    except (OSError, SyntaxError):
+        return []
+    out = []
+    name = pathlib.Path(path).name
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        t = node.type
+        if t is None:
+            out.append(f"{name}:{node.lineno} bare except")
+        elif isinstance(t, ast.Name) and t.id in ("Exception", "BaseException"):
+            out.append(f"{name}:{node.lineno} except {t.id}")
+    return out
+
+
 def pytest_collection_modifyitems(config, items):
     """Refuse a bare skip, which exits 0 and reads as success.
 
@@ -489,13 +551,36 @@ def pytest_collection_modifyitems(config, items):
     only through expect.cannot_run(), which names a reason from a closed list.
     """
     offenders = []
+    seen_files = set()
     for item in items:
         for marker in ("skip", "skipif"):
             if item.get_closest_marker(marker) is not None:
                 offenders.append(f"{item.name} carries a bare @pytest.mark.{marker}")
+        f = str(getattr(item, "fspath", "") or "")
+        if f and f not in seen_files:
+            seen_files.add(f)
+            for site in _broad_except_sites(f):
+                offenders.append(f"{site} catches Exception broadly")
     if offenders:
+        # One hook, two offences, so the message must say which. An earlier version
+        # reused the skip wording and told a reader with a broad `except` to call
+        # expect.cannot_run, which would not have helped them.
+        skips = [o for o in offenders if "@pytest.mark." in o]
+        excepts = [o for o in offenders if "catches Exception broadly" in o]
+        parts = []
+        if skips:
+            parts.append(
+                "a bare skip is refused, because it exits 0 and reads as success: "
+                + "; ".join(skips)
+                + " -- use expect.cannot_run(REASON, detail) so the run cannot go quiet"
+            )
+        if excepts:
+            parts.append(
+                "a broad except swallows the failure the test exists to find, and "
+                "after one failed statement psycopg raises for every later one: "
+                + "; ".join(excepts)
+                + " -- catch the specific exception class instead"
+            )
         raise pytest.UsageError(
-            "bare skip is refused by the pgColumnar vacuity layer: "
-            + "; ".join(offenders)
-            + ". Use expect.cannot_run(REASON, detail) so the run cannot go quiet."
+            "the pgColumnar vacuity layer refuses this run: " + ". ".join(parts) + "."
         )
