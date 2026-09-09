@@ -587,3 +587,42 @@ oracle, so none changes query results.
   (`hits.tsv.gz`) is downloaded for local measurement and is not redistributed;
   its own licensing is unestablished and it must not be added to the tree without
   one.
+
+- 2026-09-09. Hilbert curve clustering (#889) introduced a source category this
+  document had no precedent for, so the determination is recorded here rather
+  than left in a code comment.
+
+  `src/columnar_curve.c`'s `cluster_hilbert_transpose` is a transcription of
+  `AxestoTranspose` from J. Skilling, "Programming the Hilbert curve", AIP
+  Conference Proceedings 707 (2004), whose published listing carries an explicit
+  public-domain notice. Transcribed with the bit count fixed at 64 and the
+  coordinate type fixed at `uint64`; the structure of the algorithm is
+  unchanged. The provenance was checked against the published listing by
+  OffgridwithJD during the #899 review; I have not obtained the paper myself and
+  am recording their verification rather than a second one.
+
+  Why this is not the rule at the top of this file being bent. "Build only from
+  the specification and the public PostgreSQL API" exists to keep another
+  COLUMNAR ENGINE's source out of this tree, which is a competitive and
+  copyleft-contamination concern. A published, public-domain algorithm from the
+  academic literature is neither. The same reasoning already covers the codecs:
+  pglz, lz4 and zstd are used through their public APIs, and the min/max skip
+  list is long-standing prior art recorded as such above.
+
+  What was NOT done, stated so the boundary stays where it is. No other
+  implementation of a Hilbert curve was read or consulted -- not a library, not
+  another database, not published source beyond the paper's own listing. The
+  correctness evidence is property-based rather than comparative: 184 arms in
+  `test/hilbert_curve.sh` establish that the index set is exactly the contiguous
+  range, that consecutive indices are unit-adjacent, and that every dyadic
+  sub-cube occupies a contiguous run, with a serpentine and a Z-order encoder
+  carried as deliberately wrong controls because neither property alone
+  separates a Hilbert curve from those two.
+
+  One consequence worth recording for a future reader. Hilbert curves are not
+  unique above two dimensions, and this construction differs from the
+  Butz/Hamilton curve for three or more clustering columns; both are valid. So
+  the key bytes are an ON-DISK FORMAT COMMITMENT rather than an implementation
+  detail, disagreement with another library's Hilbert index is not evidence of a
+  defect, and the 96 golden byte vectors in that suite are what pin which curve
+  this is.
