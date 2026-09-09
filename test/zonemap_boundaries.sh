@@ -30,6 +30,8 @@ groups_removed() {
 		head -1
 }
 
+check "< excludes the group whose minimum equals the constant" \
+	"$(groups_removed 'v < 1001')" "1"
 check_text "<= keeps the row at a row-group minimum" \
 	"$(pgc_set_hash "SELECT id FROM zb_c WHERE v <= 1001")" \
 	"$(pgc_set_hash "SELECT id FROM zb_h WHERE v <= 1001")"

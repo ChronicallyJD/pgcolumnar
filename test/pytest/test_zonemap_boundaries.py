@@ -50,6 +50,10 @@ def test_exact_zonemap_boundaries(pgc_conn, expect):
         )
         expect.num(cur.fetchone()[0], 2, "premise: fixture has two row groups")
 
+    expect.num(
+        _removed(_plan(pgc_conn, "v < 1001")), 1,
+        "< excludes the group whose minimum equals the constant",
+    )
     expect.rows(
         _ids(pgc_conn, "zb_c", "v <= 1001"),
         _ids(pgc_conn, "zb_h", "v <= 1001"),

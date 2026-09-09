@@ -597,12 +597,14 @@ Pairs with `test/zonemap_boundaries.sh`. Two monotonic 1,000-row groups put
 `1001` exactly at the second group's minimum and `1000` exactly at the first
 group's maximum. Heap-row comparisons pin that `<= 1001` and `>= 1000` keep
 their boundary rows. Work-done counters, with bloom disabled, pin the
-correctness-preserving mirrors: `> 1000` and `= 1001` each remove one group.
+correctness-preserving cases: `< 1001`, `> 1000`, and `= 1001` each remove one
+group.
 
-The four one-token mutations from #831 make the corresponding assertion fail:
-`<=` and `>=` lose one row, while `>` and `=` remain row-correct but remove no
-group. This distinguishes correctness coverage from pruning-effectiveness
-coverage rather than relying on incidental fixtures elsewhere in the matrix.
+The five one-token strategy mutations make the corresponding assertion fail:
+`<=` and `>=` lose one row, while `<`, `>`, and `=` remain row-correct but
+remove no group. This distinguishes correctness coverage from
+pruning-effectiveness coverage rather than relying on incidental fixtures
+elsewhere in the matrix.
 
 ## 10. Adding a test
 
