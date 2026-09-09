@@ -5,11 +5,16 @@ timing-dependent, which is what makes it a fair first pilot. Every check in the
 original appears here with the same name, so the two can be compared mechanically.
 
 ONE DELIBERATE DIFFERENCE IN MECHANISM. The bash suite compares
-`md5(string_agg(t ORDER BY t))`. This port compares the row sets themselves, as
-sorted Python lists. That asserts the same property by a stronger means: an md5
-mismatch tells you two hashes differ, a row-set mismatch tells you which row. It
-also avoids recomputing the hash in Python, where encoding and collation could
-make the same rows hash differently.
+`md5(string_agg(t ORDER BY t))`, which is order-blind by construction. This port
+compares the result sets themselves through `expect.row_set`, which is order-blind
+by declaration. That asserts the same property by a stronger means: an md5 mismatch
+tells you two hashes differ, a row-set mismatch tells you which row. It also avoids
+recomputing the hash in Python, where encoding and collation could make the same
+rows hash differently.
+
+The fetch helper returns rows in query order and the assertion chooses the
+comparison, because sorting inside the helper is how an ordering claim silently
+becomes a set one.
 """
 
 import pytest
@@ -35,9 +40,17 @@ def fo(pgc_conn):
 
 
 def _rows(conn, sql, params=None):
+    """Rows in the order the query returned them.
+
+    NOT sorted here. Which comparison is wanted is the assertion's business, and
+    sorting in the fetch helper is how an ordered claim silently becomes a set one:
+    the caller says expect.row_set for an order-blind comparison and
+    expect.ordered_rows for an ordering claim, and the collection scan refuses
+    sorted() feeding the latter.
+    """
     with conn.cursor() as cur:
         cur.execute(sql, params)
-        return sorted(r[0] for r in cur.fetchall())
+        return [r[0] for r in cur.fetchall()]
 
 
 def _scalar(conn, sql, params=None):
@@ -59,14 +72,14 @@ def test_fp_fanout_matches_base(fo, expect):
     """bash: 'fp fan-out matches base (a,c)'"""
     got = _rows(fo, "SELECT pgcolumnar.read_projection('fo','fp')")
     want = _rows(fo, "SELECT a::text || '|' || c::text FROM fo")
-    expect.rows(got, want, "fp fan-out matches base (a,c)")
+    expect.row_set(got, want, "fp fan-out matches base (a,c)")
 
 
 def test_fq_fanout_matches_base(fo, expect):
     """bash: 'fq fan-out matches base (b)'"""
     got = _rows(fo, "SELECT pgcolumnar.read_projection('fo','fq')")
     want = _rows(fo, "SELECT b FROM fo")
-    expect.rows(got, want, "fq fan-out matches base (b)")
+    expect.row_set(got, want, "fq fan-out matches base (b)")
 
 
 def test_fp_row_count_matches_base(fo, expect):
@@ -105,7 +118,7 @@ def test_fp_reflects_deletes(fo, expect):
 
     got = _rows(fo, "SELECT pgcolumnar.read_projection('fo','fp')")
     want = _rows(fo, "SELECT a::text || '|' || c::text FROM fo")
-    expect.rows(got, want, "fp reflects deletes (a,c)")
+    expect.row_set(got, want, "fp reflects deletes (a,c)")
 
     pcount = _scalar(fo, "SELECT count(*) FROM pgcolumnar.read_projection('fo','fp')")
     bcount = _scalar(fo, "SELECT count(*) FROM fo")

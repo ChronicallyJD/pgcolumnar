@@ -139,3 +139,192 @@ check "a stated total that disagrees with disk is visible" \
 
 unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix
 unset -f _dcv_missing _dcv_count
+
+# ---- the mode inventory must count itself, and the count must be checkable ----
+#
+# WHY THIS EXISTS. `test/pytest/VACUITY_MODES.md` and `test/pytest/README.md`
+# stated different numbers for how many vacuity modes the layer refuses -- 27 and
+# 23 -- and a reviewer could check NEITHER, because the document offered no rule
+# for what counts as a mode. That is the defect this whole directory exists to
+# refuse, committed by the document that describes the refusal: a number nobody
+# can recompute is an assertion, not a measurement.
+#
+# Section 1a now states the rule: a mode is a backticked kebab-case identifier of
+# three or more words. These arms hold the document to its own rule.
+#
+# WHAT IS POLICED. Four properties:
+#   * section 1a's "refused today" total is the count of ids in section 2
+#   * its "not refused" total is the count in section 3
+#   * its document total is the sum of the two
+#   * README.md quotes the same refused number, so the two cannot drift again
+# The enumeration run's own 79 is history, not a property of the tree: nothing
+# here pretends to check it. What IS checked is that the gap the document admits
+# to equals the run total minus what was actually written down.
+
+_mi_doc="$PGC_TESTDIR/pytest/VACUITY_MODES.md"
+_mi_readme="$PGC_TESTDIR/pytest/README.md"
+
+check "premise: the mode inventory is where this part thinks it is" \
+	"$([ -f "$_mi_doc" ] && echo yes || echo no)" "yes"
+
+# Distinct ids matching section 1a's rule, within one "## <prefix>" section.
+# A function over FILE and PREFIX so the fixture arms below run the same logic.
+_mi_ids() {	# _mi_ids FILE PREFIX -> count
+	local f="$1" pre="$2"
+	awk -v p="^## $pre" '
+		$0 ~ p        { inside = 1; next }
+		/^## /        { inside = 0 }
+		inside        { print }
+	' "$f" 2>/dev/null \
+		| grep -oE '`[a-z0-9]+(-[a-z0-9]+){2,}`' \
+		| sort -u | wc -l | tr -d ' '
+}
+
+# A stated row from the section 1a table. The label is a substring of the cell,
+# not the whole of it, so this matches the cell rather than anchoring to its start.
+#
+# Take the VALUE cell, not the first number on the line. The labels themselves
+# contain digits -- "named in section 2, refused today" -- so the obvious
+# `grep -oE '[0-9]+' | head -1` returns the 2 from "section 2" and never the
+# total. It did, and it read 2 and 3 for totals of 21 and 51. The fixture below
+# could not see it because there the label digit and the value were both 2, so
+# there is now an arm whose whole job is to tell those two readings apart.
+_mi_row() {	# _mi_row FILE LABEL -> the number, or "" if the row is absent
+	local f="$1" label="$2"
+	grep -E "^\|[^|]*${label}[^|]*\|" "$f" 2>/dev/null | head -1 \
+		| awk -F'|' 'NF > 2 { v = $(NF - 1); gsub(/[^0-9]/, "", v); print v }'
+}
+
+# Section 3 keeps a back-reference to every mode that moved into section 2
+# ("`X` is now closed"), so a mode can be named in both. Section 2 wins, and
+# section 3's total is what it names MINUS what section 2 claims. Counting the
+# back-references as unrefused puts one mode in two states: measured at 25 + 50
+# against 72 named, which is three ids counted twice.
+_mi_idlist() {	# _mi_idlist FILE PREFIX -> the ids themselves, one per line, sorted
+	local f="$1" pre="$2"
+	awk -v p="^## $pre" '
+		$0 ~ p        { inside = 1; next }
+		/^## /        { inside = 0 }
+		inside        { print }
+	' "$f" 2>/dev/null \
+		| grep -oE '`[a-z0-9]+(-[a-z0-9]+){2,}`' \
+		| sort -u
+}
+
+_mi_ref="$(_mi_ids "$_mi_doc" '2\.')"
+_mi_not="$(comm -23 <(_mi_idlist "$_mi_doc" '3\.') <(_mi_idlist "$_mi_doc" '2\.') \
+	| grep -c . || true)"
+
+# The same trap as the sweep above: a counter that finds nothing agrees with a
+# document that claims nothing, and both look like success.
+check "premise: the counting rule finds modes at all" \
+	"$([ "$_mi_ref" -ge 15 ] && [ "$_mi_not" -ge 30 ] && echo enough || echo "$_mi_ref/$_mi_not")" \
+	"enough"
+
+check "section 1a's refused total is the count of ids in section 2" \
+	"$(_mi_row "$_mi_doc" 'refused today')" "$_mi_ref"
+
+check "section 1a's not-refused total is the count of ids in section 3" \
+	"$(_mi_row "$_mi_doc" 'not refused')" "$_mi_not"
+
+check "section 1a's document total is the sum of its two sections" \
+	"$(_mi_row "$_mi_doc" 'named in this document')" "$((_mi_ref + _mi_not))"
+
+check "the admitted gap is the run total minus what is written down" \
+	"$(_mi_row "$_mi_doc" 'named nowhere here')" \
+	"$(( $(_mi_row "$_mi_doc" 'produced by the enumeration run') \
+	     - $(_mi_row "$_mi_doc" 'named in this document') ))"
+
+# README.md is the file that drifted. It must quote the inventory's number rather
+# than carry one of its own.
+check "README.md quotes the number of modes the inventory names as refused" \
+	"$(grep -cE "$_mi_ref refused" "$_mi_readme")" "1"
+
+# ---- and these arms must be able to FAIL -------------------------------------
+
+_mi_fix="$PGC_WORKDIR/modecount"; rm -rf "$_mi_fix"; mkdir -p "$_mi_fix"
+{
+	printf '## 2. refused\n'
+	printf 'text `alpha-beta-gamma` and `delta-epsilon-zeta` here\n'
+	printf '## 3. not refused\n'
+	printf '`eta-theta-iota`\n'
+	printf '## 4. table\n'
+	printf '| named in section 2, refused today | 2 |\n'
+	printf '| named in section 3, not refused | 1 |\n'
+	printf '| **named in this document** | **3** |\n'
+} > "$_mi_fix/GOOD.md"
+
+check "the counter counts a fixture's section 2" "$(_mi_ids "$_mi_fix/GOOD.md" '2\.')" "2"
+check "the counter counts a fixture's section 3" "$(_mi_ids "$_mi_fix/GOOD.md" '3\.')" "1"
+
+# Two-word and one-word ids are not modes under section 1a's rule, and a counter
+# that took them would inflate every total in the document.
+printf '## 2. refused\n`one-two` and `single` and `alpha-beta-gamma`\n' > "$_mi_fix/SHORT.md"
+check "an id of fewer than three words is not counted as a mode" \
+	"$(_mi_ids "$_mi_fix/SHORT.md" '2\.')" "1"
+
+# An id named twice is one mode. Section 2 names several ids in more than one row.
+printf '## 2. refused\n`alpha-beta-gamma` again `alpha-beta-gamma`\n' > "$_mi_fix/DUP.md"
+check "an id named twice counts once" "$(_mi_ids "$_mi_fix/DUP.md" '2\.')" "1"
+
+# The section boundary must hold: ids after the next heading belong to it.
+printf '## 2. refused\n`alpha-beta-gamma`\n## 3. not\n`delta-epsilon-zeta`\n' > "$_mi_fix/BOUND.md"
+check "the counter stops at the next heading" "$(_mi_ids "$_mi_fix/BOUND.md" '2\.')" "1"
+
+# A wrong stated total is visible. This is the shape that shipped in two files.
+printf '## 2. refused\n`alpha-beta-gamma`\n## 4. t\n| named in section 2, refused today | 9 |\n' \
+	> "$_mi_fix/WRONG.md"
+check "a stated total that disagrees with the ids is visible" \
+	"$([ "$(_mi_row "$_mi_fix/WRONG.md" 'refused today')" = "$(_mi_ids "$_mi_fix/WRONG.md" '2\.')" ] \
+		&& echo agrees || echo differs)" "differs"
+
+check "and the same comparison agrees on the fixture that is right" \
+	"$([ "$(_mi_row "$_mi_fix/GOOD.md" 'refused today')" = "$(_mi_ids "$_mi_fix/GOOD.md" '2\.')" ] \
+		&& echo agrees || echo differs)" "agrees"
+
+# A missing row must not read as a passing comparison.
+printf '## 2. refused\n`alpha-beta-gamma`\n' > "$_mi_fix/NOROW.md"
+# The label contains a digit and the value is a different digit, so a reader that
+# takes the first number on the line and one that takes the value cell give
+# different answers. This is the arm that would have caught the helper's own bug.
+printf '## 4. t\n| named in section 2, refused today | 7 |\n' > "$_mi_fix/LABELDIGIT.md"
+check "the row's value is read, not a digit inside its label" \
+	"$(_mi_row "$_mi_fix/LABELDIGIT.md" 'refused today')" "7"
+
+check "an absent total is empty rather than a number that happens to match" \
+	"$([ -z "$(_mi_row "$_mi_fix/NOROW.md" 'refused today')" ] && echo absent || echo present)" \
+	"absent"
+
+# The table is not the only place a total lives. Three sentences outside it still
+# asserted the run's 23 after the table said 21: section 2's opening, the closing
+# paragraph, and TESTS.md. Gating the table alone just moves the drift into prose.
+#
+# The run's own 23 appears once on purpose, as history, and is not gated. What is
+# gated is every sentence stating what the layer refuses TODAY.
+_mi_prose() {	# _mi_prose FILE REGEX -> the captured number, or ""
+	local f="$1" re="$2"
+	grep -oE "$re" "$f" 2>/dev/null | head -1 | grep -oE '[0-9]+' | head -1
+}
+
+_mi_tests="$PGC_TESTDIR/pytest/TESTS.md"
+
+check "section 2's opening states the counted number of refused modes" \
+	"$(_mi_prose "$_mi_doc" '[0-9]+ of the 79, counted')" "$_mi_ref"
+
+check "the closing paragraph states the counted number too" \
+	"$(_mi_prose "$_mi_doc" 'known to refuse [0-9]+ demonstrated modes')" "$_mi_ref"
+
+check "TESTS.md states the counted number as well" \
+	"$(_mi_prose "$_mi_tests" 'This layer refuses [0-9]+')" "$_mi_ref"
+
+# And the prose reader must be able to fail, on a fixture rather than on the tree.
+printf 'the layer is known to refuse 99 demonstrated modes here\n' > "$_mi_fix/PROSE.md"
+check "a prose total that disagrees with the ids is visible" \
+	"$(_mi_prose "$_mi_fix/PROSE.md" 'known to refuse [0-9]+ demonstrated modes')" "99"
+
+check "an absent prose total is empty rather than a stray number" \
+	"$([ -z "$(_mi_prose "$_mi_fix/GOOD.md" 'known to refuse [0-9]+ demonstrated modes')" ] \
+		&& echo absent || echo present)" "absent"
+
+unset _mi_doc _mi_readme _mi_ref _mi_not _mi_fix _mi_tests
+unset -f _mi_ids _mi_row _mi_prose

@@ -128,17 +128,67 @@ check "every directory the Makefile builds from is in the fingerprint" \
 	"$([ -z "$_bd_missing" ] && echo none || echo "missing:$_bd_missing")" "none"
 
 # And the consequence, end to end: a change under a recursed directory must move
-# the fingerprint. Asserted against the real tree rather than a fixture, because
-# the defect was that the real tree's objstore/ was not being read.
-_bd_probe="$_bd_root/objstore/.pgc_fingerprint_probe.c"
-_bd_before="$(pgc_source_fingerprint "$_bd_root")"
+# the fingerprint. Against a tree with the REAL tree's SHAPE -- because the defect
+# was that the real tree's objstore/ was not being read, and a hand-built fixture
+# could not have caught it -- but NOT against the real tree itself.
+#
+# THIS AROSE FROM WRITING INTO THE LIVE SOURCE TREE, AND IT COST FOUR PULL
+# REQUESTS. This arm used to write `objstore/.pgc_fingerprint_probe.c` into
+# $PGC_SRCDIR. harness_selftest runs IN the matrix, so at PGC_JOBS=4 it created
+# that file in the shared build directory while up to three sibling suites
+# fingerprinted concurrently, and whichever sampled inside the window reported
+#
+#     FATAL: the binary under test was not built from this source
+#            source now a735c673b129, binary built from 6d122a7158d5
+#
+# on a tree that was correct. The path is tree-RELATIVE and the content fixed, so
+# the deviant value was IDENTICAL across majors, build directories and branches --
+# which is what made it look deterministic enough to be a real staleness, and what
+# sent two agents chasing a transient md5sum failure and then a path-spelling
+# defect. @linuxhikerpm found it by reading, and it reproduces exactly:
+#
+#     clean tree                              6d122a7158d5
+#     with objstore/.pgc_fingerprint_probe.c  a735c673b129   <- what CI reported
+#
+# A hardlinked copy costs no data and keeps the structure exact. Writing a NEW
+# file into it cannot touch the original, because only existing files are shared.
+# Entry by entry, and hardlink-first. `cp -al SRC DST` is NOT safe as a fallback
+# pair: /tmp is a different filesystem from the tree here, so the hardlink copy
+# failed AFTER creating DST, and `cp -a` then copied the tree INSIDE it -- the
+# copy's build dirs came out as `bfix src` instead of `objstore src`. The PREMISE
+# below caught that, which is the entire reason it is written as a premise rather
+# than assumed. `*` also skips `.git`, which no part of this question needs.
+_bd_copy="$(mktemp -d "${TMPDIR:-/tmp}/pgc-bdcopy.XXXXXX")/tree"
+mkdir -p "$_bd_copy"
+for _bd_entry in "$_bd_root"/*; do
+	[ -e "$_bd_entry" ] || continue
+	cp -al "$_bd_entry" "$_bd_copy/" 2>/dev/null || cp -a "$_bd_entry" "$_bd_copy/"
+done
+_bd_probe="$_bd_copy/objstore/.pgc_fingerprint_probe.c"
+
+# THE ARM THAT WOULD HAVE CAUGHT THE ORIGINAL. A suite that runs beside others
+# must not write into the tree they are reading.
+check "the probe is written outside the live source tree" \
+	"$(case "$_bd_probe" in "$_bd_root"/*) echo "INSIDE $_bd_root" ;; *) echo outside ;; esac)" \
+	"outside"
+
+# PREMISE: the copy is equivalent for the question being asked. If the copy did
+# not carry objstore/, "a new file under objstore moves the fingerprint" would be
+# measuring a directory the fingerprint never covered, and would pass for the
+# wrong reason.
+check "PREMISE the copy discovers the same build directories as the real tree" \
+	"$(pgc_source_build_dirs "$_bd_copy" | sed "s|^$_bd_copy/||" | sort | tr '\n' ' ')" \
+	"$(pgc_source_build_dirs "$_bd_root" | sed "s|^$_bd_root/||" | sort | tr '\n' ' ')"
+
+_bd_before="$(pgc_source_fingerprint "$_bd_copy")"
 printf 'int pgc_fingerprint_probe;\n' > "$_bd_probe"
 check "a new source file under objstore moves the fingerprint" \
-	"$([ "$(pgc_source_fingerprint "$_bd_root")" != "$_bd_before" ] && echo moved || echo same)" \
+	"$([ "$(pgc_source_fingerprint "$_bd_copy")" != "$_bd_before" ] && echo moved || echo same)" \
 	"moved"
 rm -f "$_bd_probe"
 check "and removing it restores the fingerprint" \
-	"$(pgc_source_fingerprint "$_bd_root")" "$_bd_before"
+	"$(pgc_source_fingerprint "$_bd_copy")" "$_bd_before"
+rm -rf "${_bd_copy%/tree}"
 
 # ---- the postmaster arm must be able to FIRE, not just to compute -----------
 #
@@ -435,3 +485,284 @@ check "so the verdict is fresh, not unknown" \
 		"$(pgc_source_fingerprint "$_wr")")" "fresh"
 
 unset _wr _wr_rc _wr_written _wr_expected _wr_f
+
+# ---------------------------------------------------------------------------
+# A FINGERPRINT THAT COULD NOT BE COMPUTED MUST NOT LOOK LIKE ONE THAT WAS.
+#
+# `$(md5sum < "$f" 2>/dev/null | cut -d' ' -f1)` substitutes an EMPTY digest
+# when md5sum fails, so one transient failure -- a fork that hits EAGAIN, an
+# OOM kill, a loaded runner -- silently changes the whole hash and the function
+# still returns 0. Modelled with a stub md5sum that fails on its Nth call and is
+# otherwise the real one, three different confident answers over ONE unchanged
+# tree:
+#
+#     baseline                   c8e6b23db1c9
+#     one digest empty (call 2)  22897add806e
+#     one digest empty (call 3)  58c76fdab962
+#     exit status                0
+#
+# On #902's PG18 leg a suite reported FATAL "the binary under test was not built
+# from this source" against a tree that was correct, and the stamp it disagreed
+# with equalled a clean local fingerprint of the same head. Whatever moved, the
+# WRITE was right and one READ was not.
+#
+# The requirement is not that the computation cannot fail. It is that a failure
+# is reported as one: EMPTY, which pgc_freshness_verdict already turns into
+# `unknown` and the controller already prints as "freshness UNVERIFIED" and
+# deliberately does not fail. A false UNVERIFIED costs a line of output. A false
+# FATAL costs a red matrix and teaches people to re-run past the check.
+
+_fp="$(mktemp -d "${TMPDIR:-/tmp}/pgc-fpfail.XXXXXX")"
+mkdir -p "$_fp/tree/src" "$_fp/bin"
+printf 'int a;\n' > "$_fp/tree/src/a.c"
+printf 'int b;\n' > "$_fp/tree/src/b.c"
+printf 'int c;\n' > "$_fp/tree/src/c.c"
+printf 'all:\n\ttrue\n' > "$_fp/tree/Makefile"
+printf 'x\n' > "$_fp/tree/pgcolumnar.control"
+
+# A stub that behaves exactly like md5sum except on its Nth invocation, where it
+# fails the way a fork failure or an OOM kill does: no output, non-zero status.
+cat > "$_fp/bin/md5sum" <<'STUB'
+#!/bin/bash
+_n=$(( $(cat "$PGC_FP_COUNT" 2>/dev/null || echo 0) + 1 ))
+echo "$_n" > "$PGC_FP_COUNT"
+[ "$_n" = "${PGC_FP_FAIL_ON:-0}" ] && exit 1
+exec /usr/bin/md5sum "$@"
+STUB
+chmod +x "$_fp/bin/md5sum"
+
+_fp_base="$(pgc_source_fingerprint "$_fp/tree")"
+check "premise: the tree fingerprints to something on an unstubbed run" \
+	"$([ -n "$_fp_base" ] && echo yes || echo empty)" "yes"
+
+# Premise for the stub itself: with no failure configured it must agree with the
+# real thing, or the arms below would be measuring the stub rather than the fix.
+PGC_FP_COUNT="$_fp/count"; export PGC_FP_COUNT
+PGC_FP_FAIL_ON=0; export PGC_FP_FAIL_ON
+echo 0 > "$PGC_FP_COUNT"
+check "premise: the stub agrees with the real md5sum when nothing fails" \
+	"$(PATH="$_fp/bin:$PATH" pgc_source_fingerprint "$_fp/tree")" "$_fp_base"
+
+# THE ARM. One failed digest, and the answer must be EMPTY rather than a hash.
+for _fp_n in 2 3; do
+	PGC_FP_FAIL_ON="$_fp_n"; export PGC_FP_FAIL_ON
+	echo 0 > "$PGC_FP_COUNT"
+	_fp_got="$(PATH="$_fp/bin:$PATH" pgc_source_fingerprint "$_fp/tree")"
+	check "a failed digest on file $_fp_n yields no fingerprint, not a wrong one" \
+		"$([ -z "$_fp_got" ] && echo empty || echo "$_fp_got")" "empty"
+done
+
+# And the verdict that follows from it, which is the property that matters: the
+# controller must say UNVERIFIED, never `stale`. `stale` is the FATAL.
+PGC_FP_FAIL_ON=2; export PGC_FP_FAIL_ON
+echo 0 > "$PGC_FP_COUNT"
+check "so the verdict is unknown -- UNVERIFIED -- and never stale" \
+	"$(pgc_freshness_verdict "$_fp_base" \
+		"$(PATH="$_fp/bin:$PATH" pgc_source_fingerprint "$_fp/tree")")" "unknown"
+
+unset PGC_FP_FAIL_ON PGC_FP_COUNT
+
+# ---------------------------------------------------------------------------
+# ONE TREE HASHES ONE WAY, HOWEVER THE PATH TO IT IS SPELLED.
+#
+# @OffgridwithJD's finding, reproduced and widened here. `${f#"$dir"/}` strips a
+# prefix that must match CHARACTER FOR CHARACTER, so `$dir` with a trailing
+# slash, or reached through a symlink, puts the FULL ABSOLUTE PATH into the
+# digest instead of the tree-relative one:
+#
+#     plain             92410d0598d6
+#     trailing slash    bf101efc7c10   differs
+#     dot segment /./   774152fff929   differs
+#     via symlink       3f3c0e36905a   differs
+#     dot-dot /src/..   92410d0598d6
+#     relative .        92410d0598d6
+#
+# The `/./` case is the one to keep: it is what a `$(dirname X)/./` composition
+# produces and it reads as harmless. Two spellings of one tree must not be able
+# to disagree, because the writer and the reader reach the tree by different
+# routes and a disagreement there is a FATAL about nothing.
+
+_sp="$(mktemp -d "${TMPDIR:-/tmp}/pgc-spell.XXXXXX")"
+mkdir -p "$_sp/tree/src" "$_sp/tree/objstore"
+printf 'int a;\n' > "$_sp/tree/src/a.c"
+printf 'int b;\n' > "$_sp/tree/objstore/b.c"
+printf 'all:\n\ttrue\n' > "$_sp/tree/objstore/Makefile"
+printf 'all:\n\ttrue\n' > "$_sp/tree/Makefile"
+printf 'x\n' > "$_sp/tree/pgcolumnar.control"
+ln -s "$_sp/tree" "$_sp/link"
+
+_sp_plain="$(pgc_source_fingerprint "$_sp/tree")"
+check "premise: the spelling fixture fingerprints at all" \
+	"$([ -n "$_sp_plain" ] && echo yes || echo empty)" "yes"
+
+check "a trailing slash hashes the same tree the same way" \
+	"$(pgc_source_fingerprint "$_sp/tree/")" "$_sp_plain"
+check "a /./ segment hashes the same tree the same way" \
+	"$(pgc_source_fingerprint "$_sp/tree/./")" "$_sp_plain"
+check "a /src/.. segment hashes the same tree the same way" \
+	"$(pgc_source_fingerprint "$_sp/tree/src/..")" "$_sp_plain"
+check "a symlink to the tree hashes it the same way" \
+	"$(pgc_source_fingerprint "$_sp/link")" "$_sp_plain"
+check "a relative path hashes the same tree the same way" \
+	"$(cd "$_sp/tree" && pgc_source_fingerprint .)" "$_sp_plain"
+
+unset _fp _fp_base _fp_got _fp_n _sp _sp_plain
+
+# ---------------------------------------------------------------------------
+# THE FIX MUST NOT RE-BASELINE EVERY STAMP ALREADY ON DISK.
+#
+# Detecting a failed digest means capturing the per-file lines into a variable to
+# inspect them, and `$(...)` STRIPS THE TRAILING NEWLINE that the old code's
+# straight pipe into md5sum included. The same unchanged tree then hashes
+# differently before and after the change, every stamp on disk reads `stale`, and
+# a fix for false FATALs becomes a false FATAL for everyone holding a built
+# worktree (@OffgridwithJD, caught before it shipped). The matrix cannot catch
+# this: it copies a fresh tree and re-stamps every run, so it lands on developers
+# and on nobody's CI.
+#
+# This arm is a COMPATIBILITY assertion, not a tidiness one. It recomputes the
+# tree the way the previous implementation did and requires the same answer.
+
+_bc="$(mktemp -d "${TMPDIR:-/tmp}/pgc-compat.XXXXXX")"
+mkdir -p "$_bc/src" "$_bc/objstore"
+printf 'int a;\n'        > "$_bc/src/a.c"
+printf 'int b;\n'        > "$_bc/src/b.c"
+printf 'void h(void);\n' > "$_bc/src/h.h"
+printf 'int m;\n'        > "$_bc/objstore/m.c"
+printf 'all:\n\ttrue\n'  > "$_bc/objstore/Makefile"
+printf 'all:\n\ttrue\n'  > "$_bc/Makefile"
+printf 'x\n'             > "$_bc/pgcolumnar.control"
+printf 'SELECT 1;\n'     > "$_bc/pgcolumnar--9.9.sql"
+
+# The PREVIOUS implementation, transcribed: the same input set and the same
+# per-file `path digest` lines, piped straight into md5sum as it was.
+_pgc_fp_previous() {
+	local dir="${1:-.}" d
+	{
+		while IFS= read -r d; do
+			[ -n "$d" ] || continue
+			find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \
+				-o -name 'Makefile' \) -print0 2>/dev/null
+		done < <(pgc_source_build_dirs "$dir")
+		find "$dir" -maxdepth 1 -type f \( -name 'Makefile' -o -name '*.control' \
+			-o -name '*.sql' \) -print0 2>/dev/null
+	} | sort -z | while IFS= read -r -d '' _f; do
+		printf '%s %s\n' "${_f#"$dir"/}" \
+			"$(md5sum < "$_f" 2>/dev/null | cut -d' ' -f1)"
+	done | md5sum | cut -c1-12
+}
+
+check "the fixed fingerprint equals what the previous implementation produced" \
+	"$(pgc_source_fingerprint "$_bc")" "$(_pgc_fp_previous "$_bc")"
+
+# THE CONTROL WITHOUT WHICH THE SPELLING ARMS ARE VACUOUS. "Every spelling
+# agrees" is satisfied perfectly by a fingerprint that ignores its input, so the
+# set needs one arm proving the hash still MOVES on a real change.
+_bc_before="$(pgc_source_fingerprint "$_bc")"
+printf 'int a = 2;\n' > "$_bc/src/a.c"
+check "control: a real content change still moves the fingerprint" \
+	"$([ "$(pgc_source_fingerprint "$_bc")" != "$_bc_before" ] && echo moved || echo SAME)" \
+	"moved"
+printf 'int a;\n' > "$_bc/src/a.c"
+check "control: and restoring the content restores the fingerprint" \
+	"$(pgc_source_fingerprint "$_bc")" "$_bc_before"
+
+# A tree with nothing hashable cannot be verified, so it reports no fingerprint
+# rather than the hash of an empty stream -- which is a stable, comparable value
+# and would have made two empty trees "match".
+# THE PREMISE IS LOAD-BEARING. This arm asserts an EMPTY result, and empty is
+# also what a harness that cannot run produces -- so without a premise that the
+# SAME function returns something for a real tree, it passes green over a broken
+# one. Same shape as the expect.refusal defect @OffgridwithJD found on main: a
+# failure that produces exactly the value the test expects.
+_bc_empty="$(mktemp -d "${TMPDIR:-/tmp}/pgc-empty.XXXXXX")"
+check "premise: the same function returns a fingerprint for a real tree" \
+	"$([ -n "$(pgc_source_fingerprint "$_bc")" ] && echo yes || echo empty)" "yes"
+check "a tree with no hashable file yields no fingerprint" \
+	"$([ -z "$(pgc_source_fingerprint "$_bc_empty")" ] && echo empty || echo hashed)" "empty"
+
+unset _bc _bc_before _bc_empty
+
+# ---------------------------------------------------------------------------
+# WHEN IT REFUSES, IT MUST SAY WHAT IT HASHED.
+#
+# Two CI failures reported the same pair of hashes and nothing else:
+#
+#     source now a735c673b129, binary built from 6d122a7158d5
+#
+# Identical across #902/PG18/iceberg_rest and #909/PG17/iceberg_rest_server --
+# two branches, two majors, two build directories, and one of the two runs
+# carried the fingerprint fix. That rules out a transient digest failure (which
+# gives a different wrong hash every time) and a path-dependent one (two build
+# directories would give two values). It is a deterministic, content-derived
+# state, and neither agent has reproduced it locally.
+#
+# Twelve characters cannot say which file moved. A manifest can, and the
+# difference between "the hash changed" and "objstore/x.c appeared" is the
+# difference between another sample and an answer. So the manifest is a function
+# in its own right, the fingerprint is its hash, and the FATAL path prints it.
+
+_mf="$(mktemp -d "${TMPDIR:-/tmp}/pgc-manifest.XXXXXX")"
+mkdir -p "$_mf/src" "$_mf/objstore"
+printf 'int a;\n'       > "$_mf/src/a.c"
+printf 'void h(void);\n'> "$_mf/src/h.h"
+printf 'int m;\n'       > "$_mf/objstore/m.c"
+printf 'all:\n\ttrue\n' > "$_mf/objstore/Makefile"
+printf 'all:\n\ttrue\n' > "$_mf/Makefile"
+printf 'x\n'            > "$_mf/pgcolumnar.control"
+
+_mf_lines="$(pgc_source_manifest "$_mf" | wc -l)"
+check "the manifest names every file the fingerprint hashes" "$_mf_lines" "6"
+
+check "each manifest line is a tree-relative path and a digest" \
+	"$(pgc_source_manifest "$_mf" | grep -cE '^[A-Za-z0-9_./-]+ [0-9a-f]{32}$')" "6"
+
+check "the manifest is tree-relative, never absolute" \
+	"$(pgc_source_manifest "$_mf" | grep -c '^/')" "0"
+
+# The fingerprint IS the manifest's hash, so the two cannot drift apart.
+check "the fingerprint is the hash of the manifest" \
+	"$(pgc_source_fingerprint "$_mf")" \
+	"$(pgc_source_manifest "$_mf" | md5sum | cut -c1-12)"
+
+# THE ARM THAT MATTERS: an ADDED file is named, not merely counted. This is the
+# class the two CI failures fall into and the one a bare hash cannot report.
+printf 'int zz;\n' > "$_mf/src/zz_appeared.c"
+check "an added file appears in the manifest by name" \
+	"$(pgc_source_manifest "$_mf" | grep -c '^src/zz_appeared.c ')" "1"
+check "and comparing two manifests names it rather than saying 'changed'" \
+	"$(diff <(pgc_source_manifest "$_mf" | grep -v zz_appeared) \
+		<(pgc_source_manifest "$_mf") | grep -oE 'src/zz_appeared\.c')" \
+	"src/zz_appeared.c"
+rm -f "$_mf/src/zz_appeared.c"
+
+# A manifest for a tree that cannot be hashed is empty, matching the fingerprint's
+# own refusal rather than inventing a second convention.
+_mf_hollow="$(mktemp -d "${TMPDIR:-/tmp}/pgc-hollow.XXXXXX")"
+check "an unhashable tree has an empty manifest" \
+	"$(pgc_source_manifest "$_mf_hollow" | wc -l)" "0"
+
+unset _mf _mf_lines _mf_hollow
+
+# The FATAL path's dump, driven rather than grepped for. A report nobody can run
+# is a report nobody knows is empty, and "the source says it calls it" is the kind
+# of claim this suite exists to refuse.
+_fr="$(mktemp -d "${TMPDIR:-/tmp}/pgc-report.XXXXXX")"
+mkdir -p "$_fr/src"
+printf 'int a;\n' > "$_fr/src/a.c"
+printf 'all:\n\ttrue\n' > "$_fr/Makefile"
+printf 'x\n' > "$_fr/pgcolumnar.control"
+
+check "the report names each hashed file" \
+	"$(pgc_freshness_report "$_fr" | grep -c '^       | src/a.c ')" "1"
+check "the report states how many files it hashed" \
+	"$(pgc_freshness_report "$_fr" | grep -cE '^       \(3 files, under ')" "1"
+check "an added file shows up in the report" \
+	"$(printf 'int z;\n' > "$_fr/src/z.c"; pgc_freshness_report "$_fr" | grep -c '^       | src/z.c ')" "1"
+rm -f "$_fr/src/z.c"
+# The empty case says so rather than printing nothing, because a silent empty
+# dump reads as "the manifest was fine" -- the failure this report exists to end.
+_fr_hollow="$(mktemp -d "${TMPDIR:-/tmp}/pgc-rhollow.XXXXXX")"
+check "an empty manifest is reported as empty, not as silence" \
+	"$(pgc_freshness_report "$_fr_hollow" | grep -c 'empty -- nothing under')" "1"
+unset _fr _fr_hollow

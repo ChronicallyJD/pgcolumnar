@@ -19,7 +19,9 @@ were added for issue #418 after "empty compared with empty" printed PASS, and
 `check_num` refuses two identical md5 hashes for the same reason.
 """
 
+import ast
 import numbers
+import pathlib
 
 import pytest
 
@@ -107,6 +109,98 @@ class Expect:
         self._counted()
         if got != want:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
+
+    def row_set(self, got, want, name, allow_empty=None):
+        """Compare two result sets as SETS, order deliberately ignored.
+
+        The counterpart to ordered_rows, and the port of pgc_set_hash. It exists so
+        that ignoring order is DECLARED rather than smuggled in by sorting at the
+        call site: `ordered_rows(sorted(x), ...)` reads like an ordering claim and is
+        not one, which is why the collection scan refuses it.
+
+        pgc_check_ordered_oracle asserts three things, and this is the third: the set
+        oracle must be order-blind BY DESIGN. Without a control proving the two
+        instruments differ, an ordered oracle could quietly be implemented as a set
+        one and every ordering test in the tree would go silent.
+        """
+        self.rows(sorted(map(repr, got)), sorted(map(repr, want)), name,
+                  allow_empty=allow_empty)
+
+    # -- ordered sequences ---------------------------------------------------
+    def ordered_rows(self, got, want, name):
+        """Compare two sequences IN ORDER, refusing the cases where order says nothing.
+
+        This is the port of `pgc_seq_hash` and `diff_query_ordered`, which the harness
+        has had since #418 and this layer did not. It compares the sequences rather
+        than hashing them, for the same reason `rows` does: a mismatch names the
+        position, where a hash mismatch only says two hashes differ.
+
+        THE REFUSAL THAT MATTERS IS THE SECOND ONE. A sequence whose elements are all
+        equal reads the same forwards and backwards, so an ordering claim about it
+        cannot fail. That is `pgc_check_ordered_oracle`'s premise inverted: the bash
+        version proves its oracle order-sensitive by requiring forward != reverse on a
+        known fixture, and the same requirement applied to a caller's data is what
+        stops an ordered assertion being decorative.
+        """
+        g, w = list(got), list(want)
+        if not g and not w:
+            raise VacuityError(
+                f"{name}: both sequences are empty, so this comparison could not "
+                f"have failed. Use rows(..., allow_empty='why') if empty is the point."
+            )
+        if len(set(map(repr, g))) < 2 and len(set(map(repr, w))) < 2:
+            raise VacuityError(
+                f"{name}: order cannot be observed in these sequences. Every element "
+                f"is the same, so the reverse ordering is identical and the claim "
+                f"asserts nothing beyond what rows() already asserts."
+            )
+        self._counted()
+        if g != w:
+            for i, (a, b) in enumerate(zip(g, w)):
+                if a != b:
+                    raise AssertionError(
+                        f"{name}: first difference at position {i}: got {a!r} want {b!r}"
+                    )
+            raise AssertionError(
+                f"{name}: same prefix, different length: got {len(g)} rows want {len(w)}"
+            )
+
+    def ordering_observable(self, forward, reverse, name):
+        """Assert this fixture can distinguish order at all, before relying on it.
+
+        `pgc_check_ordered_oracle` ported. Read the same rows both ways and require
+        the two to differ: a fixture that reads identically forwards and backwards
+        supports no ordering claim, and every ordered assertion over it is vacuous
+        however carefully it is written.
+        """
+        f, r = list(forward), list(reverse)
+        if not f and not r:
+            raise VacuityError(f"{name}: both directions are empty.")
+        self._counted()
+        if f == r:
+            raise AssertionError(
+                f"{name}: the forward and reverse readings are identical, so nothing "
+                f"in this fixture can detect an ordering error. Give it rows whose "
+                f"order is observable before asserting order."
+            )
+
+    # -- row counts ---------------------------------------------------------
+    def rowcount(self, got, want, name):
+        """Compare a row count, refusing psycopg's "no count available" sentinel.
+
+        cursor.rowcount is -1 when the statement produced no count, and measured on
+        a live server it is 1 for an unfetched SELECT -- neither is a number of
+        rows. Both are numbers, so expect.num compares them happily: num(-1, -1)
+        passes. A count that matters should come from count(*) or from len() of the
+        rows actually fetched.
+        """
+        for side, v in (("left", got), ("right", want)):
+            if v == -1:
+                raise VacuityError(
+                    f"{name}: the {side} side is -1, which is psycopg's "
+                    f"\"no row count available\" and not a number of rows."
+                )
+        self.num(got, want, name)
 
     # -- row sets ----------------------------------------------------------
     def rows(self, got, want, name, allow_empty=None):
@@ -246,7 +340,31 @@ class Expect:
             )
         self._counted()
         result.assert_outcomes(failed=1, passed=0)
-        result.stdout.fnmatch_lines([f"*{p}*" for p in patterns])
+        # ANCHORED TO pytest's ERROR-LINE PREFIX, and that is the whole point.
+        #
+        # This was `f"*{p}*"`, which searches the inner run's WHOLE stdout --
+        # and pytest prints the enclosing function's SOURCE in a traceback,
+        # including lines that never executed. So the pattern matched the
+        # guard's own string literal in the traceback rather than anything the
+        # guard produced. Measured: with `hash()`'s left-sentinel guard
+        # neutered, the inner output still contains
+        #
+        #     raise VacuityError(f"{name}: the left side is a failed query: ...")
+        #     E  AssertionError: a failed query on the left: got ... want ...
+        #
+        # and `*the left side is a failed query*` matched the first line. Every
+        # message in a function is printed whenever anything in it fails.
+        #
+        # THAT IS THE DEFECT THIS HELPER EXISTS TO PREVENT, IN THIS HELPER.
+        # `outcomes(failed=1)` is satisfied by any refusal; requiring the message
+        # was meant to fix it, and matching printed source meant it did not --
+        # it was satisfied by any failure in a function whose source contains the
+        # phrase. A census over the layer found SEVEN guards unheld this way.
+        #
+        # `E` is the prefix pytest puts on the raised-exception lines of a
+        # traceback, so the phrase must now appear in a message rather than
+        # anywhere in the file.
+        result.stdout.fnmatch_lines([f"E*{p}*" for p in patterns])
 
     def outcomes(self, result, name, **want):
         """Assert on an INNER pytest run's outcomes, and count it.
@@ -315,6 +433,7 @@ class Expect:
             seen.update(k for k in node if k.startswith("Columnar"))
             if key in node:
                 found = True
+
         self._counted()
         if absent and found:
             raise AssertionError(f"{label}: the key is present and should not be.")
@@ -398,10 +517,6 @@ class _UnrunnableCollector:
                 self.items.append((report.nodeid, reason, detail))
 
 
-def pytest_configure(config):
-    collector = _UnrunnableCollector()
-    config.pluginmanager.register(collector, "pgc_unrunnable_collector")
-    config.pgc_unrunnable = collector
 
 
 @pytest.hookimpl(wrapper=True)
@@ -446,8 +561,112 @@ def pytest_sessionfinish(session, exitstatus):
     collector = getattr(session.config, "pgc_unrunnable", None)
     if collector is None or not collector.items:
         return
-    if exitstatus == 0:
+    # Both, not just the argument: _RunShape may already have escalated this run
+    # to 1 for a lost test, and `exitstatus` is the value from before that.
+    if exitstatus == 0 and session.exitstatus == 0:
         session.exitstatus = EXIT_INCOMPLETE
+
+
+# THE RUN'S OWN SHAPE, HELD PER SESSION.
+#
+# Three modes remove many tests at once while the run reads green, so they are worth
+# more than any per-assertion guard. Counting collected tests cannot see them: a
+# crashed xdist worker loses its remaining tests and the collected count is still
+# right. Measured under --max-worker-restart=0: 8 collected, summary "1 failed,
+# 6 passed", one named test never reported, and pytest printed no warning.
+#
+# AN INSTANCE PER CONFIG, NOT MODULE GLOBALS. pytester.runpytest() runs the inner
+# session IN-PROCESS, so module-level sets are shared between the layer's own tests
+# and the sessions they drive. Measured before this was fixed: 44 tests passed and
+# the run exited 1, because the outer session had inherited every inner run's
+# collected ids and setup skips. State that belongs to a session has to live on the
+# session.
+class _RunShape:
+    def __init__(self):
+        self.collected = set()
+        self.reported = set()
+        self.setup_skips = []
+
+    def pytest_collection_modifyitems(self, items):
+        # Fires in the controller when running serially, and in each worker under
+        # xdist. Harmless in a worker: the worker's own sessionfinish returns early.
+        self.collected.update(i.nodeid for i in items)
+
+    def pytest_deselected(self, items):
+        """Deselection is not loss, and the difference is the whole guard.
+
+        `pytest_collection_modifyitems` above fires before pytest's own -k and -m
+        filtering has removed anything, so without this hook every deselected test
+        looks like a test that vanished without reporting. Measured before the fix:
+        `pytest -q test_layer.py -k refus` gave "1 passed, 15 deselected" and then
+        exit 1 with "15 collected test(s) never reported an outcome". That is a
+        false red on a healthy run, produced by the guard whose subject is false
+        greens -- and the first thing anyone does about it is stop using -k.
+
+        Asking for a subset is a deliberate act by whoever typed the command. A
+        test lost to a crashed worker is not. This hook is where pytest tells the
+        difference, so it is where the guard has to learn it.
+        """
+        self.collected.difference_update(i.nodeid for i in items)
+
+    def pytest_xdist_node_collection_finished(self, node, ids):
+        """Under xdist the WORKERS collect, not the controller.
+
+        Measured: with -n 2 the controller's collected set stayed empty, so the
+        reconciliation had nothing to compare and a crashed worker's lost tests went
+        unreported -- the guard was there and blind. xdist hands the controller each
+        node's collected ids through this hook, which is the only place the
+        controller learns what was found.
+        """
+        self.collected.update(ids)
+
+    def pytest_runtest_logreport(self, report):
+        """Record that a test produced an outcome, and catch a skip during SETUP.
+
+        A skip in setup is how one fixture removes every test that depends on it: a
+        session fixture calling pytest.skip() turns "the cluster would not start"
+        into exit 0. expect.cannot_run does not skip, it records a counted
+        assertion, so any skip arriving here came from somewhere else.
+        """
+        if report.when == "call" or (report.when == "setup"
+                                     and report.outcome != "passed"):
+            self.reported.add(report.nodeid)
+        if report.when == "setup" and report.skipped:
+            self.setup_skips.append(report.nodeid)
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        # Only the process holding the whole picture can reconcile: an xdist worker
+        # sees a slice, and the controller receives every worker's reports.
+        if hasattr(session.config, "workerinput"):
+            return
+        problems = []
+        missing = sorted(self.collected - self.reported)
+        if missing:
+            problems.append(
+                f"{len(missing)} collected test(s) never reported an outcome, so the "
+                f"run lost them silently: " + ", ".join(missing[:5])
+                + (" ..." if len(missing) > 5 else "")
+            )
+        if self.setup_skips:
+            problems.append(
+                f"{len(self.setup_skips)} test(s) were skipped during setup, which is "
+                f"how one fixture removes every test that depends on it: "
+                + ", ".join(sorted(self.setup_skips)[:5])
+                + (" ..." if len(self.setup_skips) > 5 else "")
+                + " -- use expect.cannot_run(REASON, detail) in the test instead"
+            )
+        if problems:
+            print("\nVACUITY: " + " AND ".join(problems))
+            session.exitstatus = 1
+
+
+def pytest_configure(config):
+    # Two independent per-session mechanisms, both registered here because a
+    # plugin module may define pytest_configure only once.
+    collector = _UnrunnableCollector()
+    config.pluginmanager.register(collector, "pgc_unrunnable_collector")
+    config.pgc_unrunnable = collector
+    config.pluginmanager.register(_RunShape(), f"pgc_runshape_{id(config)}")
 
 
 def pytest_addoption(parser):
@@ -482,6 +701,146 @@ def pytest_collection_finish(session):
         )
 
 
+# A broad except in a test swallows the failure the test exists to find.
+#
+# After ANY failed statement psycopg raises InFailedSqlTransaction for every later
+# one, so a single `except Exception` around a test body hides the real error AND
+# every error after it. The layer used to forbid this in a comment, which enforces
+# nothing: measured, a test using the forbidden shape passed with no complaint.
+#
+# PARSED, NOT GREPPED. The first version matched lines with a regex and immediately
+# fired on this file's own tests, because they contain the forbidden shape inside a
+# `pytester.makepyfile` string. A guard that rejects a legitimate test is a guard
+# somebody switches off, and a line regex over source cannot tell code from a string
+# literal -- the same mistake as matching a plan by substring. ast can: a handler
+# inside a string is not an ExceptHandler node.
+# An ordered claim whose inputs were SORTED cannot fail on order.
+#
+# ordered_rows is order-sensitive, so the vacuity is introduced at the call site:
+# `expect.ordered_rows(sorted(got), sorted(want))` compares two sequences that were
+# just put in the same order. This is the collapse VACUITY_MODES.md records as
+# set-oracle-on-an-ordered-claim, and lib.sh has no equivalent because bash has no
+# sorted() to reach for.
+#
+# Parsed, not grepped, for the same reason as the except scan below.
+_ORDER_KILLERS = ("sorted", "set", "frozenset")
+
+
+def _order_killed_names(fn):
+    """Names bound to an order-killing value earlier in one function body.
+
+    -> {name: (lineno, how)}
+
+    The inline spelling is only the shortest way to write the collapse. These two
+    are the same defect and read as more careful code, which is worse:
+
+        g = sorted(got)                 # bound to an order-killing call
+        expect.ordered_rows(g, want)
+
+        got.sort()                      # killed in place
+        expect.ordered_rows(got, want)
+
+    WHAT THIS DOES NOT SEE, stated because a guard's blind spots are part of its
+    meaning: it is one function deep, so a helper that sorts and returns is invisible;
+    it does not follow aliases (`h = g`), attributes (`self.rows.sort()`), branches,
+    or a name re-bound to something honest after being killed. It is a floor, not a
+    proof of order-sensitivity. The suite's own removal proofs are what establish
+    that an ordered claim can actually fail on order.
+    """
+    killed = {}
+    for node in ast.walk(fn):
+        # X = sorted(...) / set(...) / frozenset(...)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            if isinstance(f, ast.Name) and f.id in _ORDER_KILLERS:
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        killed.setdefault(t.id, (node.lineno, f"{f.id}()"))
+        # X.sort() -- in place, and the name keeps its spelling at the call site
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            if (isinstance(f, ast.Attribute) and f.attr == "sort"
+                    and isinstance(f.value, ast.Name)):
+                killed.setdefault(f.value.id, (node.lineno, ".sort()"))
+    return killed
+
+
+def _sorted_ordered_sites(path):
+    try:
+        tree = ast.parse(pathlib.Path(path).read_text())
+    except (OSError, SyntaxError):
+        return []
+    out = []
+    name = pathlib.Path(path).name
+    # Per function, because a killed name means nothing outside the body that
+    # killed it, and a module-level walk would carry one test's `g` into the next.
+    fns = [n for n in ast.walk(tree)
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for fn in fns:
+        killed = _order_killed_names(fn)
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if not (isinstance(f, ast.Attribute) and f.attr in ("ordered_rows",
+                                                                "ordering_observable")):
+                continue
+            for arg in node.args:
+                if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
+                        and arg.func.id in _ORDER_KILLERS):
+                    out.append(
+                        f"{name}:{node.lineno} {arg.func.id}() feeds an ordered claim"
+                    )
+                elif isinstance(arg, ast.Name) and arg.id in killed:
+                    where, how = killed[arg.id]
+                    # Only a kill that already happened. A name sorted AFTER the
+                    # claim was made did not affect it, and flagging that would be
+                    # a false red -- the thing this whole layer exists to refuse.
+                    if where < node.lineno:
+                        out.append(
+                            f"{name}:{node.lineno} {arg.id} was order-killed by "
+                            f"{how} at line {where} and feeds an ordered claim"
+                        )
+    return out
+
+
+def _broad_except_sites(path):
+    try:
+        tree = ast.parse(pathlib.Path(path).read_text())
+    except (OSError, SyntaxError):
+        return []
+    out = []
+    name = pathlib.Path(path).name
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        t = node.type
+        if t is None:
+            out.append(f"{name}:{node.lineno} bare except")
+            continue
+        # A TUPLE HANDLER IS THE SHAPE PEOPLE ACTUALLY WRITE.
+        #
+        # This looked only at a bare `ast.Name`, so `except Exception:` was
+        # refused and `except (ValueError, Exception):` passed (@jdatcmd, #905
+        # review). Measured against the real layer, three spellings of one
+        # swallow:
+        #
+        #     except Exception:               -> refused
+        #     except (ValueError, Exception): -> PASSED   <- the hole
+        #     except BaseException:           -> refused
+        #
+        # A tuple is how this gets written when someone starts with a specific
+        # exception and widens it under pressure, which is the exact moment the
+        # guard is for -- so the hole was in the case the guard most needed to
+        # cover. Any member of the tuple being broad makes the handler broad.
+        members = t.elts if isinstance(t, ast.Tuple) else [t]
+        for m in members:
+            if isinstance(m, ast.Name) and m.id in ("Exception", "BaseException"):
+                out.append(f"{name}:{node.lineno} except {m.id}")
+                break
+    return out
+
+
 def pytest_collection_modifyitems(config, items):
     """Refuse a bare skip, which exits 0 and reads as success.
 
@@ -489,13 +848,71 @@ def pytest_collection_modifyitems(config, items):
     only through expect.cannot_run(), which names a reason from a closed list.
     """
     offenders = []
+    seen_files = set()
     for item in items:
         for marker in ("skip", "skipif"):
-            if item.get_closest_marker(marker) is not None:
-                offenders.append(f"{item.name} carries a bare @pytest.mark.{marker}")
-    if offenders:
+            mk = item.get_closest_marker(marker)
+            if mk is None:
+                continue
+            why = str(mk.kwargs.get("reason", "")) or (str(mk.args[0]) if mk.args else "")
+            if "empty parameter set" in why:
+                continue    # reported below, with a message about the real cause
+            offenders.append(f"{item.name} carries a bare @pytest.mark.{marker}")
+        f = str(getattr(item, "fspath", "") or "")
+        if f and f not in seen_files:
+            seen_files.add(f)
+            for site in _broad_except_sites(f):
+                offenders.append(f"{site} catches Exception broadly")
+            offenders.extend(_sorted_ordered_sites(f))
+
+    # An empty parametrize is not a bare skip and deserves its own message: pytest
+    # generates ONE skipped placeholder for an empty argvalues list, so a corpus glob
+    # that matched nothing turns a data-driven suite into a single "s" and exit 0.
+    empty_params = []
+    for item in items:
+        m = item.get_closest_marker("skip")
+        reason = ""
+        if m is not None:
+            reason = str(m.kwargs.get("reason", "")) or (
+                str(m.args[0]) if m.args else "")
+        if "empty parameter set" in reason:
+            empty_params.append(f"{item.name}: {reason}")
+    if empty_params:
         raise pytest.UsageError(
-            "bare skip is refused by the pgColumnar vacuity layer: "
-            + "; ".join(offenders)
-            + ". Use expect.cannot_run(REASON, detail) so the run cannot go quiet."
+            "the pgColumnar vacuity layer refuses this run: a parametrize over an "
+            "empty parameter set produces one skipped placeholder and exits 0, so a "
+            "corpus that matched nothing reads as a suite that ran: "
+            + "; ".join(empty_params)
+            + " -- assert the corpus is non-empty before parametrizing over it."
+        )
+    if offenders:
+        # One hook, two offences, so the message must say which. An earlier version
+        # reused the skip wording and told a reader with a broad `except` to call
+        # expect.cannot_run, which would not have helped them.
+        skips = [o for o in offenders if "@pytest.mark." in o]
+        excepts = [o for o in offenders if "catches Exception broadly" in o]
+        ordered = [o for o in offenders if "feeds an ordered claim" in o]
+        parts = []
+        if skips:
+            parts.append(
+                "a bare skip is refused, because it exits 0 and reads as success: "
+                + "; ".join(skips)
+                + " -- use expect.cannot_run(REASON, detail) so the run cannot go quiet"
+            )
+        if excepts:
+            parts.append(
+                "a broad except swallows the failure the test exists to find, and "
+                "after one failed statement psycopg raises for every later one: "
+                + "; ".join(excepts)
+                + " -- catch the specific exception class instead"
+            )
+        if ordered:
+            parts.append(
+                "sorted() or set() feeding an ordered claim removes the very "
+                "ordering it asserts: "
+                + "; ".join(ordered)
+                + " -- pass the rows in the order the query returned them"
+            )
+        raise pytest.UsageError(
+            "the pgColumnar vacuity layer refuses this run: " + ". ".join(parts) + "."
         )
