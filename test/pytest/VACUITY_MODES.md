@@ -82,7 +82,7 @@ test in `test_layer.py` that fails without it.
 | `xfail_strict = true` | `xfail-xpass-and-the-wrong-exception`, `xfail-and-xpass-are-green` |
 | `--pgc-expect-tests` asserts the run's own shape | `zero-collected-exit-5`, `filters-select-nothing`, `partial-selection-exits-zero` |
 | the connection fixture is autocommit | `uncommitted-fixture-measures-an-empty-table` |
-| `ordered_rows` refuses an unobservable ordering, and the scan refuses `sorted()` feeding it | `set-oracle-on-an-ordered-claim` |
+| `ordered_rows` refuses an unobservable ordering, and the scan refuses an order-killed value feeding it, in three spellings | `set-oracle-on-an-ordered-claim` |
 | the reported node-id set is reconciled against the collected one | `crashed-worker-silently-loses-tests` |
 | an empty parameter set fails the run, with its own message | `empty-parametrize-is-a-silent-skip` |
 | a skip during fixture setup fails the run | `session-fixture-skip-greens-the-whole-suite` |
@@ -95,6 +95,26 @@ than reasoning about it, and all three had passed silently before:
 - `expect.num(-1, -1)` passed. `cursor.rowcount` is `-1` when no count is available
   and `1` for an unfetched `SELECT`; both are numbers.
 - A broad `except` was forbidden **in a comment**, which enforces nothing.
+
+### 2.1 What the order-killer scan sees, and what it does not
+
+The scan first caught only `expect.ordered_rows(sorted(got), ...)` — the killer
+written inside the argument. Two spellings of the same collapse walked past it,
+and both read as more careful code than the one that was caught:
+
+    g = sorted(got)          # bound to a name first
+    expect.ordered_rows(g, want)
+
+    got.sort()               # killed in place; the call site is unchanged
+    expect.ordered_rows(got, want)
+
+All three are refused now. The scan is **one function deep**: a helper that sorts
+and returns is invisible to it, as are aliases, attributes and branches. That is a
+floor rather than a proof of order-sensitivity, and it is pinned by a test so the
+limit cannot quietly turn into a claim of completeness.
+
+It compares line numbers, so a name sorted *after* the claim is not refused. A
+guard whose subject is false greens has no business emitting a false red.
 
 ## 3. What it does not refuse
 

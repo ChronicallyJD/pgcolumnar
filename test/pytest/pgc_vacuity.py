@@ -592,6 +592,23 @@ class _RunShape:
         # xdist. Harmless in a worker: the worker's own sessionfinish returns early.
         self.collected.update(i.nodeid for i in items)
 
+    def pytest_deselected(self, items):
+        """Deselection is not loss, and the difference is the whole guard.
+
+        `pytest_collection_modifyitems` above fires before pytest's own -k and -m
+        filtering has removed anything, so without this hook every deselected test
+        looks like a test that vanished without reporting. Measured before the fix:
+        `pytest -q test_layer.py -k refus` gave "1 passed, 15 deselected" and then
+        exit 1 with "15 collected test(s) never reported an outcome". That is a
+        false red on a healthy run, produced by the guard whose subject is false
+        greens -- and the first thing anyone does about it is stop using -k.
+
+        Asking for a subset is a deliberate act by whoever typed the command. A
+        test lost to a crashed worker is not. This hook is where pytest tells the
+        difference, so it is where the guard has to learn it.
+        """
+        self.collected.difference_update(i.nodeid for i in items)
+
     def pytest_xdist_node_collection_finished(self, node, ids):
         """Under xdist the WORKERS collect, not the controller.
 
@@ -709,6 +726,45 @@ def pytest_collection_finish(session):
 _ORDER_KILLERS = ("sorted", "set", "frozenset")
 
 
+def _order_killed_names(fn):
+    """Names bound to an order-killing value earlier in one function body.
+
+    -> {name: (lineno, how)}
+
+    The inline spelling is only the shortest way to write the collapse. These two
+    are the same defect and read as more careful code, which is worse:
+
+        g = sorted(got)                 # bound to an order-killing call
+        expect.ordered_rows(g, want)
+
+        got.sort()                      # killed in place
+        expect.ordered_rows(got, want)
+
+    WHAT THIS DOES NOT SEE, stated because a guard's blind spots are part of its
+    meaning: it is one function deep, so a helper that sorts and returns is invisible;
+    it does not follow aliases (`h = g`), attributes (`self.rows.sort()`), branches,
+    or a name re-bound to something honest after being killed. It is a floor, not a
+    proof of order-sensitivity. The suite's own removal proofs are what establish
+    that an ordered claim can actually fail on order.
+    """
+    killed = {}
+    for node in ast.walk(fn):
+        # X = sorted(...) / set(...) / frozenset(...)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            if isinstance(f, ast.Name) and f.id in _ORDER_KILLERS:
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        killed.setdefault(t.id, (node.lineno, f"{f.id}()"))
+        # X.sort() -- in place, and the name keeps its spelling at the call site
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            if (isinstance(f, ast.Attribute) and f.attr == "sort"
+                    and isinstance(f.value, ast.Name)):
+                killed.setdefault(f.value.id, (node.lineno, ".sort()"))
+    return killed
+
+
 def _sorted_ordered_sites(path):
     try:
         tree = ast.parse(pathlib.Path(path).read_text())
@@ -716,19 +772,35 @@ def _sorted_ordered_sites(path):
         return []
     out = []
     name = pathlib.Path(path).name
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        f = node.func
-        if not (isinstance(f, ast.Attribute) and f.attr in ("ordered_rows",
-                                                            "ordering_observable")):
-            continue
-        for arg in node.args:
-            if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
-                    and arg.func.id in _ORDER_KILLERS):
-                out.append(
-                    f"{name}:{node.lineno} {arg.func.id}() feeds an ordered claim"
-                )
+    # Per function, because a killed name means nothing outside the body that
+    # killed it, and a module-level walk would carry one test's `g` into the next.
+    fns = [n for n in ast.walk(tree)
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for fn in fns:
+        killed = _order_killed_names(fn)
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if not (isinstance(f, ast.Attribute) and f.attr in ("ordered_rows",
+                                                                "ordering_observable")):
+                continue
+            for arg in node.args:
+                if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
+                        and arg.func.id in _ORDER_KILLERS):
+                    out.append(
+                        f"{name}:{node.lineno} {arg.func.id}() feeds an ordered claim"
+                    )
+                elif isinstance(arg, ast.Name) and arg.id in killed:
+                    where, how = killed[arg.id]
+                    # Only a kill that already happened. A name sorted AFTER the
+                    # claim was made did not affect it, and flagging that would be
+                    # a false red -- the thing this whole layer exists to refuse.
+                    if where < node.lineno:
+                        out.append(
+                            f"{name}:{node.lineno} {arg.id} was order-killed by "
+                            f"{how} at line {where} and feeds an ordered claim"
+                        )
     return out
 
 

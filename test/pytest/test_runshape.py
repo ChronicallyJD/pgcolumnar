@@ -114,3 +114,82 @@ def test_layer_allows_a_declared_unrunnable_test(pytester, expect):
     )
     result = pytester.runpytest("-p", "pgc_vacuity")
     expect.outcomes(result, "a declared unrunnable test is allowed", passed=1, failed=0)
+
+
+# ---------------------------------------------------------------------------
+# DESELECTION IS NOT LOSS.
+#
+# The reconciliation above compares reported node-ids against collected ones, and
+# `pytest_collection_modifyitems` fires BEFORE pytest's own -k and -m filtering has
+# removed anything. So every deselected test looked like a test that vanished:
+#
+#     $ pytest -q test_layer.py -k "refus"
+#     1 passed, 15 deselected
+#     VACUITY: 15 collected test(s) never reported an outcome ...
+#     exit 1
+#
+# A false red on a healthy run, from the guard whose subject is false greens. It is
+# worse than a missed true red: the response to it is to stop using the plugin.
+# ---------------------------------------------------------------------------
+
+def test_layer_allows_a_deliberately_selected_subset(pytester, expect):
+    """`-k` must not be reported as tests lost.
+
+    Asking for a subset is a deliberate act by whoever typed the command; a test
+    lost to a crashed worker is not. `pytest_deselected` is where pytest tells the
+    two apart, so it is where the guard learns the difference.
+    """
+    pytester.makepyfile(
+        """
+        def test_alpha(expect): expect.num(1, 1, "alpha")
+        def test_beta(expect): expect.num(2, 2, "beta")
+        def test_gamma(expect): expect.num(3, 3, "gamma")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity", "-k", "alpha")
+    expect.outcomes(result, "a -k subset is a healthy run", passed=1, failed=0)
+    expect.num(result.ret, 0, "and it exits 0 rather than on the run-shape guard")
+
+
+def test_layer_allows_an_explicitly_deselected_test(pytester, expect):
+    """--deselect reaches the same hook by a different route, so it is pinned too."""
+    pytester.makepyfile(
+        """
+        def test_alpha(expect): expect.num(1, 1, "alpha")
+        def test_beta(expect): expect.num(2, 2, "beta")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity",
+                                "--deselect", "test_layer_allows_an_explicitly"
+                                              "_deselected_test.py::test_beta")
+    expect.outcomes(result, "an explicit deselection is a healthy run",
+                    passed=1, failed=0, deselected=1)
+    expect.num(result.ret, 0, "and it exits 0")
+
+
+def test_a_run_that_both_deselects_and_loses_a_test_still_fails(pytester, expect):
+    """The two must stay distinguishable, or the fix is just a blindfold.
+
+    Subtracting the deselected ids from the collected set is the right fix only if
+    the set still holds every test that was genuinely lost. An over-broad
+    subtraction would pass this file's other arms and silently retire the guard, so
+    this arm deselects AND kills a worker in one run and requires the red.
+    """
+    pytester.makepyfile(
+        """
+        import os, signal
+        def test_skipme_alpha(expect): expect.num(1, 1, "deselected by -k")
+        def test_skipme_beta(expect): expect.num(2, 2, "deselected by -k")
+        def test_keep_a(expect): expect.num(1, 1, "a")
+        def test_keep_b(expect): expect.num(1, 1, "b")
+        def test_keep_kills_its_worker(expect):
+            os.kill(os.getpid(), signal.SIGKILL)
+        def test_keep_d(expect): expect.num(1, 1, "d")
+        def test_keep_e(expect): expect.num(1, 1, "e")
+        def test_keep_f(expect): expect.num(1, 1, "f")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity", "-k", "keep", "-n", "2",
+                                "--max-worker-restart=0")
+    expect.run_failed(result, "a lost test is still caught when others were deselected")
+    result.stdout.fnmatch_lines(["*never reported*"])

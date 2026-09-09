@@ -78,6 +78,87 @@ def test_layer_refuses_sorting_the_input_to_an_ordered_claim(pytester, expect):
     result.stderr.fnmatch_lines(["*sorted*ordered*"])
 
 
+def test_layer_refuses_a_name_bound_to_a_sorted_call(pytester, expect):
+    """The same collapse, one line apart, and it read as more careful code.
+
+    The inline spelling was the only one caught. Splitting it across two statements
+    is what a reader does when the line gets long, so the guard was strictest on the
+    version most likely to be noticed by a human and blind to the version least
+    likely to be.
+    """
+    pytester.makepyfile(
+        """
+        def test_sorted_via_a_name(expect):
+            got = [3, 1, 2]
+            g = sorted(got)
+            expect.ordered_rows(g, [1, 2, 3], "sorted away, one line earlier")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a name bound to sorted() is refused")
+    result.stderr.fnmatch_lines(["*order-killed*"])
+
+
+def test_layer_refuses_a_list_sorted_in_place(pytester, expect):
+    """`got.sort()` kills the order and leaves the name spelled exactly as before.
+
+    Nothing at the call site says anything happened, which makes this the hardest
+    of the three to see in review and the one worth catching most.
+    """
+    pytester.makepyfile(
+        """
+        def test_sorted_in_place(expect):
+            got = [3, 1, 2]
+            got.sort()
+            expect.ordered_rows(got, [1, 2, 3], "sorted in place")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a list sorted in place is refused")
+    result.stderr.fnmatch_lines(["*order-killed*"])
+
+
+def test_layer_allows_a_name_sorted_after_the_claim(pytester, expect):
+    """The control, and the reason the guard compares line numbers.
+
+    A name sorted AFTER the ordered claim did not affect it. Refusing that would be
+    a false red, which is the defect this layer exists to refuse rather than commit.
+    """
+    pytester.makepyfile(
+        """
+        def test_sorted_afterwards(expect):
+            got = [1, 2, 3]
+            expect.ordered_rows(got, [1, 2, 3], "a real ordering claim")
+            got.sort()          # after the claim; it changed nothing about it
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "sorting after the claim is not the collapse",
+                    passed=1, failed=0)
+
+
+def test_the_order_killer_scan_is_one_function_deep(pytester, expect):
+    """A named limit, pinned so it cannot quietly become a claim of completeness.
+
+    A helper that sorts and returns is invisible to this scan. That is a real gap and
+    it is recorded here rather than in prose alone: if someone widens the scan later,
+    this arm reddens and tells them the documented limit has moved.
+    """
+    pytester.makepyfile(
+        """
+        def _tidy(rows):
+            return sorted(rows)
+
+        def test_sorted_behind_a_helper(expect):
+            got = [3, 1, 2]
+            expect.ordered_rows(_tidy(got), [1, 2, 3], "sorted behind a helper")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a sort behind a helper is NOT caught, by design",
+                    passed=1, failed=0)
+
+
 def test_ordering_observable_requires_the_two_directions_to_differ(pytester, expect):
     """The ported premise: a fixture that reads the same forwards and backwards
     cannot support an ordering claim at all."""
