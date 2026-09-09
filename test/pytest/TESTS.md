@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**66 tests in 6 files.** Fifty-one of them test the harness rather than the
+**71 tests in 6 files.** Fifty-six of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -209,7 +209,48 @@ as the failure.
 | `test_hash_refuses_a_LEFT_error_sentinel` | a `QUERY_ERROR` on the left |
 | `test_hash_refuses_a_RIGHT_error_sentinel` | the mirror, which one arm never covered |
 | `test_hash_refuses_two_empties` | two distinct empty values |
+| `test_plan_marker_present_arm_fails_when_the_key_is_absent` | the arm that makes "did the columnar scan run" answerable |
+| `test_plan_marker_present_arm_passes_when_the_key_is_there` | **control** |
+| `test_plan_marker_absent_arm_fails_when_the_key_is_present` | the arm that pins the vector-aggregate trap |
+| `test_plan_marker_absent_arm_passes_on_a_plan_that_lacks_the_key` | **control** |
+| `test_plan_marker_refuses_an_absence_claim_over_an_empty_plan` | the hole under both arms |
 | `test_refusal_itself_refuses_an_empty_pattern_list` | the new helper must not become the defect it removes |
+
+### plan_marker, and the three ways it could not fail
+
+@jdatcmd named this one first: *"both of its arms can be deleted independently
+with the suite green. Under one of those mutations the premise can never fail, so
+the provider-trap test would silently be about an ordinary plan."*
+
+It is the worst place in the layer for that to be true. `plan_marker` is the
+faithful port of `pgc_is_columnar_scan`, and `test_connection.py` calls it three
+times — once as the **premise** that the vectorized aggregate engaged. A premise
+that cannot fail turns its test into a test about an ordinary plan, and nothing
+goes red while it happens.
+
+**A third hole sat underneath both arms.** An absence claim is satisfied by
+nothing being there at all: `plan_marker([], key, absent=True)` gave `1 passed`,
+exit 0, because a plan that never arrived looks exactly like a plan that
+legitimately lacks the node. That is now a `VacuityError`, and it is refused for
+the present arm too — an empty plan means the `EXPLAIN` did not arrive, so
+neither question can be answered.
+
+The four arm tests are behavioural rather than refusals, because `plan_marker`'s
+two arms raise `AssertionError`: `expect.refusal` does not apply and
+`expect.outcomes` is the right instrument. Their value is not their own green,
+which they had before the guards were pinned. It is the census:
+
+```
+unmutated                      38c951eb7dda   5 passed
+present arm neutered           dc066341dba2   1 failed  <- its own arm, and only it
+absent arm neutered            7ce63404d821   1 failed  <- its own arm, and only it
+empty-plan guard neutered      a4e9d763e77c   1 failed  <- its own arm, and only it
+restored                       38c951eb7dda   byte-exact
+```
+
+**Each mutation reddens exactly one test, and it is that test's own.** That is
+the property worth having: it proves the three are distinguishable rather than
+subsumed, which "something went red" cannot.
 
 Three of these carry reasoning that is easy to lose.
 

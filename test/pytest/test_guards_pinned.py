@@ -169,3 +169,95 @@ def test_refusal_itself_refuses_an_empty_pattern_list(pytester, expect):
     with _pytest.raises(VacuityError):
         expect.refusal(_R(), "no patterns given")
     expect.num(1, 1, "refusal() with no pattern is itself refused")
+
+
+# ---------------------------------------------------------------------------
+# plan_marker, which @jdatcmd named as the one to fix first (#897 review):
+# "both of its arms can be deleted independently with the suite green. Under
+# one of those mutations the premise can never fail, so the provider-trap test
+# would silently be about an ordinary plan."
+#
+# He was right, and it is the worst place in the layer for it to be true.
+# `plan_marker` is the faithful port of `pgc_is_columnar_scan`; test_connection
+# calls it three times, once as the PREMISE that the vector aggregate engaged.
+# A premise that cannot fail turns the provider-trap test into a test about an
+# ordinary plan while it stays green.
+#
+# These arms are behavioural rather than refusals -- plan_marker's two arms
+# raise AssertionError, not VacuityError, so `expect.refusal` does not apply and
+# `expect.outcomes` is the right instrument. Their value is the removal proof in
+# the commit message, not their own green.
+
+
+def test_plan_marker_present_arm_fails_when_the_key_is_absent(pytester, expect):
+    """The arm that makes 'did the columnar scan run' answerable."""
+    result = _inner(pytester, '''
+        PLAN = [{"Plan": {"Node Type": "Seq Scan"}}]
+
+        def test_missing_marker(expect):
+            expect.plan_marker(PLAN, "Columnar Projected Columns", name="scan ran")
+        ''')
+    expect.outcomes(result, "a plan without the key fails", failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*no node carries it*"])
+
+
+def test_plan_marker_present_arm_passes_when_the_key_is_there(pytester, expect):
+    """Control. A guard that reddens on a real plan gets switched off."""
+    result = _inner(pytester, '''
+        PLAN = [{"Plan": {"Node Type": "Custom Scan",
+                          "Columnar Projected Columns": 3}}]
+
+        def test_marker_present(expect):
+            expect.plan_marker(PLAN, "Columnar Projected Columns", name="scan ran")
+        ''')
+    expect.outcomes(result, "a plan carrying the key passes", passed=1, failed=0)
+
+
+def test_plan_marker_absent_arm_fails_when_the_key_is_present(pytester, expect):
+    """The other arm. `absent=True` is how the vector-aggregate trap is pinned,
+    so a mutation that makes it unable to fail would make that test vacuous."""
+    result = _inner(pytester, '''
+        PLAN = [{"Plan": {"Node Type": "Custom Scan",
+                          "Columnar Projected Columns": 3}}]
+
+        def test_marker_should_be_absent(expect):
+            expect.plan_marker(PLAN, "Columnar Projected Columns",
+                               name="aggregate absorbed the scan", absent=True)
+        ''')
+    expect.outcomes(result, "an absence claim over a present key fails",
+                    failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*the key is present and should not be*"])
+
+
+def test_plan_marker_absent_arm_passes_on_a_plan_that_lacks_the_key(pytester, expect):
+    """Control for the arm above, on a plan that really did arrive."""
+    result = _inner(pytester, '''
+        PLAN = [{"Plan": {"Node Type": "Custom Scan",
+                          "Columnar Vectorized Aggregates": 1}}]
+
+        def test_marker_absent(expect):
+            expect.plan_marker(PLAN, "Columnar Projected Columns",
+                               name="aggregate absorbed the scan", absent=True)
+        ''')
+    expect.outcomes(result, "an absence claim over a real plan passes",
+                    passed=1, failed=0)
+
+
+def test_plan_marker_refuses_an_absence_claim_over_an_empty_plan(pytester, expect):
+    """The hole underneath both arms: an absence claim is satisfied by nothing
+    being there at all.
+
+    A plan that failed to arrive looks exactly like a plan that legitimately
+    lacks the node, and `absent=True` cannot tell them apart -- so the arm that
+    pins the vector-aggregate trap would pass against `[]`. Measured before the
+    fix: `1 passed`, exit 0.
+
+    This is a REFUSAL rather than an assertion, because the input is degenerate
+    rather than wrong, which is the same distinction `rows()` makes for two
+    empty sides.
+    """
+    expect.refusal(_inner(pytester, '''
+        def test_absent_on_nothing(expect):
+            expect.plan_marker([], "Columnar Projected Columns", absent=True)
+        '''), "plan_marker refuses an absence claim over an empty plan",
+                   "plan has no nodes")

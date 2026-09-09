@@ -261,7 +261,7 @@ true until the next version shipped.
 
   This ports ONE bash suite. `test/` carries 4,429 anchored assertions across 256
   suites, so this is 0.18% of them and is not coverage. The layer is the point:
-  66 tests in 6 files, of which 51 test the harness rather than the product.
+  71 tests in 6 files, of which 56 test the harness rather than the product.
 
   A pytest run fails open in several ways this project has already been bitten by:
   a test that asserts nothing passes, a filter that selects nothing exits 0, and a
@@ -287,6 +287,18 @@ true until the next version shipped.
   `test_guards_pinned.py` pins each refusal to its own MESSAGE through
   `expect.refusal`, which refuses to be called with no pattern -- the same move as
   asserting on a SQLSTATE rather than on prose.
+
+  **`plan_marker`'s two arms are pinned, and the hole under them is closed.**
+  Both could be deleted independently with the suite green -- and it is the worst
+  place in the layer for that, because `plan_marker` is the port of
+  `pgc_is_columnar_scan` and is used as the PREMISE that the vectorized aggregate
+  engaged. A premise that cannot fail turns its test into one about an ordinary
+  plan. Underneath both sat a third hole: an absence claim is satisfied by
+  nothing being there at all, so `plan_marker([], key, absent=True)` passed
+  against a plan that never arrived. That is now refused, for the present arm
+  too. Each of the three neutered alone reddens exactly one test, and it is that
+  test's own -- which is what proves they are distinguishable rather than
+  subsumed.
 
   **The corpus builds and installs before it measures anything.** It did not at
   first: with `#error` appended to a source file and nothing rebuilt, the run

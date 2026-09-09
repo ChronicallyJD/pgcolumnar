@@ -286,8 +286,32 @@ class Expect:
         how a test pins that a plan is NOT a scan.
         """
         label = name or f"plan {'lacks' if absent else 'carries'} {key!r}"
+        nodes = list(_plan_nodes(plan))
+
+        # A PLAN THAT DID NOT ARRIVE LOOKS EXACTLY LIKE ONE THAT LACKS THE NODE.
+        # With `absent=True` that is a pass: the claim "nothing here carries the
+        # marker" is satisfied by there being nothing here. Measured before this
+        # guard: `expect.plan_marker([], "Columnar Projected Columns",
+        # absent=True)` gave `1 passed`, exit 0.
+        #
+        # That is the worst place in this layer for a silent pass. `absent=True`
+        # is how the vector-aggregate trap is pinned, and test_connection.py uses
+        # plan_marker as the PREMISE that the aggregate engaged -- a premise that
+        # cannot fail turns its test into one about an ordinary plan.
+        #
+        # Refused for the present arm too, and deliberately: an empty plan means
+        # the EXPLAIN did not arrive, so neither question can be answered. The
+        # present arm would fail anyway, but it would fail with "no node carries
+        # it, Columnar keys present: []", which diagnoses the wrong thing.
+        if not nodes:
+            raise VacuityError(
+                f"{label}: the plan has no nodes, so nothing here could carry "
+                f"or lack {key!r}. An EXPLAIN that did not arrive is not an "
+                f"answer to either question."
+            )
+
         found, seen = False, set()
-        for node in _plan_nodes(plan):
+        for node in nodes:
             seen.update(k for k in node if k.startswith("Columnar"))
             if key in node:
                 found = True
