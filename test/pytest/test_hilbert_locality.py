@@ -54,28 +54,39 @@ session ends before any test runs:
 
 So "blocked on #897" means the whole of #897, not only the directory.
 
-ONE THING THIS FILE CANNOT DO THAT ITS BASH TWIN DOES, AND IT IS MEASURED
+THE REFUSAL THIS FILE ONCE COULD NOT CARRY, AND NOW DOES
 
 The bash suite REFUSES to report a ratio when the two partitions are not
 different: the sixteen measurement arms print UNRUN and pgc_summary counts
 them as a third state, "16 unrunnable"; with nothing else red the suite exits
 67, INCOMPLETE. Here the same refusal goes
 through `expect.cannot_run("UNMET_PRECONDITION", ...)`, and the layer records
-the third state but nothing reports it. The mechanism is one line:
-`cannot_run` sets `self.unrunnable` and calls `self._counted()`, and
-`pytest_runtest_call` asks only whether `rec.count == 0` -- so DECLARING A TEST
-UNRUNNABLE MAKES IT PASS. Measured against that head, with the fixture
-mutated to lay BOTH arms out with cluster(): "1 failed, 17 passed", and all
-four test_groups_read_over_sixty_placements cases were among the greens while
-asserting nothing about groups read. Only test_the_two_partitions_differ
-reddened, and it reddened for its own reason.
+the third state and reports it.
 
-The suite is still red overall, so nothing ships silently; but a reader
-counting greens counts four that never asked their question, and DO NOT READ
-THIS FILE AS CARRYING THE BASH SUITE'S REFUSAL until the layer converts an
-unrunnable record into a non-pass outcome and a non-zero session exit -- the
-pytest equivalent of PGC_EXIT_INCOMPLETE=67. That is a change to #897, not to
-this file.
+THE PARAGRAPH BELOW WAS TRUE WHEN WRITTEN AND IS NOT ANY MORE. It is kept as history
+because the measurement is the valuable part: it is the record of what the gap
+actually was, and it should outlive the gap.
+
+What was true at 5f3dedb: `cannot_run` set `self.unrunnable` and nothing read
+it, so declaring a test unrunnable made it PASS. Measured against that head,
+with the fixture mutated to lay BOTH arms out with cluster(): "1 failed, 17
+passed", and all four test_groups_read_over_sixty_placements cases were among
+the greens while asserting nothing about groups read. Only
+test_the_two_partitions_differ reddened, and it reddened for its own reason.
+
+#897 CLOSED IT, and this file therefore DOES carry the bash suite's refusal.
+Re-measured here on the merged tree rather than taken from the merge:
+
+    UNRUN  test_p.py::test_cannot: ABSENT_FIXTURE: no corpus
+    checks unrunnable: 1
+    exit code = 67
+
+Read that exit code and that count, NOT pytest's own tally, which still prints
+"1 passed" for the item. The per-item outcome is the thing that has not
+changed; the session-level refusal is what PGC_EXIT_INCOMPLETE=67 means in the
+bash suite and it is what this run produces. A reader who greps for "passed"
+will reach the wrong conclusion, which is how this paragraph came to be stale
+and then to be reported fixed while it was not.
 
 WHAT THIS IS A PORT OF, AND WHAT IT IS FOR
 
