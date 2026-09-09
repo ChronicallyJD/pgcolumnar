@@ -213,6 +213,12 @@ an arm where the two differ is void rather than reported.
    order-dependent or shares state.
 7. If you add a guard, add the red test that proves it fires, and a control that
    proves it does not fire on a legitimate test.
+8. Run `test/harness_selftest.sh`. **The harness's own selftests police this
+   directory too.** `test/selftest/300-a-test-script-must-be-runnable.sh` requires
+   that any file declaring an interpreter be executable, and the first version of
+   `compare_to_bash.py` was mode 644 with a `#!/usr/bin/env python3` line. That
+   failed the selftest on both majors of the matrix, which is how it was found. A
+   new directory under `test/` inherits every rule the old ones follow.
 
 ## 7. Traps this corpus records
 
