@@ -778,6 +778,7 @@ pgcolumnar_make_predicates(SkipPredicate *out, int nkeys, ScanKey keys,
 			bool		elmbyval;
 			char		elmalign;
 
+			Assert(ARR_ELEMTYPE(arr) == key->sk_subtype);
 			get_typlenbyvalalign(ARR_ELEMTYPE(arr), &elmlen, &elmbyval,
 								&elmalign);
 			deconstruct_array(arr, ARR_ELEMTYPE(arr), elmlen, elmbyval,
