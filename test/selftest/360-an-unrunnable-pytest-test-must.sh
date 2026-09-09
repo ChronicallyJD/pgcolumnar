@@ -67,8 +67,26 @@ check "and something READS it, rather than only writing it" \
 #
 # Reading the field into a list nothing acts on would satisfy the arm above and
 # leave the defect exactly where it was.
+#
+# TWO CORRECTIONS THIS ARM ALREADY NEEDED, both found by running it against a
+# LATER branch rather than by rereading it.
+#
+# `=` MATCHES INSIDE `==`. The first pattern was `exitstatus[[:space:]]*=`, which
+# counted the comparison `if ... session.exitstatus == 0:` as an assignment. A
+# read counted as a write, in the arm whose entire subject is the difference
+# between the two. `[^=]` after the `=` is what separates them.
+#
+# AND THE COUNT IS A FLOOR, NOT AN EQUALITY. Written as "exactly 1", it went red
+# on the next branch in this stack, which adds a second escalation for a
+# different condition -- a legitimate addition reported as a defect. The property
+# is "the read reaches the exit status", so one site satisfies it and two do not
+# make it less true. An equality here is a guard that reddens on growth, and a
+# guard that reddens on growth gets switched off. Measured: 1 site on this
+# branch, 2 on audit/432-pytest-oracles, 0 on the pre-fix layer -- so the floor
+# still fails exactly where it must.
+_ts_assigns="$(grep -c 'session\.exitstatus[[:space:]]*=[^=]' "$_ts_vac")"
 check "the layer ends a session by setting its exit status" \
-	"$(grep -c 'session\.exitstatus[[:space:]]*=' "$_ts_vac")" "1"
+	"$([ "$_ts_assigns" -ge 1 ] && echo yes || echo "$_ts_assigns")" "yes"
 
 # Failure dominates, the same rule lib.sh keeps: a run with a failure AND an
 # unrunnable test is a failure. So the override must be conditional on a
@@ -117,7 +135,17 @@ printf '    session.exitstatus = EXIT_INCOMPLETE\n' > "$_ts_fix/unconditional.py
 check "an unconditional exit override is caught by the dominance arm" \
 	"$(grep -c 'exitstatus == 0' "$_ts_fix/unconditional.py")" "0"
 
+# A file holding ONLY the comparison. Under the first pattern this counted as an
+# assignment, which is the false positive that shipped; under the corrected one it
+# is zero. Without this arm the correction above is itself unproved.
+printf '    if exitstatus == 0 and session.exitstatus == 0:\n' > "$_ts_fix/compare.py"
+check "a comparison on the exit status is not counted as an assignment" \
+	"$(grep -c 'session\.exitstatus[[:space:]]*=[^=]' "$_ts_fix/compare.py")" "0"
+
+check "premise: while a real assignment on the same line shape IS counted" \
+	"$(grep -c 'session\.exitstatus[[:space:]]*=[^=]' "$_ts_fix/unconditional.py")" "1"
+
 check "premise: while the real layer satisfies that same arm" \
 	"$(grep -c 'exitstatus == 0' "$_ts_vac")" "1"
 
-unset _ts_lib _ts_vac _ts_sh_code _ts_py_code _ts_writes _ts_reads _ts_fix _ts_drift
+unset _ts_lib _ts_vac _ts_sh_code _ts_py_code _ts_writes _ts_reads _ts_fix _ts_drift _ts_assigns
