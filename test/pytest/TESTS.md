@@ -475,6 +475,33 @@ fingerprint that ignores its input.
 hash of an empty stream is a stable, comparable value, so two trees with no source
 would have *matched*.
 
+**That last arm is the only one in this set with a real observation behind it
+rather than a model, and it was not the case it was written for.** It shipped as
+"a legitimate empty tree". @OffgridwithJD then observed the WHOLE manifest coming
+back empty under process pressure, on a read-only bind mount where content was
+excluded by construction: two distinct fingerprints over a tree incapable of
+changing, and the deviant value was `d41d8cd98f00`, which is md5 of the empty
+string — not a corrupted manifest but *no* manifest, hashed confidently. Measured
+here as an A/B with the real `md5sum` and no stub, 20 samples per cell:
+
+    true fingerprint = eebe35d6eaed ; md5("") = d41d8cd98f00
+
+    OLD ulimit -u 45   correct=19  md5("")=1   refused=0  other=0  | sum=20 of 20
+    OLD ulimit -u 40   correct=8   md5("")=11  refused=0  other=1  | sum=20 of 20
+    NEW ulimit -u 45   correct=20  md5("")=0   refused=0  other=0  | sum=20 of 20
+    NEW ulimit -u 40   correct=20  md5("")=0   refused=0  other=0  | sum=20 of 20
+
+At `ulimit -u 40` the old function returns a confident answer about nothing in 11
+runs of 20. The guard covers it structurally rather than statistically: a
+non-empty `out` has at least one line, so `md5("")` is not a reachable return
+value.
+
+**What is still not guarded**, named here rather than left for someone to find: a
+TRUNCATED manifest — `find` returning fewer files rather than none — would produce
+a plausible wrong hash that neither the per-file sentinel nor the empty-manifest
+guard can see. It has not been observed. The boundary of this change is "the three
+observed variants are closed", not "the function is now infallible".
+
 ## 6. test_docs_cover_the_corpus.py: this document, checked
 
 The file you are reading is checked mechanically, because it went stale inside a
