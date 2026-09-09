@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**78 tests in 6 files.** Sixty-three of them test the harness rather than the
+**79 tests in 7 files.** Sixty-three of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -32,8 +32,9 @@ behaviour, the source of that number is named.
 - [6. test_docs_cover_the_corpus.py: this document, checked](#6-test_docs_cover_the_corpuspy-this-document-checked)
 - [7. test_connection.py: the cluster and the direct connection](#7-test_connectionpy-the-cluster-and-the-direct-connection)
 - [8. test_native_projection.py: the ported suite](#8-test_native_projectionpy-the-ported-suite)
-- [9. Adding a test](#9-adding-a-test)
-- [10. Traps this corpus records](#10-traps-this-corpus-records)
+- [9. test_zonemap_boundaries.py: exact boundaries](#9-test_zonemap_boundariespy-exact-boundaries)
+- [10. Adding a test](#10-adding-a-test)
+- [11. Traps this corpus records](#11-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -588,7 +589,22 @@ The mutation makes `PgColumnarProjectionFanoutRow` return without writing. Each 
 builds and installs once, and both harnesses print the `.so` md5 they measured, so
 an arm where the two differ is void rather than reported.
 
-## 9. Adding a test
+## 9. test_zonemap_boundaries.py: exact boundaries
+
+### `test_exact_zonemap_boundaries`
+
+Pairs with `test/zonemap_boundaries.sh`. Two monotonic 1,000-row groups put
+`1001` exactly at the second group's minimum and `1000` exactly at the first
+group's maximum. Heap-row comparisons pin that `<= 1001` and `>= 1000` keep
+their boundary rows. Work-done counters, with bloom disabled, pin the
+correctness-preserving mirrors: `> 1000` and `= 1001` each remove one group.
+
+The four one-token mutations from #831 make the corresponding assertion fail:
+`<=` and `>=` lose one row, while `>` and `=` remain row-correct but remove no
+group. This distinguishes correctness coverage from pruning-effectiveness
+coverage rather than relying on incidental fixtures elsewhere in the matrix.
+
+## 10. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -615,7 +631,7 @@ an arm where the two differ is void rather than reported.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 10. Traps this corpus records
+## 11. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.

@@ -18,6 +18,15 @@ true until the next version shipped.
 
 ### Added
 
+- Exact zone-map boundary coverage now lives in matching shell and pytest tests
+  (#831).
+
+  The `<=` and `>=` arms put the constant exactly at a row-group minimum or
+  maximum and compare returned rows with a heap twin. The `>` and `=` mirrors
+  assert groups removed with bloom disabled, so a conservative pruning
+  regression cannot hide behind a correct answer. Each of the four one-token
+  boundary mutations was proved to fail its corresponding assertion.
+
 - The test harness refuses to measure a binary that was not built from the source
   under test.
 
