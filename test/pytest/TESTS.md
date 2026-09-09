@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**121 tests in 9 files.** One hundred and six of them test the harness rather than the
+**122 tests in 10 files.** One hundred and seven of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -34,10 +34,11 @@ behaviour, the source of that number is named.
 - [8. test_native_projection.py: the ported suite](#8-test_native_projectionpy-the-ported-suite)
 - [9. test_ordered.py: the ordered oracle](#9-test_orderedpy-the-ordered-oracle)
 - [10. test_runshape.py: the shape of the run itself](#10-test_runshapepy-the-shape-of-the-run-itself)
-- [11. test_saop_element_pushdown.py: scattered set pruning](#11-test_saop_element_pushdownpy-scattered-set-pruning)
-- [12. Adding a test](#12-adding-a-test)
-- [13. What this corpus does NOT yet refuse](#13-what-this-corpus-does-not-yet-refuse)
-- [14. Traps this corpus records](#14-traps-this-corpus-records)
+- [11. test_zonemap_boundaries.py: exact boundaries](#11-test_zonemap_boundariespy-exact-boundaries)
+- [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
+- [13. Adding a test](#13-adding-a-test)
+- [14. What this corpus does NOT yet refuse](#14-what-this-corpus-does-not-yet-refuse)
+- [15. Traps this corpus records](#15-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -862,7 +863,24 @@ The empty-parametrize refusal carries its own message rather than folding into t
 bare-skip refusal. When a corpus glob matches nothing, the cause the reader needs to
 see is the corpus, not the marker.
 
-## 11. test_saop_element_pushdown.py: scattered set pruning
+## 11. test_zonemap_boundaries.py: exact boundaries
+
+### `test_exact_zonemap_boundaries`
+
+Pairs with `test/zonemap_boundaries.sh`. Two monotonic 1,000-row groups put
+`1001` exactly at the second group's minimum and `1000` exactly at the first
+group's maximum. Heap-row comparisons pin that `<= 1001` and `>= 1000` keep
+their boundary rows. Work-done counters, with bloom disabled, pin the
+correctness-preserving cases: `< 1001`, `> 1000`, and `= 1001` each remove one
+group.
+
+The five one-token strategy mutations make the corresponding assertion fail:
+`<=` and `>=` lose one row, while `<`, `>`, and `=` remain row-correct but
+remove no group. This distinguishes correctness coverage from
+pruning-effectiveness coverage rather than relying on incidental fixtures
+elsewhere in the matrix.
+
+## 12. test_saop_element_pushdown.py: scattered set pruning
 
 ### `test_scattered_saop_prunes_each_element`
 
@@ -884,7 +902,7 @@ The shell and pytest forms were both run red before implementation (`0`, wanted
 zero. The fixture row count and columnar plan marker are premises, and both query
 answers are checked independently of the pruning counters.
 
-## 12. Adding a test
+## 13. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -911,7 +929,7 @@ answers are checked independently of the pruning counters.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 13. What this corpus does NOT yet refuse
+## 14. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
@@ -923,7 +941,7 @@ Read it before adding a test. The gaps most likely to affect a new test are that
 same family satisfies it, and that a write is not required to have written anything.
 Both are named there with the refusal each needs.
 
-## 14. Traps this corpus records
+## 15. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.
