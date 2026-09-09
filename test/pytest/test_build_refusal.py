@@ -619,7 +619,22 @@ def test_the_fingerprint_still_moves_on_a_real_change(tmp_path, expect):
 
 def test_a_tree_with_nothing_hashable_reports_no_fingerprint(tmp_path, expect):
     """The hash of an empty stream is a stable, comparable value: two empty
-    trees would have "matched"."""
+    trees would have "matched".
+
+    THE PREMISE IS LOAD-BEARING AND WAS MISSING. This arm asserts an EMPTY
+    result, and an empty result is also what a harness that cannot run at all
+    produces: point the helper at a `lib.sh` that does not exist and stdout is
+    `''`, so `got or "empty"` is `"empty"` and the arm passes green over a
+    completely broken tree. That is the same shape as the `expect.refusal`
+    defect @OffgridwithJD found on main -- a failure that produces exactly the
+    value the test expects. The populated-tree premise below fails first when
+    the harness is broken, which is what makes the empty assertion mean
+    anything.
+    """
+    live = _fp_tree(tmp_path, "hollow_premise")
+    base, _ = _sh_fp(f'pgc_source_fingerprint "{live}"')
+    expect.at_least(len(base), 12,
+                    "premise: the same helper returns a fingerprint for a real tree")
     empty = tmp_path / "hollow"
     empty.mkdir()
     got, _ = _sh_fp(f'pgc_source_fingerprint "{empty}"')

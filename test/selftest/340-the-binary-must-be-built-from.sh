@@ -620,7 +620,14 @@ check "control: and restoring the content restores the fingerprint" \
 # A tree with nothing hashable cannot be verified, so it reports no fingerprint
 # rather than the hash of an empty stream -- which is a stable, comparable value
 # and would have made two empty trees "match".
+# THE PREMISE IS LOAD-BEARING. This arm asserts an EMPTY result, and empty is
+# also what a harness that cannot run produces -- so without a premise that the
+# SAME function returns something for a real tree, it passes green over a broken
+# one. Same shape as the expect.refusal defect @OffgridwithJD found on main: a
+# failure that produces exactly the value the test expects.
 _bc_empty="$(mktemp -d "${TMPDIR:-/tmp}/pgc-empty.XXXXXX")"
+check "premise: the same function returns a fingerprint for a real tree" \
+	"$([ -n "$(pgc_source_fingerprint "$_bc")" ] && echo yes || echo empty)" "yes"
 check "a tree with no hashable file yields no fingerprint" \
 	"$([ -z "$(pgc_source_fingerprint "$_bc_empty")" ] && echo empty || echo hashed)" "empty"
 
