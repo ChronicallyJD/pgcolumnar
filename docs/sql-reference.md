@@ -470,17 +470,26 @@ each table in the database.
 Run this after a logical restore. A second run builds nothing, so it is safe to
 run at any time.
 
-You no longer need it after a rewrite. `TRUNCATE`, a rewriting `ALTER TABLE`, and
-the maintenance rewrites re-record their projections themselves. Two cases still
-need this function. The first is a logical restore. The second is a declaration
-that names a column the table no longer has, because
-`ALTER TABLE ... RENAME COLUMN` does not yet carry the rename into the
-declaration. A rewrite that meets such a declaration reports it as
+You no longer need it after a rewrite. `TRUNCATE`, a rewriting `ALTER TABLE`,
+`REFRESH MATERIALIZED VIEW` and the maintenance rewrites re-record their
+projections themselves.
 
-    WARNING:  could not restore projection "p" on "t" after rewrite
+Two cases still need this function. The first is a logical restore. The second is
+a rewrite that does not pass through `ProcessUtility`, and so is never observed:
+a `TRUNCATE` replicated to a subscriber is applied by the logical replication
+worker calling `ExecuteTruncateGuts` directly. Run this on the subscriber after
+one.
+
+A third case looks like this function's job and is not. A declaration that names a
+column the table no longer has is reported by a rewrite as
+
+    WARNING:  42703: could not restore projection "p" on "public.t" after rewrite
     DETAIL:   Its declaration names a column the table no longer has.
 
-Correct the declaration, then run this.
+Do not run this function for that. It re-runs the same declaration and raises the
+same missing-column error. Call `pgcolumnar.add_projection()` again instead, with
+the same projection name and columns the table has, which is what the `HINT` on
+that WARNING tells you.
 
 ```sql
 SELECT pgcolumnar.rebuild_projections();
