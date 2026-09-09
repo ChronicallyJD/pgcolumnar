@@ -107,7 +107,7 @@ _bd_missing=""
 _bd_seen=0
 while IFS= read -r _bd_var; do
 	[ -n "$_bd_var" ] || continue
-	_bd_val="$(sed -n "s/^[[:space:]]*$_bd_var[[:space:]]*=[[:space:]]*\(.*\)$/\1/p" \
+	_bd_val="$(sed -n "s/^[[:space:]]*${_bd_var}[[:space:]]*=[[:space:]]*\(.*\)$/\1/p" \
 		"$_bd_root/Makefile" | head -1)"
 	_bd_name="${_bd_val##*/}"
 	[ -n "$_bd_name" ] || continue
