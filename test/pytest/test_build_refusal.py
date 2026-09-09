@@ -25,7 +25,8 @@ import subprocess
 
 import pytest
 
-from pgc_cluster import build_and_install, build_once, source_fingerprint
+from pgc_cluster import (build_and_install, build_once, make_cluster,
+                         source_fingerprint)
 
 
 class _Proc:
@@ -241,3 +242,105 @@ def test_an_unreadable_side_is_unknown_not_fresh(expect):
                 "unknown", "no postmaster start time")
     expect.text(_C().server_binary_verdict(so_mtime="x", postmaster_epoch="y"),
                 "unknown", "non-numeric epochs")
+
+
+# ---------------------------------------------------------------------------
+# TWO FINDINGS FROM @linuxhikerpm, both reproduced against the branch before
+# these arms were written. They are infrastructure guarantees rather than
+# corpus coverage: the first runs stale code under a FRESH verdict, and the
+# second leaves state behind precisely on failed setup, where repeated runs
+# need isolation most.
+
+
+def _tree_with_objstore(tmp_path, name):
+    """A tree shaped like this repository's: src/ plus a SEPARATELY built
+    module the top-level Makefile reaches by recursion."""
+    tree = tmp_path / name
+    (tree / "src").mkdir(parents=True, exist_ok=True)
+    (tree / "src" / "columnar.c").write_text("int a = 1;\n")
+    (tree / "objstore").mkdir(parents=True, exist_ok=True)
+    (tree / "objstore" / "module.c").write_text("int b = 1;\n")
+    (tree / "objstore" / "Makefile").write_text("all:\n\ttrue\n")
+    (tree / "Makefile").write_text("all:\n\t$(MAKE) -C objstore\n")
+    (tree / "test").mkdir(parents=True, exist_ok=True)
+    (tree / "test" / "lib.sh").write_text(
+        "pgc_build_and_install() { return 0; }\n")
+    return tree
+
+
+def test_the_fingerprint_covers_a_separately_built_module(tmp_path, expect):
+    """An objstore/ edit must move the fingerprint.
+
+    Reproduced by @linuxhikerpm on `5f3dedb`: `source_fingerprint` read
+    `src/*` and the top-level Makefile only, so editing the recursed module
+    left the hash unchanged --
+
+        objstore_before=2799803eaeac objstore_after=2799803eaeac
+        builds=1 second=already-built
+
+    -- and the second run certified a stale module as current. This is the
+    Python form of the gap #898 closes in `test/lib.sh`, and #897 carries an
+    INDEPENDENT implementation, so rebasing #898 would not have fixed it.
+    """
+    tree = _tree_with_objstore(tmp_path, "fp")
+    before = source_fingerprint(tree)
+    expect.text(repr(before is None), "False",
+                "premise: the tree fingerprints at all")
+
+    (tree / "objstore" / "module.c").write_text("int b = 2;\n")
+    after = source_fingerprint(tree)
+    expect.num(int(after != before), 1,
+               "editing a separately built module moves the fingerprint")
+
+    (tree / "objstore" / "module.c").write_text("int b = 1;\n")
+    expect.text(source_fingerprint(tree), before,
+                "and restoring it restores the fingerprint")
+
+
+def test_an_objstore_edit_forces_a_second_build(tmp_path, expect):
+    """The consequence, end to end, which is what the finding was about."""
+    tree = _tree_with_objstore(tmp_path, "fp2")
+    lock = str(tmp_path / "lock_obj")
+    calls = []
+
+    def counting(argv):
+        calls.append(argv)
+        return _Proc(0)
+
+    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    expect.num(len(calls), 1, "premise: an unchanged tree builds once")
+
+    (tree / "objstore" / "module.c").write_text("int b = 2;\n")
+    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    expect.num(len(calls), 2, "an edited objstore module builds again")
+
+
+def test_make_cluster_leaves_nothing_behind_when_setup_fails(tmp_path, expect):
+    """make_cluster owns its temporary tree until it successfully returns.
+
+    Reproduced by @linuxhikerpm: `root` is created by `mkdtemp` and then
+    `Cluster()`, `initdb()`, `start()` and `is_ours()` run with no cleanup
+    guard --
+
+        make_cluster_error=RuntimeError
+        new_roots=1 leaked=['/tmp/pgc-pytest-777-h3phhtxc']
+
+    -- and `conftest.py` cannot clean it, because the tuple assignment
+    `cluster, root = make_cluster(...)` never completes when it raises. The
+    handled `is_ours()` path leaked too: it stopped the cluster and left the
+    directory.
+    """
+    import glob
+    before = set(glob.glob("/tmp/pgc-pytest-*"))
+
+    raised = "no"
+    try:
+        make_cluster("/nonexistent/bin/pg_config", "gw77")
+    except Exception:
+        raised = "yes"
+
+    expect.text(raised, "yes", "premise: setup really failed, so the arm is not vacuous")
+    leaked = sorted(set(glob.glob("/tmp/pgc-pytest-*")) - before)
+    expect.text(", ".join(leaked) or "none", "none",
+                "a failed make_cluster leaves no directory behind")

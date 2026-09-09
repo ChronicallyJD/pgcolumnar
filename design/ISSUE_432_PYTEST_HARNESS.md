@@ -327,16 +327,43 @@ exists.
 Tests 1 to 7 are the layer testing itself. They come first because a harness that
 can report a false green makes every later result worthless.
 
+**SECTION 8 IS THE PLAN AS IT WAS WRITTEN, AND IT IS LEFT AS WRITTEN.** It is a
+record of what was intended before the work, not an index of what exists. Two of
+its nine named tests were built under different names and one of them is a better
+test than the row that named it. Section 8a says which, and
+`test/pytest/TESTS.md` is the index of what actually exists -- it is checked
+against the corpus mechanically, and this document is not.
+
 ## 8a. What is built, and what it measured
 
-All of section 8 is implemented and green. The numbers below are runs, not estimates.
+**Every property in section 8 is covered. Two of its rows are covered under
+different names, and this section is the record of which.** The earlier wording
+here -- "all of section 8 is implemented and green" -- was false about two named
+tests, and it stayed false while the corpus tripled (@jdatcmd, #897 review, which
+found row 7; row 9 turned up when I checked the other eight rather than fixing
+the one instance).
+
+| row | named in section 8 | what was built instead, and why |
+| --- | --- | --- |
+| 7 | `test_layer_fails_on_a_stale_library` | **`test_build_refusal.py`**, 18 tests. The row described a fixture that compares the `.so` mtime against `pg_postmaster_start_time()`. That check is near-vacuous on its own, because every suite `initdb`s fresh and the postmaster therefore always starts after the `.so`. What was needed, and built, is a refusal to measure a binary that was not built from this source at all -- driven through `pgc_build_and_install` in `test/lib.sh` so there is one implementation rather than two. The mtime comparison survives as three arms of that file, with its unreachability recorded rather than hidden. |
+| 9 | `test_two_workers_get_different_clusters` | **`test_the_worker_owns_its_own_cluster`** in `test_connection.py`. Asserts `port == PORT_BASE + slot` for its own worker rather than comparing two workers. The mapping from worker id to port is injective, so every worker matching its own id implies no two share one -- and it can be checked from inside a single worker, which the original phrasing could not. |
+
+The numbers below are runs, not estimates.
 
 ```
-test/pytest/  25 tests   serial: 25 passed    xdist -n 4: 25 passed
+test/pytest/  74 tests in 6 files   serial: 74 passed   xdist -n 4: 74 passed
 ```
 
-Ten of those tests are the layer testing itself, four of them controls proving a
-guard does not reject legitimate work. They run pytest inside
+**That count is a claim, so it is checked.** `test/pytest/TESTS.md` states the
+totals in a fixed form and `test/selftest/350-the-pytest-corpus-must-be.sh`
+compares them against the corpus on disk, along with requiring every file and
+every `def test_` to be named there. This document is NOT under that gate -- a
+design record describes decisions rather than inventory, and gating it would
+put the same treadmill under prose that has no reason to track the tree. Where
+the two disagree, TESTS.md is the record and this section is history.
+
+Of the 74, the layer testing itself is the majority, with controls throughout
+proving a guard does not reject legitimate work. They run pytest inside
 pytest through the `pytester` fixture, so each guard is proven to REFUSE rather
 than assumed to. The layer's own tests obey the layer: they use the same recorder
 every other test uses, because an exemption for the tests that prove the guard is

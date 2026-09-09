@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**71 tests in 6 files.** Fifty-six of them test the harness rather than the
+**74 tests in 6 files.** Fifty-nine of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -327,6 +327,9 @@ is where a wrong quote would hide.
 | `test_a_server_started_after_the_library_is_fresh` | `fresh` |
 | `test_equal_timestamps_are_fresh_not_predates` | the exact boundary: the same second is not stale |
 | `test_an_unreadable_side_is_unknown_not_fresh` | three unreadable shapes all give `unknown` |
+| `test_the_fingerprint_covers_a_separately_built_module` | an `objstore/` edit moves the hash |
+| `test_an_objstore_edit_forces_a_second_build` | and forces a rebuild, end to end |
+| `test_make_cluster_leaves_nothing_behind_when_setup_fails` | a failed setup leaks no directory |
 
 ### The build/start ORDER, which is not a detail
 
@@ -340,6 +343,45 @@ which does `initdb` and starts the server. It surfaced as a flake — the first 
 after the alpha4 rebase gave 15 cluster-start errors and the second run passed.
 **A flake that clears on a second run is what a stale-binary defect looks like from
 outside.**
+
+### Two findings from @linuxhikerpm, both about infrastructure rather than coverage
+
+**The fingerprint read `src/` only.** `objstore/` is a separately built shared
+library the top-level Makefile reaches by recursion, so editing
+`objstore/module.c` left the hash unchanged and `build_once` certified a stale
+module as current:
+
+```
+objstore_before=2799803eaeac objstore_after=2799803eaeac
+builds=1 second=already-built
+```
+
+That is the same gap #898 closes in `test/lib.sh` — but this is an **independent
+implementation**, so rebasing #898 would not have fixed it. `source_build_dirs`
+now derives the set by the same rule the build follows: `src/`, plus any
+directory carrying its own Makefile. The hash also mixes in each file's path
+relative to the tree rather than its bare name, because with two build
+directories `src/module.c` and `objstore/module.c` would otherwise be
+interchangeable.
+
+**`make_cluster` leaked its tree when setup failed.** It created `root` with
+`mkdtemp` and then ran `initdb`, `start` and `is_ours` with no cleanup guard:
+
+```
+make_cluster_error=RuntimeError
+new_roots=1 leaked=['/tmp/pgc-pytest-777-h3phhtxc']
+```
+
+`conftest.py` cannot clean up after it, because `cluster, root = make_cluster(…)`
+never completes when the call raises. The handled `is_ours()` path leaked too —
+it stopped the cluster and left the directory. Every exit that is not a
+successful return now stops whatever was started and removes the tree, catching
+`BaseException` so an interrupt during `initdb` cleans up like an error does.
+
+Both are pinned structurally in the gate by
+`test/selftest/380-the-pytest-cluster-helpers.sh`, which requires the *glob*
+rather than the name — the only way to tell a derivation from a list that
+happens to be complete today.
 
 ### `unknown` never reads as `fresh`
 

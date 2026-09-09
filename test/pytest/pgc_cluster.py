@@ -367,17 +367,51 @@ def build_and_install(srcdir, pg_config, major, runner=None):
         )
 
 
+def source_build_dirs(srcdir):
+    """Every directory the build compiles in: src/, plus any directory that
+    carries its own Makefile.
+
+    DERIVED, NOT LISTED, and the same rule pgc_source_build_dirs uses in
+    test/lib.sh. Naming objstore/ here would fix today and fail the next time a
+    module is added; a directory with its own Makefile is what the top-level
+    Makefile recurses into, so that is the property to read.
+    """
+    srcdir = pathlib.Path(srcdir)
+    dirs = [srcdir / "src"]
+    for makefile in sorted(srcdir.glob("*/Makefile")):
+        if makefile.parent != srcdir / "src":
+            dirs.append(makefile.parent)
+    return dirs
+
+
 def source_fingerprint(srcdir):
     """A hash of everything a build reads, or None if the tree is unreadable.
 
-    Same input set as pgc_source_fingerprint in test/lib.sh: the C sources and
-    headers, the Makefile, the control file and the SQL scripts. Content, not
-    mtime, because a checkout or a branch switch rewrites mtimes without
-    changing what compiles, and `git stash` does the reverse.
+    The same input set as pgc_source_fingerprint in test/lib.sh: the C sources
+    and headers of EVERY directory the build compiles in, the Makefile, the
+    control file and the SQL scripts. Content, not mtime, because a checkout or
+    a branch switch rewrites mtimes without changing what compiles, and
+    `git stash` does the reverse.
+
+    THE FIRST VERSION READ src/ ONLY, and said in this docstring that it matched
+    lib.sh while it did not. objstore/ is a separately built shared library the
+    top-level Makefile reaches by recursion, so editing
+    objstore/columnar_objstore_module.c left the hash unchanged and build_once
+    certified a stale module as current (@linuxhikerpm, #897 review):
+
+        objstore_before=2799803eaeac objstore_after=2799803eaeac
+        builds=1 second=already-built
+
+    That is the same gap #898 closes in test/lib.sh. This is an INDEPENDENT
+    implementation, so rebasing #898 would not have fixed it -- which is the
+    argument for the two eventually becoming one, not two that agree today.
     """
     srcdir = pathlib.Path(srcdir)
+    paths = []
+    for d in source_build_dirs(srcdir):
+        paths += list(d.glob("*.c")) + list(d.glob("*.h"))
     paths = sorted(
-        list((srcdir / "src").glob("*.c")) + list((srcdir / "src").glob("*.h"))
+        paths
         + [p for p in (srcdir / "Makefile",) if p.exists()]
         + sorted(srcdir.glob("*.control")) + sorted(srcdir.glob("*.sql"))
     )
@@ -386,9 +420,12 @@ def source_fingerprint(srcdir):
     h = hashlib.md5()
     for path in paths:
         try:
-            h.update(path.name.encode())
+            # The path relative to the tree, not just the name: with two build
+            # directories, src/module.c and objstore/module.c are different
+            # inputs and a bare name would make them interchangeable.
+            h.update(str(path.relative_to(srcdir)).encode())
             h.update(path.read_bytes())
-        except OSError:
+        except (OSError, ValueError):
             return None
     return h.hexdigest()[:12]
 
@@ -460,20 +497,52 @@ def _asroot(argv, bindir, datadir, check=True):
 
 
 def make_cluster(pg_config, worker_id):
-    """Create and start a cluster for one worker. The caller stops it."""
+    """Create and start a cluster for one worker. The caller stops it.
+
+    THIS FUNCTION OWNS THE TREE UNTIL IT SUCCESSFULLY RETURNS. It did not, and
+    the failure mode is the one that matters least when things work and most
+    when they do not (@linuxhikerpm, #897 review): `root` came from `mkdtemp`
+    and then `Cluster()`, `initdb()`, `start()` and `is_ours()` ran with no
+    cleanup guard --
+
+        make_cluster_error=RuntimeError
+        new_roots=1 leaked=['/tmp/pgc-pytest-777-h3phhtxc']
+
+    -- and conftest.py cannot clean up after it, because the tuple assignment
+    `cluster, root = make_cluster(...)` never completes when the call raises.
+    The handled is_ours() path leaked too: it stopped the cluster and left the
+    directory.
+
+    So every exit that is not a successful return stops whatever was started and
+    removes the tree. A partially started cluster is stopped with `-m immediate`
+    inside `stop()`; failing to stop it must not mask the original error, so the
+    cleanup is itself guarded.
+    """
     slot = 0 if worker_id in (None, "master") else int(str(worker_id).lstrip("gw") or 0)
     port = pick_port(slot)
     root = pathlib.Path(tempfile.mkdtemp(prefix=f"pgc-pytest-{slot}-"))
-    os.chmod(root, 0o777)
-    datadir = root / "data"
-    datadir.mkdir()
-    cluster = Cluster(pg_config, worker_id, datadir, port)
-    cluster.initdb()
-    cluster.start()
-    if not cluster.is_ours():
-        cluster.stop()
-        raise RuntimeError(
-            f"the server on port {port} is not ours: its data_directory differs "
-            f"from {datadir}. Refusing to test against a foreign cluster."
-        )
-    return cluster, root
+    cluster = None
+    try:
+        os.chmod(root, 0o777)
+        datadir = root / "data"
+        datadir.mkdir()
+        cluster = Cluster(pg_config, worker_id, datadir, port)
+        cluster.initdb()
+        cluster.start()
+        if not cluster.is_ours():
+            raise RuntimeError(
+                f"the server on port {port} is not ours: its data_directory "
+                f"differs from {datadir}. Refusing to test against a foreign "
+                f"cluster."
+            )
+        return cluster, root
+    except BaseException:
+        # BaseException, not Exception: a KeyboardInterrupt during initdb leaks
+        # a datadir and a possibly-running postmaster exactly like an error does.
+        if cluster is not None:
+            try:
+                cluster.stop()
+            except Exception:
+                pass
+        shutil.rmtree(root, ignore_errors=True)
+        raise
