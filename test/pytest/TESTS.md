@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**74 tests in 6 files.** Fifty-nine of them test the harness rather than the
+**78 tests in 6 files.** Sixty-three of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -330,6 +330,10 @@ is where a wrong quote would hide.
 | `test_the_fingerprint_covers_a_separately_built_module` | an `objstore/` edit moves the hash |
 | `test_an_objstore_edit_forces_a_second_build` | and forces a rebuild, end to end |
 | `test_make_cluster_leaves_nothing_behind_when_setup_fails` | a failed setup leaks no directory |
+| `test_the_stamp_writer_reports_failure` | `\|\| true` made both controllers' warnings unreachable |
+| `test_two_installations_of_one_major_do_not_share_a_stamp` | the key names the installation, not just the major |
+| `test_moving_bytes_between_files_moves_the_shell_fingerprint` | the digest sees a repartition |
+| `test_the_two_fingerprint_implementations_cover_the_same_inputs` | **the two implementations move on the same edits** |
 
 ### The build/start ORDER, which is not a detail
 
@@ -343,6 +347,40 @@ which does `initdb` and starts the server. It surfaced as a flake — the first 
 after the alpha4 rebase gave 15 cluster-start errors and the second run passed.
 **A flake that clears on a second run is what a stale-binary defect looks like from
 outside.**
+
+### The twin of `selftest/340`, and the fourth instance of one defect
+
+These four drive the **shell** functions through `bash` rather than
+reimplementing them, and they are the pytest half of `test/selftest/340`'s stamp
+arms, owed under the twin rule and payable only once `test/pytest/` reached
+`main` with #897.
+
+The last one is the interesting one. `source_fingerprint` in `pgc_cluster.py`
+says in its own docstring that it uses *"the same input set as
+`pgc_source_fingerprint` in `test/lib.sh`"*. It did not. The shell hashes each
+build directory's `*.c`, `*.h` **and `Makefile`**; this side read only the
+sources, so editing `objstore/Makefile` — which changes how that module builds —
+moved one hash and not the other:
+
+```
+baseline                    shell=45be41a5c47b  python=bea88c7d79ca
+objstore/Makefile edited    shell=cfb8f4553041  python=bea88c7d79ca
+```
+
+`build_once` then certified a stale module as current. **That is
+@linuxhikerpm's finding one layer over**: they found the module's *sources*
+missing from this implementation, and the module's *Makefile* was still missing
+after that was fixed.
+
+The arm asserts the property the docstring always claimed, and not more: the two
+hashes are **not** required to be equal — they are different digests over the
+same files, used independently — but **the same edit must move both**. It walks
+five edits: a source, a module source, a module Makefile, the top-level
+Makefile, and the control file.
+
+Two implementations of one idea have now been separately wrong, separately
+fixed, and a third party had to find each. That is the argument for making them
+one.
 
 ### Two findings from @linuxhikerpm, both about infrastructure rather than coverage
 

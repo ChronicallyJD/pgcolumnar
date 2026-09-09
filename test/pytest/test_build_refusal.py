@@ -344,3 +344,114 @@ def test_make_cluster_leaves_nothing_behind_when_setup_fails(tmp_path, expect):
     leaked = sorted(set(glob.glob("/tmp/pgc-pytest-*")) - before)
     expect.text(", ".join(leaked) or "none", "none",
                 "a failed make_cluster leaves no directory behind")
+
+
+# ---------------------------------------------------------------------------
+# THE PYTEST TWIN of test/selftest/340's stamp arms, owed under jd's rule of
+# 2026-09-23... 2026-09-09: every test written twice. The .sh half could not
+# have one until test/pytest/ existed on main, which it now does (#897).
+#
+# These drive the SHELL functions through bash rather than reimplementing them,
+# for the reason that keeps being proved this week: a second implementation of
+# one idea drifts, and the drift is invisible until someone diffs the two.
+
+
+# The tree this corpus belongs to, derived the same way conftest.py derives it.
+SRCDIR = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _sh(srcdir, expr):
+    """Evaluate one lib.sh expression against a tree, and return its stdout."""
+    script = f'. "{SRCDIR}/test/lib.sh" || exit 1; {expr}'
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    return p.stdout.strip(), p.returncode
+
+
+def _tree_with_module(tmp_path, name):
+    t = tmp_path / name
+    (t / "src").mkdir(parents=True, exist_ok=True)
+    (t / "objstore").mkdir(parents=True, exist_ok=True)
+    (t / "src" / "a.c").write_text("int a;\n")
+    (t / "objstore" / "b.c").write_text("int b;\n")
+    (t / "objstore" / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "Makefile").write_text("all:\n\t$(MAKE) -C objstore\n")
+    (t / "pgcolumnar.control").write_text("x\n")
+    return t
+
+
+def test_the_stamp_writer_reports_failure(tmp_path, expect):
+    """`|| true` made both controllers' warning branches unreachable."""
+    out, rc = _sh(tmp_path, 'pgc_write_source_stamp "/proc/pgc-twin" "deadbeef"')
+    expect.num(rc, 1, "the writer reports failure on an unwritable target")
+    ok, rc2 = _sh(tmp_path, f'pgc_write_source_stamp "{tmp_path}/s" "cafebabe"')
+    expect.num(rc2, 0, "control: and succeeds on a writable one")
+
+
+def test_two_installations_of_one_major_do_not_share_a_stamp(tmp_path, expect):
+    """The stamp key must name the installation, not only the major."""
+    cfgs = []
+    for n in ("a", "b"):
+        c = tmp_path / f"pg_config.{n}"
+        c.write_text('#!/bin/sh\ncase "$1" in\n'
+                     '  --version) echo "PostgreSQL 18.4" ;;\n'
+                     f'  --pkglibdir) echo "/usr/local/pg18{n}/lib" ;;\nesac\n')
+        c.chmod(0o755)
+        cfgs.append(c)
+    a, _ = _sh(tmp_path, f'pgc_source_stamp_path /tree "{cfgs[0]}"')
+    b, _ = _sh(tmp_path, f'pgc_source_stamp_path /tree "{cfgs[1]}"')
+    expect.text(str(a != b), "True", "two prefixes of one major get different stamps")
+    a2, _ = _sh(tmp_path, f'pgc_source_stamp_path /tree "{cfgs[0]}"')
+    expect.text(a2, a, "control: the same pg_config twice gives the same path")
+
+
+def test_moving_bytes_between_files_moves_the_shell_fingerprint(tmp_path, expect):
+    """`xargs -0 cat | md5sum` could not see a repartition."""
+    t = _tree_with_module(tmp_path, "rp")
+    before, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+    expect.at_least(len(before), 12, "premise: the tree fingerprints at all")
+    (t / "src" / "a.c").write_text("int a;\nint b;\n")
+    (t / "objstore" / "b.c").write_text("")
+    after, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+    expect.text(str(after != before), "True",
+                "moving bytes between files moves the fingerprint")
+
+
+def test_the_two_fingerprint_implementations_cover_the_same_inputs(tmp_path, expect):
+    """THE PROPERTY THE TWO IMPLEMENTATIONS MUST SHARE, and the one they did not.
+
+    `source_fingerprint` in pgc_cluster.py says in its own docstring that it uses
+    "the same input set as pgc_source_fingerprint in test/lib.sh". It did not:
+    the shell hashes each build directory's `*.c`, `*.h` AND `Makefile`, while
+    the Python read only `*.c` and `*.h` there. Editing `objstore/Makefile` --
+    which changes how that module builds -- moved the shell hash and not the
+    Python one, so `build_once` certified a stale module as current:
+
+        baseline                    shell=45be41a5c47b  python=bea88c7d79ca
+        objstore/Makefile edited    shell=cfb8f4553041  python=bea88c7d79ca
+
+    That is @linuxhikerpm's finding one layer over: they found the .c files
+    missing from the Python side, and the Makefiles were still missing after it
+    was fixed.
+
+    The two hashes are NOT required to be equal -- they are different digests
+    over the same files, used independently. What is required is that the same
+    edit moves both, which is what "the same input set" means and all the
+    docstring ever claimed.
+    """
+    t = _tree_with_module(tmp_path, "cover")
+    for edit, path, body in (
+        ("a source file", t / "src" / "a.c", "int a = 2;\n"),
+        ("a module source", t / "objstore" / "b.c", "int b = 2;\n"),
+        ("a module Makefile", t / "objstore" / "Makefile", "all:\n\ttrue # x\n"),
+        ("the top-level Makefile", t / "Makefile", "all:\n\t$(MAKE) -C objstore # x\n"),
+        ("the control file", t / "pgcolumnar.control", "y\n"),
+    ):
+        sh_before, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+        py_before = source_fingerprint(t)
+        old = path.read_text()
+        path.write_text(body)
+        sh_after, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+        py_after = source_fingerprint(t)
+        path.write_text(old)
+        expect.text(f"{sh_after != sh_before} {py_after != py_before}", "True True",
+                    f"editing {edit} moves both fingerprints")
