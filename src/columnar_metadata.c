@@ -3541,6 +3541,132 @@ PgColumnarRecordProjectionDeclaration(Oid relid, const char *name,
 }
 
 /*
+ * rename_projection_declaration_array
+ *		Replace oldName in one text[] declaration field.
+ */
+static Datum
+rename_projection_declaration_array(Datum value, const char *oldName,
+									const char *newName, bool *changed)
+{
+	ArrayType  *arr = DatumGetArrayTypeP(value);
+	Datum	   *elems;
+	bool	   *nulls;
+	int			nelems;
+	int			i;
+
+	deconstruct_array(arr, TEXTOID, -1, false, TYPALIGN_INT,
+					  &elems, &nulls, &nelems);
+
+	for (i = 0; i < nelems; i++)
+	{
+		char	   *name;
+
+		if (nulls[i])
+			continue;
+
+		name = TextDatumGetCString(elems[i]);
+		if (strcmp(name, oldName) == 0)
+		{
+			elems[i] = CStringGetTextDatum(newName);
+			*changed = true;
+		}
+	}
+
+	/*
+	 * resolve_columns() rejects NULL elements before add_projection() records a
+	 * declaration. Preserve the bitmap anyway, so this helper remains safe if a
+	 * catalog row created outside that path contains one.
+	 */
+	return PointerGetDatum(construct_md_array(elems, nulls,
+											 ARR_NDIM(arr),
+											 ARR_DIMS(arr),
+											 ARR_LBOUND(arr),
+											 TEXTOID, -1, false,
+											 TYPALIGN_INT));
+}
+
+/*
+ * PgColumnarRenameProjectionDeclarationColumn
+ *		Carry ALTER TABLE ... RENAME COLUMN through dumpable declarations.
+ *
+ * The materialized projection stores attnums, so it follows a rename without
+ * any catalog change. The declaration deliberately stores names because
+ * pg_dump restores a table with newly assigned attnums. Leaving its old name
+ * behind therefore breaks rebuild_projections() after restore even though the
+ * live projection continued to work before the backup.
+ */
+void
+PgColumnarRenameProjectionDeclarationColumn(Oid relid, const char *oldName,
+											 const char *newName)
+{
+	Relation	rel;
+	TupleDesc	tupdesc;
+	ScanKeyData key[1];
+	SysScanDesc scan;
+	HeapTuple	tuple;
+
+	rel = open_columnar_table("projection_declaration", RowExclusiveLock);
+	tupdesc = RelationGetDescr(rel);
+	ScanKeyInit(&key[0], Anum_projection_declaration_rel, BTEqualStrategyNumber,
+				F_OIDEQ, ObjectIdGetDatum(relid));
+	scan = systable_beginscan(rel, InvalidOid, false, NULL, 1, key);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Datum		values[Natts_projection_declaration];
+		bool		nulls[Natts_projection_declaration];
+		bool		replace[Natts_projection_declaration];
+		bool		changed = false;
+		bool		isnull;
+		Datum		d;
+		HeapTuple	newTuple;
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, false, sizeof(nulls));
+		memset(replace, false, sizeof(replace));
+
+		d = heap_getattr(tuple, Anum_projection_declaration_columns,
+						 tupdesc, &isnull);
+		if (!isnull)
+		{
+			values[Anum_projection_declaration_columns - 1] =
+				rename_projection_declaration_array(d, oldName, newName,
+													&changed);
+			replace[Anum_projection_declaration_columns - 1] = changed;
+		}
+
+		d = heap_getattr(tuple, Anum_projection_declaration_sort_key,
+						 tupdesc, &isnull);
+		if (!isnull)
+		{
+			bool		sortChanged = false;
+
+			values[Anum_projection_declaration_sort_key - 1] =
+				rename_projection_declaration_array(d, oldName, newName,
+													&sortChanged);
+			replace[Anum_projection_declaration_sort_key - 1] = sortChanged;
+			changed = changed || sortChanged;
+		}
+
+		/*
+		 * This is an unindexed catalog seqscan updated in place. If it encounters
+		 * its updated tuple again, the old name is absent and this idempotent arm
+		 * prevents a second CatalogTupleUpdate.
+		 */
+		if (!changed)
+			continue;
+
+		newTuple = heap_modify_tuple(tuple, tupdesc, values, nulls, replace);
+		CatalogTupleUpdate(rel, &newTuple->t_self, newTuple);
+		heap_freetuple(newTuple);
+	}
+
+	systable_endscan(scan);
+	table_close(rel, RowExclusiveLock);
+	CommandCounterIncrement();
+}
+
+/*
  * PgColumnarDeleteProjectionDeclaration
  *		Forget the declaration for one projection. Called when it is dropped, and
  *		before recording a replacement.

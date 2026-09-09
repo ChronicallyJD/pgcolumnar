@@ -241,6 +241,7 @@ SUITES=(
 	planner_choice_quality
 	preimage_rewrite
 	projection_privilege
+	projection_rename_restore
 	projection_update
 	projections
 	pushdown_report
