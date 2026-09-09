@@ -142,6 +142,25 @@ to reorder a live table without an exclusive lock.
 SELECT pgcolumnar.cluster('events', 'customer_id', 'ts');
 ```
 
+### pgcolumnar.cluster_hilbert(tablename regclass, VARIADIC columns name[])
+
+The same reorganisation on the Hilbert curve instead of the Z-order one. Take it
+when the clustered columns carry range filters. The Hilbert index has no jumps at
+a bit boundary. Keys that are close in the data therefore stay close in storage,
+and a range filter reads fewer chunk groups. Everything else matches `cluster`:
+the same arguments, the same refusals, the same `AccessExclusiveLock`.
+
+```sql
+SELECT pgcolumnar.cluster_hilbert('events', 'customer_id', 'ts');
+```
+
+**The curve is sticky.** The table records which curve it was laid on, and
+`pgcolumnar.sort_status` reports it as `sorted_kind`. Once a table is on the
+Hilbert curve, plain `cluster` and `recluster` on the same key maintain that
+curve rather than converting it back. `vacuum_sorted` leaves the table alone,
+and the maintenance daemon re-clusters it with Hilbert. To switch curves, name
+the other verb, or recluster on a different key.
+
 ### pgcolumnar.recluster(tablename regclass, VARIADIC columns name[]) returns bigint
 
 The online counterpart to `cluster`. Re-establishes the same Z-order clustering
@@ -158,6 +177,20 @@ a fast no-op. The function records the key it last established. It returns 0
 without rewriting anything when the recorded key matches, the kind is Z-order,
 and the existing sorted run already covers every row group. This is what lets the
 maintenance daemon call it on a schedule without churning storage.
+
+On a table laid on the Hilbert curve over the key you name, `recluster`
+maintains that curve. It does not convert the table to Z-order.
+
+### pgcolumnar.recluster_hilbert(tablename regclass, VARIADIC columns name[]) returns bigint
+
+The online counterpart to `cluster_hilbert`, and the way to move a Z-ordered
+table onto the Hilbert curve. Same arguments, same lock and same return value as
+`recluster`; it re-establishes Hilbert clustering rather than Z-order, and
+records the curve it applied.
+
+```sql
+SELECT pgcolumnar.recluster_hilbert('events', 'customer_id', 'ts');
+```
 
 ### pgcolumnar.compact(tablename regclass) returns bigint
 

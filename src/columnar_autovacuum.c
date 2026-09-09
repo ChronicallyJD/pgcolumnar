@@ -55,6 +55,7 @@
 #include "utils/snapmgr.h"
 
 #include "columnar.h"
+#include "columnar_curve.h"
 
 /* GUCs (defined in columnar_tableam.c _PG_init, declared in columnar.h) */
 extern bool pgcolumnar_autovacuum;
@@ -234,6 +235,8 @@ av_maintain_one(const char *qualname)
 		bool		compactDue = false;
 		bool		reclusterDue = false;
 		char	   *sortKey = NULL;
+		char	   *sortedKind = NULL;
+		const char *reclusterVerb;
 		Oid			argtypes[3] = {REGCLASSOID, FLOAT8OID, FLOAT8OID};
 		Datum		argvals[3];
 		char		q[512];
@@ -245,10 +248,19 @@ av_maintain_one(const char *qualname)
 		if (SPI_connect() != SPI_OK_CONNECT)
 			elog(ERROR, "pgcolumnar autovacuum: SPI_connect failed");
 
+		/*
+		 * sorted_kind comes from sort_status, alongside the verdict, because the
+		 * daemon has to dispatch on THE CURVE THE TABLE IS ON (#889). Reading it
+		 * here rather than adding an output column to maintenance_due keeps that
+		 * function's signature -- and so the upgrade path -- unchanged; both are
+		 * SECURITY DEFINER reports over the same storage row, and this worker is
+		 * a superuser, so neither adds an access question.
+		 */
 		if (SPI_execute_with_args(
-				"SELECT compact_rewrite_due, recluster_due, "
-				"       array_to_string(sort_key, ',') "
-				"FROM pgcolumnar.maintenance_due($1, $2, $3)",
+				"SELECT m.compact_rewrite_due, m.recluster_due, "
+				"       array_to_string(m.sort_key, ','), s.sorted_kind "
+				"FROM pgcolumnar.maintenance_due($1, $2, $3) m, "
+				"     pgcolumnar.sort_status($1) s",
 				3, argtypes, argvals, NULL, true, 1) == SPI_OK_SELECT &&
 			SPI_processed == 1)
 		{
@@ -262,6 +274,9 @@ av_maintain_one(const char *qualname)
 			d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 3, &isnull);
 			if (!isnull)
 				sortKey = pstrdup(TextDatumGetCString(d));
+			d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 4, &isnull);
+			if (!isnull)
+				sortedKind = pstrdup(TextDatumGetCString(d));
 		}
 
 		/* compact_rewrite: online space reclaim (SUEL) */
@@ -283,12 +298,31 @@ av_maintain_one(const char *qualname)
 		 */
 		if (reclusterDue && sortKey != NULL && sortKey[0] != '\0')
 		{
+			/*
+			 * DISPATCH ON THE RECORDED KIND (#889). This line hard-coded
+			 * pgcolumnar.recluster, so a Hilbert table was reclustered by the
+			 * Z-order verb and came back relabelled 'zorder' -- the daemon
+			 * converting a layout the user chose, on a timer, with nothing in
+			 * the log to say so. Plain recluster() now maintains the recorded
+			 * curve on a matching key, so this is belt and braces; it is written
+			 * out anyway because "the daemon preserves the curve" should be
+			 * readable HERE, at the call the ruling is about, and not depend on
+			 * a rule two modules away.
+			 */
+			reclusterVerb =
+				(sortedKind != NULL &&
+				 strcmp(sortedKind, COLUMNAR_CURVE_HILBERT) == 0)
+				? "pgcolumnar.recluster_hilbert" : "pgcolumnar.recluster";
+
 			snprintf(q, sizeof(q),
-					 "SELECT pgcolumnar.recluster(%s, VARIADIC string_to_array(%s, ',')::name[])",
+					 "SELECT %s(%s, VARIADIC string_to_array(%s, ',')::name[])",
+					 reclusterVerb,
 					 quote_literal_cstr(qualname),
 					 quote_literal_cstr(sortKey));
 			(void) SPI_execute(q, false, 0);
-			elog(LOG, "pgcolumnar autovacuum: recluster %s by (%s)", qualname, sortKey);
+			elog(LOG, "pgcolumnar autovacuum: recluster %s by (%s) on the %s curve",
+				 qualname, sortKey,
+				 sortedKind != NULL ? sortedKind : COLUMNAR_CURVE_ZORDER);
 		}
 
 		SPI_finish();
