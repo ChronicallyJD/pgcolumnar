@@ -222,6 +222,17 @@ pgc_setup() {
 			echo "       (refusing to report checks against the previously installed .so)" >&2
 			exit 1
 		fi
+
+		# THIS RUN IS THE CONTROLLER for whatever follows in this batch: it built
+		# and installed, so record what the binary was built from. The stamp is
+		# written HERE and nowhere else. An earlier revision wrote it in the
+		# skip-build branch instead, which made the check tautological -- every run
+		# recorded the source it was about to compare against, so a suite measuring
+		# an edited tree reported "matches the binary under test". My own red arm
+		# caught it, which is the only reason this comment exists.
+		pgc_write_source_stamp \
+			"$(pgc_source_stamp_path "$PGC_SRCDIR" "$PGC_MAJOR")" \
+			"$(pgc_source_fingerprint "$PGC_SRCDIR")"
 	else
 		# Named because the variable is not what it says. It reads as "skip the
 		# build" and means "skip the build AND the install, and test whatever is
@@ -233,6 +244,29 @@ pgc_setup() {
 	fi
 
 	pgc_so_line
+
+	# And verify it, whether this run built or skipped. A skipped build is exactly
+	# when the binary can be older than the source.
+	_pgc_fresh_recorded="$(pgc_read_source_stamp \
+		"$(pgc_source_stamp_path "$PGC_SRCDIR" "$PGC_MAJOR")")"
+	_pgc_fresh_current="$(pgc_source_fingerprint "$PGC_SRCDIR")"
+	case "$(pgc_freshness_verdict "$_pgc_fresh_recorded" "$_pgc_fresh_current")" in
+		fresh)
+			echo "-- source: $_pgc_fresh_current matches the binary under test"
+			;;
+		stale)
+			echo "FATAL: the binary under test was not built from this source" >&2
+			echo "       source now $_pgc_fresh_current, binary built from $_pgc_fresh_recorded" >&2
+			echo "       (refusing to report checks about code that is not installed)" >&2
+			exit 1
+			;;
+		unknown)
+			# Not a failure: a person who ran make install by hand has no stamp, and
+			# refusing would break a documented workflow. Said plainly so the reader
+			# knows which question was not answered.
+			echo "-- source: $_pgc_fresh_current, freshness UNVERIFIED (no stamp for major $PGC_MAJOR)"
+			;;
+	esac
 
 	echo "-- initdb"
 	pgc_pg "initdb -D '$PGC_PGDATA' -A trust" >/dev/null 2>&1
@@ -342,6 +376,33 @@ pgc_setup() {
 	# "already exists" looks exactly like a suite that landed on someone else's
 	# cluster. Removing the noise is most of the value here; failing loudly on
 	# the impossible case is the rest.
+	# The server is up, so now ask whether it is RUNNING the binary we verified on
+	# disk. A cp is not enough: shared_preload_libraries maps the .so at start.
+	{
+		local _so_path _so_epoch _pm_epoch
+		_so_path="$("$PGC_PG_CONFIG" --pkglibdir)/pgcolumnar.so"
+		_so_epoch="$(stat -c %Y "$_so_path" 2>/dev/null || echo '')"
+		_pm_epoch="$(psql_admin_scalar \
+			"SELECT floor(extract(epoch from pg_postmaster_start_time()))::bigint;" \
+			2>/dev/null | tr -dc '0-9')"
+		case "$(pgc_running_binary_verdict "$_so_epoch" "$_pm_epoch")" in
+			fresh)
+				echo "-- server: started after the binary was installed"
+				;;
+			predates)
+				echo "FATAL: this server was already running when the binary changed" >&2
+				echo "       .so installed at epoch $_so_epoch, postmaster started $_pm_epoch" >&2
+				echo "       shared_preload_libraries maps the library at start, so the" >&2
+				echo "       backends are executing older code than the file on disk." >&2
+				echo "       Restart the cluster; a reinstall alone does not reload it." >&2
+				exit 1
+				;;
+			unknown)
+				echo "-- server: could not compare binary and postmaster timestamps"
+				;;
+		esac
+	}
+
 	{
 		local _exists
 
@@ -524,6 +585,92 @@ pgc_build_needs_clean() {
 # backslash inside single quotes -- which emits the four bytes `1 9 \ n`. That
 # passed unnoticed because the reader does tr -dc '0-9' and strips the junk; a
 # direct comparison against the major failed. Found in review, not by a check.
+# ---- is the binary under test built from the source in this tree? -----------
+#
+# THE GAP THIS CLOSES, AND WHAT ALREADY COVERED THE REST.
+#
+# selftest 110 compares the INSTALLED .so against the one built in this tree, so a
+# missed install and a foreign overwrite are already caught. Neither that check nor
+# pgc_so_line can see the case where BOTH copies agree with each other and both are
+# stale against edited source: nothing in the harness derives anything from the
+# source text. That is the hole, and it is the one PGC_SKIP_BUILD opens widest,
+# because its whole purpose is not to rebuild.
+#
+# Measured cost of the miss: a probe run under PGC_SKIP_BUILD=1 that asserted its fix
+# was "present" by grepping the SOURCE while measuring a .so another worktree had
+# installed. The control failed and the failure read as a product defect.
+#
+# THE CONTROLLER SHAPE. Whoever builds records a fingerprint of the build inputs
+# beside the install. Every suite in that batch recomputes the fingerprint and
+# compares. One hash per suite, one build per batch, and a stale binary can no longer
+# report a plausible list of checks.
+#
+# pgc_freshness_verdict is a pure function of two strings so it can be tested without
+# a build, the same reason pgc_build_needs_clean is.
+
+# The build inputs, hashed. Sources, headers, the Makefile, the control file and the
+# SQL that ships: anything whose change should invalidate a binary. Sorted, because a
+# directory listing is not ordered and an unordered input makes the hash unstable.
+pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash
+	local dir="${1:-.}"
+	{
+		find "$dir/src" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \) -print0 2>/dev/null
+		find "$dir" -maxdepth 1 -type f \( -name 'Makefile' -o -name '*.control' \
+			-o -name '*.sql' \) -print0 2>/dev/null
+	} | sort -z | xargs -0 cat 2>/dev/null | md5sum | cut -c1-12
+}
+
+# fresh   the binary was built from this source
+# stale   it was not, and every check that follows would be about the wrong code
+# unknown nobody in this batch recorded a fingerprint, so this cannot be answered
+pgc_freshness_verdict() {	# pgc_freshness_verdict RECORDED CURRENT -> verdict
+	local recorded="${1:-}" current="${2:-}"
+	[ -z "$recorded" ] && { echo unknown; return; }
+	[ -z "$current" ] && { echo unknown; return; }
+	[ "$recorded" = "$current" ] && echo fresh || echo stale
+}
+
+# AND A cp IS NOT ENOUGH: THE POSTMASTER MAPS THE .so AT START.
+#
+# shared_preload_libraries='pgcolumnar' means the library is loaded once, when the
+# postmaster starts. `make install` over a running instance changes the file and
+# nothing else: every backend keeps executing the code it already mapped. So a
+# binary can match the source exactly and the server can still be running something
+# older, which the source check above cannot see.
+#
+# The harness normally escapes this because each suite initdb's and starts its own
+# cluster after the install. It stops escaping it the moment a cluster outlives an
+# install: a persistent cluster reused between runs, a bench rig left up, or a second
+# batch installing into a prefix whose server is already serving.
+#
+# So compare when the binary was installed against when the server started. A
+# postmaster older than the binary has the old code mapped, whatever the file says.
+#
+# fresh     the server started after the binary was installed
+# predates  the binary is newer than the server, so the server has older code
+# unknown   one of the two timestamps could not be read
+pgc_running_binary_verdict() {	# pgc_running_binary_verdict SO_EPOCH PM_EPOCH
+	local so="${1:-}" pm="${2:-}"
+	case "$so" in '' | *[!0-9]*) echo unknown; return ;; esac
+	case "$pm" in '' | *[!0-9]*) echo unknown; return ;; esac
+	[ "$pm" -ge "$so" ] && echo fresh || echo predates
+}
+
+pgc_write_source_stamp() {	# pgc_write_source_stamp FILE HASH
+	printf '%s\n' "${2:-}" > "${1:-/dev/null}" 2>/dev/null || true
+}
+
+pgc_read_source_stamp() {	# pgc_read_source_stamp FILE -> hash or empty
+	[ -r "${1:-}" ] || { echo ""; return; }
+	tr -dc 'a-f0-9' < "$1" | head -c 12
+}
+
+# The stamp lives beside the tree that built the binary, keyed by major, because one
+# tree installs into several prefixes and each has its own binary.
+pgc_source_stamp_path() {	# pgc_source_stamp_path DIR MAJOR
+	printf '%s/.pgc_source_stamp.%s\n' "${1:-.}" "${2:-0}"
+}
+
 pgc_write_build_stamp() {
 	printf '%s\n' "${2:-}" > "${1:-/dev/null}" 2>/dev/null || true
 }
