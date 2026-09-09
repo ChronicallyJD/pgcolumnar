@@ -26,13 +26,17 @@ to b20ad7e388e0, and the whole delta is thirty lines in one
 above still describes the current head. Verified here rather than taken from the
 push notice.
 
-ONE THING THIS FILE CANNOT SATISFY ON ITS OWN. #897 at b785795 adds
-`test_docs_cover_the_corpus.py`, a gate requiring every pytest file and every
-`def test_` to be named in `test/pytest/TESTS.md`. With this file present and
-undocumented that gate is RED -- measured, 2 failed, `got '(66, 6)' want
-'(78, 7)'`. TESTS.md lives on #897's branch, so the entry cannot be written from
-here; it lands when the two branches meet. That is a real dependency and not an
-oversight.
+#897 HAS SINCE MERGED, as `6364e22`, so this file is no longer blocked and the
+corpus gate it depends on is now satisfiable from one tree. It is documented in
+`test/pytest/TESTS.md` section 9, and `test/selftest/350` checks that document
+against disk -- with this file undocumented the gate was RED, measured, `got
+[74 6] want [86 7]`. Those four integers are what the gate said THEN, on a tree
+holding #897 and this file and nothing else; #903 has since added four harness
+tests, so the same gate now reads 90 in 7. The old pair is left as the record of
+the run rather than regenerated, for the reason a corrected number dies when the
+summary is rebuilt from the pre-fix text: a count belongs to the revision it
+counted. The SHA pins above are kept on the same footing -- the record of what was
+tested when, not a live dependency.
 identical to the bash suite's, from a different harness and a different way of
 reading the counters -- 241/118, 351/209, 588/402, 1624/1313, and z/h of
 2.0424, 1.6794, 1.4627, 1.2369.
