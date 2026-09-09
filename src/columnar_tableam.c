@@ -2774,29 +2774,43 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 		foreach(lc, pgcolumnar_rewritten_relids)
 			targets = lappend_oid(targets, lfirst_oid(lc));
 
-		if (IsA(parsetree, TruncateStmt))
+		/*
+		 * TRUNCATE needs nothing from the statement itself.
+		 *
+		 * It reaches the table-AM callback for every relation it rewrites,
+		 * including the ones it never names -- a CASCADE, and every partition of a
+		 * named parent -- so the recorded list already holds them. Walking the
+		 * statement's own relation list on top of that was measured to add nothing:
+		 * instrumented across the 80 checks in test/projection_rewrite.sh it fired
+		 * twice, both times for a NON-columnar parent in a cascade arm, where the
+		 * repair is a no-op. Deleting it left all 80 green (@jdatcmd, #892 review).
+		 *
+		 * A rewriting ALTER is the opposite case, and the reason this branch exists
+		 * at all: it reaches the callback as the TRANSIENT relation make_new_heap
+		 * builds, so nothing is recorded for the user's relation and the statement's
+		 * own name is the only route to it.
+		 */
+		if (!IsA(parsetree, TruncateStmt))
 		{
-			foreach(lc, ((TruncateStmt *) parsetree)->relations)
-			{
-				RangeVar   *rv = (RangeVar *) lfirst(lc);
-				Oid			relid = RangeVarGetRelid(rv, NoLock, true);
-
-				if (OidIsValid(relid) && !list_member_oid(targets, relid))
-					targets = lappend_oid(targets, relid);
-			}
-		}
-		else
-		{
-			AlterTableStmt *ats = (AlterTableStmt *) parsetree;
-			Oid			relid = ats->relation ?
-				RangeVarGetRelid(ats->relation, NoLock, true) : InvalidOid;
+			RangeVar   *rv;
+			Oid			relid;
 
 			/*
-			 * The named relation as well as the recorded ones. A rewriting ALTER
-			 * reaches the callback on a transient relation, so nothing is recorded
-			 * for it and the statement's own name is the only route to the
-			 * relation that needs repairing.
+			 * Dispatch on the node type rather than casting to AlterTableStmt for
+			 * both. The two structs happen to place `relation` at the same offset
+			 * -- measured as 8 on PG 15 through 19, because NodeTag is 4 bytes and
+			 * RefreshMatViewStmt's two bools fit in its tail padding -- so a single
+			 * cast reads the right field today. It does so by coincidence of
+			 * layout, not by any rule, and one added field in either struct turns
+			 * it into a wrong pointer with no diagnostic.
 			 */
+			if (IsA(parsetree, RefreshMatViewStmt))
+				rv = ((RefreshMatViewStmt *) parsetree)->relation;
+			else
+				rv = ((AlterTableStmt *) parsetree)->relation;
+
+			relid = rv ? RangeVarGetRelid(rv, NoLock, true) : InvalidOid;
+
 			if (OidIsValid(relid) && !list_member_oid(targets, relid))
 				targets = lappend_oid(targets, relid);
 		}

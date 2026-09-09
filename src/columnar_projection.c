@@ -32,6 +32,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/ruleutils.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
@@ -349,6 +350,23 @@ pgcolumnar_add_projection(PG_FUNCTION_ARGS)
 }
 
 /*
+ * projection_hint_relname
+ *		The relation name a HINT can be pasted from: schema-qualified and quoted.
+ *
+ * get_rel_name() alone is unqualified, and a HINT that names a relation outside
+ * the reader's search_path tells them to run a statement that fails. Measured on
+ * 18.4: a stale declaration on a table in schema "s" produced
+ * HINT: ... pgcolumnar.rebuild_projections('t'), and running exactly that gave
+ * ERROR: relation "t" does not exist (@jdatcmd, #892 review).
+ */
+static char *
+projection_hint_relname(Oid relid)
+{
+	return quote_qualified_identifier(get_namespace_name(get_rel_namespace(relid)),
+									  get_rel_name(relid));
+}
+
+/*
  * PgColumnarRerecordProjectionsAfterRewrite
  *		Re-materialise this relation's declared projections under whatever
  *		storage id it has NOW (#876, #887).
@@ -493,10 +511,20 @@ PgColumnarRerecordProjectionsAfterRewrite(Oid relid)
 			ereport(WARNING,
 					(errcode(ERRCODE_UNDEFINED_COLUMN),
 					 errmsg("could not restore projection \"%s\" on \"%s\" after rewrite",
-							d->name, get_rel_name(relid)),
+							d->name, projection_hint_relname(relid)),
 					 errdetail("Its declaration names a column the table no longer has."),
-					 errhint("Correct the declaration, then call pgcolumnar.rebuild_projections(%s).",
-							 quote_literal_cstr(get_rel_name(relid)))));
+	/*
+	 * add_projection, not "correct the declaration": there is no operation that
+	 * edits a declaration in place, and the two obvious alternatives were measured
+	 * to fail here. rebuild_projections() re-runs the same stale declaration and
+	 * raises the same missing-column error, and drop_projection() refuses with
+	 * 42704 because the projection row is exactly what is absent. add_projection()
+	 * with the same name replaces the declaration and materialises it: measured,
+	 * it restored all 200 rows on a table whose declaration named a dropped column.
+	 */
+					 errhint("Call pgcolumnar.add_projection(%s, %s, ...) again, naming columns the table has. That replaces the declaration.",
+							 quote_literal_cstr(projection_hint_relname(relid)),
+							 quote_literal_cstr(d->name))));
 			continue;
 		}
 
@@ -537,10 +565,10 @@ PgColumnarRerecordProjectionsAfterRewrite(Oid relid)
 				ereport(WARNING,
 						(errcode(edata->sqlerrcode),
 						 errmsg("could not restore projection \"%s\" on \"%s\" after rewrite",
-								d->name, get_rel_name(relid)),
+								d->name, projection_hint_relname(relid)),
 						 errdetail("%s", edata->message),
 						 errhint("Call pgcolumnar.rebuild_projections(%s) once the cause is fixed.",
-								 quote_literal_cstr(get_rel_name(relid)))));
+								 quote_literal_cstr(projection_hint_relname(relid)))));
 				FreeErrorData(edata);
 			}
 			PG_END_TRY();
