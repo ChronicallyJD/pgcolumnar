@@ -163,6 +163,25 @@ because it describes the run rather than the plan.
 A **suite** is `test/<name>.sh`. It stands up its own cluster, runs **checks**,
 and ends with `pgc_summary`.
 
+**Every new test is written twice: once as a `.sh` suite and once as a pytest
+test, in the same change.** Owner's rule, 2026-09-09. Not "ported later" and not
+"one or the other" -- a test that exists in only one harness is not finished.
+
+The reason is the reason #432 exists. The bash harness carries 4,429 anchored
+assertions and is the gate; the pytest harness returns typed results and refuses
+shapes bash passes silently. Writing new tests in only the old one grows the
+port debt with every change, and writing them in only the new one puts a property
+outside the gate. Writing both keeps the two harnesses honest about each other:
+where they disagree, one of them is wrong, and that is worth finding at the time
+rather than during a port.
+
+**A sequencing note that will stop being true.** As of 2026-09-09 the pytest
+harness is PR #897 and is not on `main`, so this rule cannot be satisfied for a
+test written today. Until it lands, write the `.sh` suite, write the pytest twin
+alongside it in the same change, and say in both headers that the twin is blocked
+on #897. Do not let "the harness is not merged yet" become a standing excuse: the
+twin is written either way, so the debt is never deferred, only its execution is.
+
 - Register every suite in `SUITES` in `test/run_all_versions.sh`. That array is
   **one name per line and sorted**; insert in sorted position, never at the end.
   `harness_selftest` fails if the order decays.
