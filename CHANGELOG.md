@@ -260,7 +260,8 @@ true until the next version shipped.
   `int4` `1` and a `text` `'1'` are the same string to a bash oracle.
 
   This ports ONE bash suite. `test/` carries 4,429 anchored assertions across 256
-  suites, so this is 0.18% of them and is not coverage. The layer is the point.
+  suites, so this is 0.18% of them and is not coverage. The layer is the point:
+  62 tests in 6 files, of which 47 test the harness rather than the product.
 
   A pytest run fails open in several ways this project has already been bitten by:
   a test that asserts nothing passes, a filter that selects nothing exits 0, and a
@@ -272,11 +273,38 @@ true until the next version shipped.
   `xfail_strict` is on, and `--pgc-expect-tests N` asserts the run's own shape and
   refuses `N = 0`.
 
-  Every refusal has a red test in `test_layer.py` that runs pytest inside pytest
-  and asserts on the INNER run's outcome, which is what proves a guard refuses
-  rather than assuming it. Each records the bare-pytest behaviour it exists to
-  stop; every one of those measurements exited 0. Four of the ten are positive
-  controls, so a guard that starts rejecting good tests reddens there first.
+  Every refusal has a red test that runs pytest inside pytest and asserts on the
+  INNER run's outcome, which is what proves a guard refuses rather than assuming
+  it. Each records the bare-pytest behaviour it exists to stop; every one of those
+  measurements exited 0. Positive controls sit beside the guards, so a guard that
+  starts rejecting good tests reddens there first.
+
+  **Asserting that an inner run failed is not asserting that a named guard fired.**
+  A census that neutered each guard alone found most of them deletable with
+  `test_layer.py` still green, from two causes: several were never driven at all,
+  and several are subsumed by a neighbouring guard, so the inner run fails either
+  way and an outcome-only assertion cannot tell which fired.
+  `test_guards_pinned.py` pins each refusal to its own MESSAGE through
+  `expect.refusal`, which refuses to be called with no pattern -- the same move as
+  asserting on a SQLSTATE rather than on prose.
+
+  **The corpus builds and installs before it measures anything.** It did not at
+  first: with `#error` appended to a source file and nothing rebuilt, the run
+  reported 25 passed and exit 0 while the bash suite reported `FATAL: the build
+  failed` and exit 1. The refusal now comes from `pgc_build_and_install` in
+  `test/lib.sh`, driven from Python so there is one implementation rather than
+  two that can drift, and it runs BEFORE the cluster starts --
+  `shared_preload_libraries` maps the library at postmaster start, so a cluster
+  started before the install keeps the old one mapped for its whole life.
+
+  **`test/pytest/TESTS.md` is checked rather than trusted.** It documents every
+  test in the corpus, and it went stale inside a single rework: 29 of 54 tests
+  were named nowhere in it while its header still claimed 25. A guard now requires
+  every file and every test to be named there, and requires the totals it states
+  to be the totals on disk -- a document can name every test and still miscount
+  them. It is written twice, as `test/selftest/350-the-pytest-corpus-must-be.sh`
+  and `test/pytest/test_docs_cover_the_corpus.py`; only the first runs in the
+  gate, and it reddened on its twin's arrival before this entry was written.
 
   Not registered in `test/run_all_versions.sh`. That would add a `psycopg` build
   dependency to every CI leg for 0.18% of the assertions; `test/pytest/README.md`
