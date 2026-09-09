@@ -17,6 +17,7 @@ OBJS = \
 	src/columnar_customscan.o \
 	src/columnar_vector.o \
 	src/columnar_vacuum.o \
+	src/columnar_curve.o \
 	src/columnar_unique.o \
 	src/columnar_row_lock.o \
 	src/columnar_arrow.o \
