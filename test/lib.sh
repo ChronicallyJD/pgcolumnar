@@ -294,6 +294,13 @@ pgc_setup() {
 			echo "FATAL: the binary under test was not built from this source" >&2
 			echo "       source now $_pgc_fresh_current, binary built from $_pgc_fresh_recorded" >&2
 			echo "       (refusing to report checks about code that is not installed)" >&2
+			# WHAT IT HASHED, not just what it hashed TO. Two CI failures reported
+			# this pair of hashes and nothing else, identically, across two
+			# branches and two majors -- which made the second occurrence another
+			# sample rather than an answer. Twelve characters cannot name a file;
+			# the manifest can, and a diff against the next occurrence's manifest
+			# says whether something appeared, vanished or changed.
+			pgc_freshness_report "$PGC_SRCDIR" >&2
 			exit 1
 			;;
 		unknown)
@@ -648,9 +655,32 @@ pgc_source_build_dirs() {	# pgc_source_build_dirs DIR -> dirs
 # A value no md5sum digest can be, so it cannot be confused with one.
 _pgc_fp_failed='PGC_FINGERPRINT_DIGEST_FAILED'
 
-pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash, or EMPTY if it could not be computed
+# What the fingerprint was taken over, for the FATAL path. A FUNCTION rather than
+# three lines inline, so an arm can drive it: a dump nobody can run is a dump
+# nobody knows is empty. Two CI failures printed only the pair of hashes, and the
+# second occurrence was therefore another sample rather than an answer.
+pgc_freshness_report() {	# pgc_freshness_report DIR -> the manifest, annotated
+	local dir="${1:-.}" n
+	n="$(pgc_source_manifest "$dir" | wc -l)"
+	echo "       the manifest this fingerprint was taken over:"
+	if [ "$n" -eq 0 ]; then
+		echo "       | (empty -- nothing under $dir matched, which is itself the finding)"
+	else
+		pgc_source_manifest "$dir" | sed 's/^/       | /'
+	fi
+	echo "       ($n files, under $dir)"
+}
+
+pgc_source_manifest() {	# pgc_source_manifest DIR -> "relpath digest" per file, or EMPTY
 	local dir="${1:-.}"
-	local d out
+	local d
+	# THE MANIFEST IS THE THING; THE FINGERPRINT IS ITS HASH.
+	#
+	# Twelve hex characters cannot say which file moved. Two CI failures reported
+	# `source now a735c673b129, binary built from 6d122a7158d5` and nothing else,
+	# identically, across two branches and two majors -- so a bare hash gave us a
+	# second sample of a mystery rather than an answer. The controller's FATAL
+	# path prints this, and a diff of two manifests names the file.
 	# ONE TREE HASHES ONE WAY, HOWEVER THE PATH IS SPELLED. `${f#"$dir"/}` below
 	# strips a prefix that has to match character for character, so `$dir` with a
 	# trailing slash, or with a `/./` segment, or reached through a symlink, put
@@ -667,7 +697,7 @@ pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash, or EMPTY if it 
 	# no special case: nothing is found under it, `out` is empty, and the guard
 	# below returns no fingerprint.
 	dir="$(pgc_norm_path "$dir")"
-	out="$({
+	{
 		while IFS= read -r d; do
 			[ -n "$d" ] || continue
 			find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \
@@ -714,7 +744,12 @@ pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash, or EMPTY if it 
 		_pgc_fp_h="$(md5sum < "$_pgc_fp_f" 2>/dev/null | cut -d' ' -f1)"
 		[ -n "$_pgc_fp_h" ] || { printf '%s\n' "$_pgc_fp_failed"; break; }
 		printf '%s %s\n' "${_pgc_fp_f#"$dir"/}" "$_pgc_fp_h"
-	done)"
+	done
+}
+
+pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash, or EMPTY if it could not be computed
+	local out
+	out="$(pgc_source_manifest "${1:-.}")"
 	# Empty rather than a hash, which pgc_freshness_verdict turns into `unknown`
 	# and the controller prints as "freshness UNVERIFIED" -- already designed, and
 	# already deliberately not a failure. The asymmetry is the whole argument: a
@@ -723,8 +758,10 @@ pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash, or EMPTY if it 
 	# controller exists to prevent.
 	case "$out" in *"$_pgc_fp_failed"*) printf ''; return 0 ;; esac
 	# A tree with no hashable file cannot be verified, so it gets no fingerprint
-	# either. This also keeps the line below off an empty `out`, whose trailing
-	# newline would otherwise be the ONLY input to md5sum.
+	# either -- and md5 of an empty stream is a stable, comparable value that
+	# would have made two empty trees "match". Observed rather than hypothetical:
+	# under process pressure the whole manifest came back empty and the old code
+	# returned md5("") = d41d8cd98f00 in 11 runs of 20 (@OffgridwithJD).
 	[ -n "$out" ] || { printf ''; return 0; }
 	# THE TRAILING NEWLINE IS LOAD-BEARING. The old code piped the loop straight
 	# into md5sum, so the stream md5sum saw ended with one; `$(...)` strips it.

@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**84 tests in 6 files.** Sixty-nine of them test the harness rather than the
+**89 tests in 6 files.** Seventy-four of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -495,6 +495,38 @@ At `ulimit -u 40` the old function returns a confident answer about nothing in 1
 runs of 20. The guard covers it structurally rather than statistically: a
 non-empty `out` has at least one line, so `md5("")` is not a reachable return
 value.
+
+### When it refuses, it says what it hashed
+
+Six more tests, added after two CI failures reported *the same pair of hashes and
+nothing else* — `source now a735c673b129, binary built from 6d122a7158d5`,
+identically, across two branches, two majors and two build directories, with the
+fingerprint fix present in one of them. **A bare hash made the second occurrence
+another sample rather than an answer.**
+
+So the manifest is a function in its own right, `pgc_source_fingerprint` is
+defined as its hash — the two cannot drift apart, and one test asserts exactly
+that — and the FATAL path prints it through `pgc_freshness_report`.
+
+`test_an_added_file_is_named_rather_than_merely_changing_the_hash` is the arm
+aimed at the open question. An addition is the only class that explains one
+deviant value from two different build directories, because the manifest carries
+the path RELATIVE to the tree: the same file appearing under `matrix-17` and
+`matrix-18` contributes the same line and therefore the same hash. The test
+requires the diff to name the file rather than report that something changed.
+
+`test_the_manifest_names_what_the_fingerprint_hashed` pins the shape of each line
+— a tree-relative path and a 32-character digest, never an absolute path, because
+an absolute path in the digest is the spelling defect returning by another route.
+`test_the_fingerprint_is_the_hash_of_the_manifest` is the arm that keeps the two
+from drifting, and `test_an_empty_manifest_is_reported_as_empty_not_as_silence`
+covers the case the report exists for.
+
+`test_the_fatal_report_can_be_run_rather_than_grepped_for` exists because the
+alternative was asserting that the source calls the function, which is the shape
+this suite refuses everywhere else. The report is a function so an arm can drive
+it, and the empty case says `(empty -- nothing under ...)` rather than printing
+nothing, because a silent empty dump reads as *the manifest was fine*.
 
 **What is still not guarded**, named here rather than left for someone to find: a
 TRUNCATED manifest — `find` returning fewer files rather than none — would produce

@@ -625,3 +625,87 @@ check "a tree with no hashable file yields no fingerprint" \
 	"$([ -z "$(pgc_source_fingerprint "$_bc_empty")" ] && echo empty || echo hashed)" "empty"
 
 unset _bc _bc_before _bc_empty
+
+# ---------------------------------------------------------------------------
+# WHEN IT REFUSES, IT MUST SAY WHAT IT HASHED.
+#
+# Two CI failures reported the same pair of hashes and nothing else:
+#
+#     source now a735c673b129, binary built from 6d122a7158d5
+#
+# Identical across #902/PG18/iceberg_rest and #909/PG17/iceberg_rest_server --
+# two branches, two majors, two build directories, and one of the two runs
+# carried the fingerprint fix. That rules out a transient digest failure (which
+# gives a different wrong hash every time) and a path-dependent one (two build
+# directories would give two values). It is a deterministic, content-derived
+# state, and neither agent has reproduced it locally.
+#
+# Twelve characters cannot say which file moved. A manifest can, and the
+# difference between "the hash changed" and "objstore/x.c appeared" is the
+# difference between another sample and an answer. So the manifest is a function
+# in its own right, the fingerprint is its hash, and the FATAL path prints it.
+
+_mf="$(mktemp -d "${TMPDIR:-/tmp}/pgc-manifest.XXXXXX")"
+mkdir -p "$_mf/src" "$_mf/objstore"
+printf 'int a;\n'       > "$_mf/src/a.c"
+printf 'void h(void);\n'> "$_mf/src/h.h"
+printf 'int m;\n'       > "$_mf/objstore/m.c"
+printf 'all:\n\ttrue\n' > "$_mf/objstore/Makefile"
+printf 'all:\n\ttrue\n' > "$_mf/Makefile"
+printf 'x\n'            > "$_mf/pgcolumnar.control"
+
+_mf_lines="$(pgc_source_manifest "$_mf" | wc -l)"
+check "the manifest names every file the fingerprint hashes" "$_mf_lines" "6"
+
+check "each manifest line is a tree-relative path and a digest" \
+	"$(pgc_source_manifest "$_mf" | grep -cE '^[A-Za-z0-9_./-]+ [0-9a-f]{32}$')" "6"
+
+check "the manifest is tree-relative, never absolute" \
+	"$(pgc_source_manifest "$_mf" | grep -c '^/')" "0"
+
+# The fingerprint IS the manifest's hash, so the two cannot drift apart.
+check "the fingerprint is the hash of the manifest" \
+	"$(pgc_source_fingerprint "$_mf")" \
+	"$(pgc_source_manifest "$_mf" | md5sum | cut -c1-12)"
+
+# THE ARM THAT MATTERS: an ADDED file is named, not merely counted. This is the
+# class the two CI failures fall into and the one a bare hash cannot report.
+printf 'int zz;\n' > "$_mf/src/zz_appeared.c"
+check "an added file appears in the manifest by name" \
+	"$(pgc_source_manifest "$_mf" | grep -c '^src/zz_appeared.c ')" "1"
+check "and comparing two manifests names it rather than saying 'changed'" \
+	"$(diff <(pgc_source_manifest "$_mf" | grep -v zz_appeared) \
+		<(pgc_source_manifest "$_mf") | grep -oE 'src/zz_appeared\.c')" \
+	"src/zz_appeared.c"
+rm -f "$_mf/src/zz_appeared.c"
+
+# A manifest for a tree that cannot be hashed is empty, matching the fingerprint's
+# own refusal rather than inventing a second convention.
+_mf_hollow="$(mktemp -d "${TMPDIR:-/tmp}/pgc-hollow.XXXXXX")"
+check "an unhashable tree has an empty manifest" \
+	"$(pgc_source_manifest "$_mf_hollow" | wc -l)" "0"
+
+unset _mf _mf_lines _mf_hollow
+
+# The FATAL path's dump, driven rather than grepped for. A report nobody can run
+# is a report nobody knows is empty, and "the source says it calls it" is the kind
+# of claim this suite exists to refuse.
+_fr="$(mktemp -d "${TMPDIR:-/tmp}/pgc-report.XXXXXX")"
+mkdir -p "$_fr/src"
+printf 'int a;\n' > "$_fr/src/a.c"
+printf 'all:\n\ttrue\n' > "$_fr/Makefile"
+printf 'x\n' > "$_fr/pgcolumnar.control"
+
+check "the report names each hashed file" \
+	"$(pgc_freshness_report "$_fr" | grep -c '^       | src/a.c ')" "1"
+check "the report states how many files it hashed" \
+	"$(pgc_freshness_report "$_fr" | grep -cE '^       \(3 files, under ')" "1"
+check "an added file shows up in the report" \
+	"$(printf 'int z;\n' > "$_fr/src/z.c"; pgc_freshness_report "$_fr" | grep -c '^       | src/z.c ')" "1"
+rm -f "$_fr/src/z.c"
+# The empty case says so rather than printing nothing, because a silent empty
+# dump reads as "the manifest was fine" -- the failure this report exists to end.
+_fr_hollow="$(mktemp -d "${TMPDIR:-/tmp}/pgc-rhollow.XXXXXX")"
+check "an empty manifest is reported as empty, not as silence" \
+	"$(pgc_freshness_report "$_fr_hollow" | grep -c 'empty -- nothing under')" "1"
+unset _fr _fr_hollow

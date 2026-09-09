@@ -22,6 +22,7 @@ cannot reach and which is where a wrong quote would hide.
 
 import os
 import pathlib
+import re
 import subprocess
 
 import pytest
@@ -623,3 +624,81 @@ def test_a_tree_with_nothing_hashable_reports_no_fingerprint(tmp_path, expect):
     empty.mkdir()
     got, _ = _sh_fp(f'pgc_source_fingerprint "{empty}"')
     expect.text(got or "empty", "empty", "an unhashable tree yields no fingerprint")
+
+
+def _mf_tree(tmp_path, name):
+    t = tmp_path / name
+    (t / "src").mkdir(parents=True, exist_ok=True)
+    (t / "objstore").mkdir(parents=True, exist_ok=True)
+    (t / "src" / "a.c").write_text("int a;\n")
+    (t / "src" / "h.h").write_text("void h(void);\n")
+    (t / "objstore" / "m.c").write_text("int m;\n")
+    (t / "objstore" / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "pgcolumnar.control").write_text("x\n")
+    return t
+
+
+def test_the_manifest_names_what_the_fingerprint_hashed(tmp_path, expect):
+    """Twelve hex characters cannot say which file moved.
+
+    Two CI failures reported `source now a735c673b129, binary built from
+    6d122a7158d5` and nothing else -- identically, across two branches, two
+    majors and two build directories, with the fingerprint fix present in one of
+    them. A bare hash made the second occurrence another sample rather than an
+    answer.
+    """
+    t = _mf_tree(tmp_path, "mf")
+    out, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    lines = [l for l in out.splitlines() if l.strip()]
+    expect.num(len(lines), 6, "the manifest names every file the fingerprint hashes")
+    shaped = [l for l in lines if re.fullmatch(r"[A-Za-z0-9_./-]+ [0-9a-f]{32}", l)]
+    expect.num(len(shaped), 6, "each line is a tree-relative path and a digest")
+    expect.num(len([l for l in lines if l.startswith("/")]), 0,
+               "the manifest is tree-relative, never absolute")
+
+
+def test_the_fingerprint_is_the_hash_of_the_manifest(tmp_path, expect):
+    """One is defined as the other, so the two cannot drift apart."""
+    t = _mf_tree(tmp_path, "mh")
+    fp, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    via, _ = _sh_fp(f'pgc_source_manifest "{t}" | md5sum | cut -c1-12')
+    expect.text(fp, via, "the fingerprint is the hash of the manifest")
+
+
+def test_an_added_file_is_named_rather_than_merely_changing_the_hash(tmp_path, expect):
+    """The class the two CI failures fall into, and the one a hash cannot report.
+
+    An addition is the only class that explains one deviant value from two
+    different build directories: the manifest carries the path RELATIVE to the
+    tree, so the same file added under matrix-17 and matrix-18 contributes the
+    same line.
+    """
+    t = _mf_tree(tmp_path, "add")
+    before, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    (t / "src" / "zz_appeared.c").write_text("int zz;\n")
+    after, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    gained = set(after.splitlines()) - set(before.splitlines())
+    expect.num(len(gained), 1, "exactly one manifest line appears")
+    expect.text(sorted(gained)[0].split()[0], "src/zz_appeared.c",
+                "and it names the file that appeared")
+
+
+def test_the_fatal_report_can_be_run_rather_than_grepped_for(tmp_path, expect):
+    """A dump nobody can run is a dump nobody knows is empty."""
+    t = _mf_tree(tmp_path, "rep")
+    out, _ = _sh_fp(f'pgc_freshness_report "{t}"')
+    expect.num(len([l for l in out.splitlines() if l.strip().startswith("| src/a.c ")]), 1,
+               "the report names each hashed file")
+    expect.num(len([l for l in out.splitlines() if "(6 files, under" in l]), 1,
+               "the report states how many files it hashed")
+
+
+def test_an_empty_manifest_is_reported_as_empty_not_as_silence(tmp_path, expect):
+    """A silent empty dump reads as "the manifest was fine", which is the failure
+    this report exists to end."""
+    hollow = tmp_path / "hollow_report"
+    hollow.mkdir()
+    out, _ = _sh_fp(f'pgc_freshness_report "{hollow}"')
+    expect.num(len([l for l in out.splitlines() if "empty -- nothing under" in l]), 1,
+               "an empty manifest says so")
