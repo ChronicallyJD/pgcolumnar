@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**89 tests in 6 files.** Seventy-four of them test the harness rather than the
+**90 tests in 6 files.** Seventy-five of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -527,6 +527,47 @@ alternative was asserting that the source calls the function, which is the shape
 this suite refuses everywhere else. The report is a function so an arm can drive
 it, and the empty case says `(empty -- nothing under ...)` rather than printing
 nothing, because a silent empty dump reads as *the manifest was fine*.
+
+### The suite that wrote into the tree the other suites were reading
+
+`test_no_selftest_part_writes_into_the_live_source_tree` scans the parts for a
+redirection aimed at the live tree.
+
+`test/selftest/340` used to write `objstore/.pgc_fingerprint_probe.c` into
+`$PGC_SRCDIR`, to prove that a new file under a recursed directory moves the
+fingerprint. `harness_selftest` runs IN the matrix, so at `PGC_JOBS=4` it created
+that file in the shared build directory while sibling suites fingerprinted
+concurrently, and whichever sampled inside that window reported `FATAL: the binary
+under test was not built from this source` against a tree that was correct. The
+path is tree-relative and the content fixed, so the deviant value was *identical*
+across majors, build directories and branches — which is what made it look like a
+real staleness. It cost four pull requests and two wrong diagnoses before
+@linuxhikerpm found it by reading the suite.
+
+The arm now probes a hardlinked COPY of the tree. The intent survives, because the
+defect it was written for was that the *real* tree's `objstore/` was not being
+read, and a hand-built fixture could not have caught that — so a premise requires
+the copy to discover the same build directories as the real tree. **That premise
+immediately earned itself**: the first fix hardlinked across a filesystem
+boundary, `cp -al` failed after creating the destination, `cp -a` then copied the
+tree *inside* it, and the copy's build directories came out as `bfix src` rather
+than `objstore src`.
+
+**A BEFORE/AFTER RUN CANNOT CATCH THIS, and that is worth recording because it
+was my first attempt.** Fingerprint the tree, run the suite, fingerprint again:
+the probe was created and `rm -f`'d inside the same suite, so the tree is
+byte-identical by the time the run ends and the comparison passes. The damage is
+done to whoever samples DURING the window, and an after-the-fact observer is blind
+to it by construction. Sampling concurrently instead would make the arm racy — it
+would pass whenever the timing missed. So the observable property is the one in
+the source: no part directs a write at the live tree.
+
+Its limit is stated in the test: it recognises a redirection whose target mentions
+the tree-root variables the parts actually use, and a write reaching the tree by
+another route would evade it. It carries three premises of its own — that the scan
+recognises a write at `$PGC_SRCDIR`, that it recognises one through `$_bd_root`,
+and that a write into a COPY is *not* flagged — because a pattern that matches
+nothing would otherwise pass this arm silently.
 
 **What is still not guarded**, named here rather than left for someone to find: a
 TRUNCATED manifest — `find` returning fewer files rather than none — would produce

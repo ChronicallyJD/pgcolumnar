@@ -717,3 +717,76 @@ def test_an_empty_manifest_is_reported_as_empty_not_as_silence(tmp_path, expect)
     out, _ = _sh_fp(f'pgc_freshness_report "{hollow}"')
     expect.num(len([l for l in out.splitlines() if "empty -- nothing under" in l]), 1,
                "an empty manifest says so")
+
+
+def test_no_selftest_part_writes_into_the_live_source_tree(expect):
+    """A suite that runs beside others must not write into the tree they read.
+
+    `test/selftest/340` used to write `objstore/.pgc_fingerprint_probe.c` into
+    $PGC_SRCDIR to prove that a new file under a recursed directory moves the
+    fingerprint. `harness_selftest` runs IN the matrix, so at PGC_JOBS=4 it
+    created that file in the shared build directory while sibling suites
+    fingerprinted concurrently, and whichever sampled inside the window reported
+
+        FATAL: the binary under test was not built from this source
+               source now a735c673b129, binary built from 6d122a7158d5
+
+    against a tree that was correct. Four pull requests and two wrong diagnoses
+    before @linuxhikerpm found it by reading the suite.
+
+    WHY THIS IS A STATIC SCAN AND NOT A BEFORE/AFTER RUN. I wrote the behavioural
+    version first: fingerprint the tree, run the suite, fingerprint again. It
+    CANNOT CATCH THIS DEFECT. The probe was created and `rm -f`'d inside the same
+    suite, so the tree is byte-identical by the time the run ends and the
+    comparison passes. The damage is done to whoever samples DURING the window,
+    and an after-the-fact observer is blind to it by construction. Sampling
+    concurrently instead would make the arm racy -- it would pass whenever the
+    timing missed. So the observable property is the one in the source: no part
+    directs a write at the live tree.
+
+    ITS LIMIT, stated because I have spent today objecting to guards that catch
+    one spelling: this recognises a redirection whose target mentions the tree
+    root variables the parts actually use. A write reaching the tree by some other
+    route -- a `cp` destination, a path assembled elsewhere -- would evade it. The
+    `.sh` half asserts the concrete probe path is outside the tree and reddens
+    with `got [INSIDE ...]`; between them they cover this instance and the obvious
+    generalisations of it, not every conceivable one.
+    """
+    parts = sorted((SRCDIR / "test" / "selftest").glob("*.sh"))
+    expect.at_least(len(parts), 5, "premise: the selftest parts were found")
+
+    def offenders_in(text):
+        """Redirections that land in the live tree, following one indirection.
+
+        The real defect is written in two steps -- `_bd_probe="$_bd_root/..."`
+        and then `printf ... > "$_bd_probe"` -- so a scan that only looks for the
+        tree root INSIDE a redirection target misses it entirely. That was this
+        arm's first version, and it passed against the reverted defect.
+        """
+        root = r"(?:PGC_SRCDIR|_bd_root)"
+        tainted = set(re.findall(r'^\s*([A-Za-z_][A-Za-z0-9_]*)=\"?\$\{?' + root + r'\b',
+                                 text, re.M))
+        names = "|".join([root] + sorted(re.escape(t) for t in tainted))
+        redirect = re.compile(r'>\s*"?\$\{?(?:' + names + r')\b')
+        found = []
+        for n, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if redirect.search(line):
+                found.append(n)
+        return found
+
+    bad = []
+    for part in parts:
+        bad += [f"{part.name}:{n}" for n in offenders_in(part.read_text())]
+    expect.text(", ".join(bad) or "none", "none",
+                "no selftest part directs a write at the live source tree")
+
+    # PREMISES: the scan must be able to see each shape it claims to cover, or it
+    # passes on a pattern that matches nothing -- the shape it exists to refuse.
+    expect.num(len(offenders_in('printf x > "$PGC_SRCDIR/objstore/p.c"\n')), 1,
+               "premise: a direct write at the tree root is seen")
+    expect.num(len(offenders_in('_p="$_bd_root/objstore/p.c"\nprintf x > "$_p"\n')), 1,
+               "premise: and the INDIRECT form, which is the defect's own shape")
+    expect.num(len(offenders_in('_p="$_bd_copy/objstore/p.c"\nprintf x > "$_p"\n')), 0,
+               "control: a write into a COPY is not an offender")

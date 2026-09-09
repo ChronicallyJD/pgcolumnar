@@ -128,17 +128,67 @@ check "every directory the Makefile builds from is in the fingerprint" \
 	"$([ -z "$_bd_missing" ] && echo none || echo "missing:$_bd_missing")" "none"
 
 # And the consequence, end to end: a change under a recursed directory must move
-# the fingerprint. Asserted against the real tree rather than a fixture, because
-# the defect was that the real tree's objstore/ was not being read.
-_bd_probe="$_bd_root/objstore/.pgc_fingerprint_probe.c"
-_bd_before="$(pgc_source_fingerprint "$_bd_root")"
+# the fingerprint. Against a tree with the REAL tree's SHAPE -- because the defect
+# was that the real tree's objstore/ was not being read, and a hand-built fixture
+# could not have caught it -- but NOT against the real tree itself.
+#
+# THIS AROSE FROM WRITING INTO THE LIVE SOURCE TREE, AND IT COST FOUR PULL
+# REQUESTS. This arm used to write `objstore/.pgc_fingerprint_probe.c` into
+# $PGC_SRCDIR. harness_selftest runs IN the matrix, so at PGC_JOBS=4 it created
+# that file in the shared build directory while up to three sibling suites
+# fingerprinted concurrently, and whichever sampled inside the window reported
+#
+#     FATAL: the binary under test was not built from this source
+#            source now a735c673b129, binary built from 6d122a7158d5
+#
+# on a tree that was correct. The path is tree-RELATIVE and the content fixed, so
+# the deviant value was IDENTICAL across majors, build directories and branches --
+# which is what made it look deterministic enough to be a real staleness, and what
+# sent two agents chasing a transient md5sum failure and then a path-spelling
+# defect. @linuxhikerpm found it by reading, and it reproduces exactly:
+#
+#     clean tree                              6d122a7158d5
+#     with objstore/.pgc_fingerprint_probe.c  a735c673b129   <- what CI reported
+#
+# A hardlinked copy costs no data and keeps the structure exact. Writing a NEW
+# file into it cannot touch the original, because only existing files are shared.
+# Entry by entry, and hardlink-first. `cp -al SRC DST` is NOT safe as a fallback
+# pair: /tmp is a different filesystem from the tree here, so the hardlink copy
+# failed AFTER creating DST, and `cp -a` then copied the tree INSIDE it -- the
+# copy's build dirs came out as `bfix src` instead of `objstore src`. The PREMISE
+# below caught that, which is the entire reason it is written as a premise rather
+# than assumed. `*` also skips `.git`, which no part of this question needs.
+_bd_copy="$(mktemp -d "${TMPDIR:-/tmp}/pgc-bdcopy.XXXXXX")/tree"
+mkdir -p "$_bd_copy"
+for _bd_entry in "$_bd_root"/*; do
+	[ -e "$_bd_entry" ] || continue
+	cp -al "$_bd_entry" "$_bd_copy/" 2>/dev/null || cp -a "$_bd_entry" "$_bd_copy/"
+done
+_bd_probe="$_bd_copy/objstore/.pgc_fingerprint_probe.c"
+
+# THE ARM THAT WOULD HAVE CAUGHT THE ORIGINAL. A suite that runs beside others
+# must not write into the tree they are reading.
+check "the probe is written outside the live source tree" \
+	"$(case "$_bd_probe" in "$_bd_root"/*) echo "INSIDE $_bd_root" ;; *) echo outside ;; esac)" \
+	"outside"
+
+# PREMISE: the copy is equivalent for the question being asked. If the copy did
+# not carry objstore/, "a new file under objstore moves the fingerprint" would be
+# measuring a directory the fingerprint never covered, and would pass for the
+# wrong reason.
+check "PREMISE the copy discovers the same build directories as the real tree" \
+	"$(pgc_source_build_dirs "$_bd_copy" | sed "s|^$_bd_copy/||" | sort | tr '\n' ' ')" \
+	"$(pgc_source_build_dirs "$_bd_root" | sed "s|^$_bd_root/||" | sort | tr '\n' ' ')"
+
+_bd_before="$(pgc_source_fingerprint "$_bd_copy")"
 printf 'int pgc_fingerprint_probe;\n' > "$_bd_probe"
 check "a new source file under objstore moves the fingerprint" \
-	"$([ "$(pgc_source_fingerprint "$_bd_root")" != "$_bd_before" ] && echo moved || echo same)" \
+	"$([ "$(pgc_source_fingerprint "$_bd_copy")" != "$_bd_before" ] && echo moved || echo same)" \
 	"moved"
 rm -f "$_bd_probe"
 check "and removing it restores the fingerprint" \
-	"$(pgc_source_fingerprint "$_bd_root")" "$_bd_before"
+	"$(pgc_source_fingerprint "$_bd_copy")" "$_bd_before"
+rm -rf "${_bd_copy%/tree}"
 
 # ---- the postmaster arm must be able to FIRE, not just to compute -----------
 #
