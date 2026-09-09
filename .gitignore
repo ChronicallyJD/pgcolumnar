@@ -7,5 +7,6 @@ results/
 regression.diffs
 regression.out
 .pgc_built_for_major
+.pgc_source_stamp.*
 __pycache__/
 *.pyc
