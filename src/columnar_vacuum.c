@@ -21,6 +21,7 @@
  */
 #include "columnar.h"
 #include "columnar_metadata.h"
+#include "columnar_curve.h"
 #include "columnar_storage.h"
 #include "columnar_write_state.h"
 #include "columnar_compat.h"
@@ -1037,25 +1038,21 @@ cluster_type_supported(Oid typid)
 }
 
 /*
- * Build the Z-order key for one row: interleave the ncols column ordinals
- * MSB-first into an 8*ncols-byte string. Output bit stream is
- * ord[0].bit63, ord[1].bit63, ..., ord[n-1].bit63, ord[0].bit62, ... packed
- * MSB-first, so lexicographic (memcmp) order over the bytea equals Z-order.
+ * cluster_key_ordinals
+ *		The ncols clustering columns of one row, as order-preserving uint64s.
+ *
+ * Shared by both curves so the type gate, the NULL rule and
+ * cluster_type_ordinal have exactly one implementation. NULL maps to 0, which
+ * sorts it first -- note that this is a statement about the ORDINAL and not
+ * about the key: under Hilbert the index is not monotone in any single
+ * coordinate, so a row NULL in one clustering column is not thereby first.
  */
-static bytea *
-cluster_zorder_key(Datum *values, bool *isnull, AttrNumber *atts, int ncols,
-				   TupleDesc tupdesc)
+static uint64 *
+cluster_key_ordinals(Datum *values, bool *isnull, AttrNumber *atts, int ncols,
+					 TupleDesc tupdesc)
 {
-	int			keybytes = ncols * 8;
-	bytea	   *result = (bytea *) palloc(VARHDRSZ + keybytes);
-	unsigned char *out = (unsigned char *) VARDATA(result);
 	uint64	   *ord = (uint64 *) palloc(ncols * sizeof(uint64));
 	int			c;
-	int			r;
-	int			outbit = 0;
-
-	SET_VARSIZE(result, VARHDRSZ + keybytes);
-	memset(out, 0, keybytes);
 
 	for (c = 0; c < ncols; c++)
 	{
@@ -1065,20 +1062,35 @@ cluster_zorder_key(Datum *values, bool *isnull, AttrNumber *atts, int ncols,
 		ord[c] = isnull[a - 1] ? 0
 			: cluster_type_ordinal(values[a - 1], att->atttypid);
 	}
+	return ord;
+}
 
-	for (r = 63; r >= 0; r--)
-	{
-		for (c = 0; c < ncols; c++)
-		{
-			if ((ord[c] >> r) & 1)
-				out[outbit >> 3] |= (unsigned char) (0x80 >> (outbit & 7));
-			outbit++;
-		}
-	}
+/*
+ * Build the Z-order key for one row: interleave the ncols column ordinals
+ * MSB-first into an 8*ncols-byte string. Output bit stream is
+ * ord[0].bit63, ord[1].bit63, ..., ord[n-1].bit63, ord[0].bit62, ... packed
+ * MSB-first, so lexicographic (memcmp) order over the bytea equals Z-order.
+ *
+ * The interleave now lives in columnar_curve.c, shared with the Hilbert key.
+ * The bytes it produces are frozen by test/hilbert_curve.sh's C7 arms, which
+ * hold it against hex captured from this loop BEFORE it moved -- so this
+ * refactor is checked against a record rather than against itself.
+ */
+static bytea *
+cluster_zorder_key(Datum *values, bool *isnull, AttrNumber *atts, int ncols,
+				   TupleDesc tupdesc)
+{
+	int			keybytes = ncols * 8;
+	bytea	   *result = (bytea *) palloc(VARHDRSZ + keybytes);
+	uint64	   *ord = cluster_key_ordinals(values, isnull, atts, ncols, tupdesc);
+
+	SET_VARSIZE(result, VARHDRSZ + keybytes);
+	cluster_pack_interleave(ord, ncols, (unsigned char *) VARDATA(result));
 
 	pfree(ord);
 	return result;
 }
+
 
 /*
  * pgcolumnar_relation_storageid
