@@ -67,10 +67,14 @@ check "PREMISE two catalog rows under the current storage" \
 # stranding them (#867). It is here to redden if a fix strands them instead --
 # which re-recording in the wrong place does.
 retired_rows() {
+	# relkind IN ('r','m'): a MATERIALIZED VIEW can be columnar and carry a
+	# projection, and 'r' alone counted a live matview's rows as retired. That
+	# poisoned four later arms, because this helper is global rather than
+	# per-relation: every P2 check after the matview arm read the same 2.
 	q "SELECT count(*) FROM pgcolumnar.projection p
 	    WHERE NOT EXISTS (
 	        SELECT 1 FROM pg_class c JOIN pg_am am ON am.oid = c.relam
-	         WHERE am.amname = 'pgcolumnar' AND c.relkind = 'r'
+	         WHERE am.amname = 'pgcolumnar' AND c.relkind IN ('r','m')
 	           AND pgcolumnar.get_storage_id(c.oid) = p.storage_id);"
 }
 check "PREMISE no retired projection rows to begin with" "$(retired_rows)" "0"
@@ -275,6 +279,64 @@ else
 		"$(pgc_set_hash "SELECT a::text||'|'||b FROM ptr1")"
 fi
 
+echo "-- the repair must be a no-op when the projection is already present"
+# The already-present guard had no arm (@jdatcmd, #892 review), and it runs far more
+# often than the repair does: EVERY AlterTableStmt on a relation with a declared
+# projection reaches the repair, including the ones that rewrite nothing. That is
+# also why the decision is now made under AccessShareLock -- these three statements
+# take ShareUpdateExclusiveLock, and the repair must not escalate past them.
+psql_run "CREATE TABLE noop (id int, a int, b text) USING pgcolumnar;"
+psql_run "INSERT INTO noop SELECT g, g%50, 'b'||g FROM generate_series(1,$N) g;"
+psql_run "SELECT pgcolumnar.add_projection('noop','pp',ARRAY['a','b'],ARRAY['a']);"
+NOOP_SID="$(q "SELECT pgcolumnar.get_storage_id('noop');")"
+check "PREMISE the projection is present before the metadata-only statements" \
+	"$(q "SELECT count(*) FROM pgcolumnar.projection
+	       WHERE storage_id = pgcolumnar.get_storage_id('noop');")" "2"
+psql_run "ALTER TABLE noop ALTER COLUMN a SET STATISTICS 50;"
+psql_run "ALTER TABLE noop SET (autovacuum_enabled = false);"
+check "noop: the metadata-only statements rewrote nothing" \
+	"$(q "SELECT pgcolumnar.get_storage_id('noop');")" "$NOOP_SID"
+check "noop: and the repair added no projection row" \
+	"$(q "SELECT count(*) FROM pgcolumnar.projection
+	       WHERE storage_id = pgcolumnar.get_storage_id('noop');")" "2"
+check "noop: and the projection still agrees with the base table" \
+	"$(pgc_set_hash "SELECT pgcolumnar.read_projection('noop','pp')")" \
+	"$(pgc_set_hash "SELECT a::text||'|'||b FROM noop")"
+
+echo "-- REFRESH MATERIALIZED VIEW: a rewrite that is neither ALTER nor TRUNCATE"
+# The third rewriting utility shape, and the one a gate naming only AlterTableStmt
+# and TruncateStmt lets through (@jdatcmd, #892 review). Proved load-bearing by
+# removal: with RefreshMatViewStmt taken out of the gate, this arm reports
+# ERROR: projection "pp" does not exist on "mv1" -- and the new HINT then tells the
+# reader that re-recording is automatic, which is the opposite of what happened.
+#
+# REFRESH ... CONCURRENTLY has no arm because it is not a rewrite: measured, the
+# storage id is unchanged across it, so there is nothing to repair and an arm would
+# be permanently unrunnable rather than merely green.
+psql_run "CREATE TABLE mv_base (id int, a int, b text);"
+psql_run "INSERT INTO mv_base SELECT g, g%50, 'b'||g FROM generate_series(1,$N) g;"
+psql_run "CREATE MATERIALIZED VIEW mv1 USING pgcolumnar AS SELECT id, a, b FROM mv_base;"
+psql_run "SELECT pgcolumnar.add_projection('mv1','pp',ARRAY['a','b'],ARRAY['a']);"
+check "PREMISE the matview projection reads before the refresh" \
+	"$(q "SELECT count(*) FROM pgcolumnar.read_projection('mv1','pp');")" "$N"
+MV_SID0="$(q "SELECT pgcolumnar.get_storage_id('mv1');")"
+psql_run "UPDATE mv_base SET b = 'z'||id WHERE id <= 10;"
+psql_run "REFRESH MATERIALIZED VIEW mv1;"
+if [ "$MV_SID0" = "$(q "SELECT pgcolumnar.get_storage_id('mv1');")" ]; then
+	check_unrunnable "mv1 P1 the refreshed matview keeps its projection" \
+		UNMET_PRECONDITION "REFRESH did not rewrite the matview"
+else
+	pgc_pass "mv1: REFRESH rewrote the matview"
+	check "mv1 P1 the refreshed matview keeps its projection" \
+		"$(pgc_set_hash "SELECT pgcolumnar.read_projection('mv1','pp')")" \
+		"$(pgc_set_hash "SELECT a::text||'|'||b FROM mv1")"
+fi
+check "mv1 P2 no projection row names a storage the matview no longer has" \
+	"$(retired_rows)" "0"
+check "mv1 P3 the declaration survives the refresh" \
+	"$(q "SELECT count(*) FROM pgcolumnar.projection_declaration
+	       WHERE rel = 'mv1'::regclass AND name = 'pp';")" "1"
+
 echo "-- and the base projection must still name every live column"
 check "t_addcol_vol base projection covers the added column" \
 	"$(q "SELECT columns FROM pgcolumnar.projection
@@ -354,15 +416,41 @@ if [ "$STALE_DECL" = "{gone,b}" ]; then
 	psql_run "SELECT pgcolumnar.add_projection('stale2','pp',ARRAY['a','b'],ARRAY['a']);" >/dev/null
 	psql_run "UPDATE pgcolumnar.projection_declaration SET columns = ARRAY['gone','b'],
 	             sort_key = ARRAY['gone'] WHERE rel = 'stale2'::regclass;" >/dev/null
-	check "stale: the skip warns, naming the projection and the recovery" \
-		"$(psql_run "ALTER TABLE stale2 ALTER COLUMN id TYPE bigint;" 2>&1 |
-		    grep -cE 'WARNING:.*could not restore projection "pp"|rebuild_projections')" "2"
+	# Assert the SQLSTATE, not the prose. The message text is prose and will be
+	# reworded -- it already was, in this very PR -- while 42703 is the contract.
+	# The earlier version counted lines matching the text OR the string
+	# "rebuild_projections", and rewording the HINT to name the recovery that
+	# actually works would have silently halved that count (@jdatcmd, #892 review).
+	STALE_OUT="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" \
+		-U postgres -d "$PGC_DB" -v VERBOSITY=verbose \
+		-c "ALTER TABLE stale2 ALTER COLUMN id TYPE bigint;" 2>&1)"
+	check "stale: the skip warns with SQLSTATE 42703" \
+		"$(printf '%s\n' "$STALE_OUT" | grep -c '^WARNING:  42703: ')" "1"
+	check "stale: and the warning names the projection it skipped" \
+		"$(printf '%s\n' "$STALE_OUT" | grep -c 'could not restore projection "pp"')" "1"
+	check "stale: and it names a recovery the extension actually offers" \
+		"$(printf '%s\n' "$STALE_OUT" | grep -c 'add_projection')" "1"
+
 	psql_run "CREATE TABLE fresh2 (id int, a int, b text) USING pgcolumnar;" >/dev/null
 	psql_run "INSERT INTO fresh2 SELECT g, g%50, 'b'||g FROM generate_series(1,$N) g;" >/dev/null
 	psql_run "SELECT pgcolumnar.add_projection('fresh2','pp',ARRAY['a','b'],ARRAY['a']);" >/dev/null
-	check "stale: an intact declaration produces NO warning" \
-		"$(psql_run "ALTER TABLE fresh2 ALTER COLUMN id TYPE bigint;" 2>&1 |
-		    grep -ci warning)" "0"
+	# The negative control needs its own premise. "no line matched WARNING" is
+	# satisfied by NO OUTPUT AT ALL, so a statement that never ran would pass it
+	# (@jdatcmd, #892 review). Assert that the statement ran and rewrote first.
+	FRESH_SID0="$(q "SELECT pgcolumnar.get_storage_id('fresh2');")"
+	FRESH_OUT="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" \
+		-U postgres -d "$PGC_DB" \
+		-c "ALTER TABLE fresh2 ALTER COLUMN id TYPE bigint;" 2>&1)"
+	check "PREMISE the control statement completed, so its output is not empty" \
+		"$(printf '%s\n' "$FRESH_OUT" | grep -c '^ALTER TABLE$')" "1"
+	if [ "$FRESH_SID0" = "$(q "SELECT pgcolumnar.get_storage_id('fresh2');")" ]; then
+		check_unrunnable "stale: an intact declaration produces NO warning" \
+			UNMET_PRECONDITION "the control ALTER did not rewrite fresh2"
+	else
+		pgc_pass "PREMISE the control statement rewrote fresh2, so a warning was possible"
+		check "stale: an intact declaration produces NO warning" \
+			"$(printf '%s\n' "$FRESH_OUT" | grep -ci warning)" "0"
+	fi
 fi
 
 # And the property #888 now guarantees, asserted here too because this suite is the
