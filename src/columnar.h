@@ -528,6 +528,20 @@ extern int pgcolumnar_written_stripe_row_limit(Oid relid);
 /* projection catalog (gap 26, format 2.2). List entries are PgColumnarProjection*
  * palloc'd in the current context, ordered by projection_id. */
 extern List *PgColumnarListProjections(uint64 storageId);
+/*
+ * A declared projection, as pgcolumnar.projection_declaration holds it: by
+ * relation and by column NAME. Distinct from PgColumnarProjection, which is the
+ * materialised row keyed by storage id and holding attnums (#876, #887).
+ */
+typedef struct PgColumnarProjectionDeclaration
+{
+	Oid			relid;
+	char	   *name;
+	ArrayType  *columns;
+	ArrayType  *sortKey;
+} PgColumnarProjectionDeclaration;
+
+extern void PgColumnarRerecordProjectionsAfterRewrite(Oid relid);
 extern void PgColumnarInsertProjectionRow(const PgColumnarProjection *proj);
 /* The dumpable declaration behind a projection, keyed by regclass and stored as
  * column names so a dump and restore can carry it (#266). */

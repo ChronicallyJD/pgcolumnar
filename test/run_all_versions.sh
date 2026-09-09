@@ -243,6 +243,7 @@ SUITES=(
 	projection_drop_column
 	projection_privilege
 	projection_rename_restore
+	projection_rewrite
 	projection_update
 	projections
 	pushdown_report

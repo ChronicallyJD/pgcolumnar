@@ -510,6 +510,34 @@ or an explicit `VACUUM` marks the group. Turn the feature off with
 
 ## Projections
 
+A declaration can name a column the table no longer has. `ALTER TABLE ... RENAME
+COLUMN` used to leave one behind, and no longer does: the rename is carried into
+the declaration. A database created before that fix can still hold one.
+
+An unusable declaration does not break the projection itself, because its storage
+records attnums rather than names. It breaks the two readers of the declaration.
+`pgcolumnar.rebuild_projections()` reads it after a logical restore. The automatic
+re-record reads it after a rewrite, and reports one it cannot resolve as a
+WARNING.
+
+To recover, call `pgcolumnar.add_projection()` again with the same projection name
+and columns the table has. That replaces the declaration and materialises the
+projection. `pgcolumnar.rebuild_projections()` cannot recover this state. It
+re-runs the same declaration and raises the same missing-column error.
+`pgcolumnar.drop_projection()` cannot either. It refuses with `42704`, because the
+projection row is exactly what is absent.
+
+A rewrite that does not pass through `ProcessUtility` is not re-recorded, and needs
+`pgcolumnar.rebuild_projections()` by hand.
+
+One such rewrite ships with PostgreSQL. A `TRUNCATE` replicated to a subscriber is
+applied by the logical replication worker. That worker calls `ExecuteTruncateGuts`
+directly rather than going through `ProcessUtility`
+(`src/backend/replication/logical/worker.c`, `apply_handle_truncate`, checked
+against PostgreSQL 18.4). The subscriber's table is rewritten and nothing observes
+it. So a replicated `TRUNCATE` loses a projection on a subscriber table. Run
+`pgcolumnar.rebuild_projections()` on the subscriber after one.
+
 A projection is an additional sorted copy. Each projection therefore adds write
 cost and storage cost. `pgcolumnar.vacuum` builds the projections again.
 

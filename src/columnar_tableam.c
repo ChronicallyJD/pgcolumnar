@@ -102,6 +102,108 @@ static const struct config_enum_entry pgcolumnar_compression_options[] = {
 /* forward declaration of the AM routine so hooks can compare against it */
 static const TableAmRoutine pgcolumnar_am_methods;
 
+/*
+ * Relations whose columnar storage was replaced, recorded by
+ * pgcolumnar_relation_set_new_filelocator and drained by
+ * pgcolumnar_process_utility so their projections can be re-recorded (#876, #887).
+ *
+ * THE RECORDING IS WIDER THAN THE DRAIN, deliberately, and this is the invariant
+ * to hold in mind: the callback records every replaced storage, while the drain
+ * runs only for AlterTableStmt, TruncateStmt and RefreshMatViewStmt. So the list
+ * can hold a relid nothing will drain -- pgcolumnar.vacuum() rewrites through the
+ * same callback, and it is a function call, not a utility statement
+ * (@jdatcmd, #892 review).
+ *
+ * Narrowing the recording to match the drain was considered and not done, because
+ * nothing observable follows from the asymmetry and a change no test can redden is
+ * worse than a stated invariant. Two reasons it is inert. A relid recorded outside
+ * a utility statement is cleared by pgcolumnar_forget_rewritten() when the next
+ * outermost one begins, before that statement records anything of its own. And a
+ * relid recorded by a nested call -- a vacuum() run from a trigger inside an ALTER
+ * -- is drained by the enclosing statement, where the repair finds the projection
+ * already present and returns under AccessShareLock without doing work.
+ *
+ * Recorded rather than re-derived from the statement, because the statement does
+ * not name everything it rewrites. TRUNCATE ... CASCADE reaches a table through a
+ * foreign key: it is neither listed in TruncateStmt->relations nor an inheritance
+ * descendant of anything listed, so a repair that walks the statement misses it
+ * (@linuxhikerpm, #892 review). The callback, by contrast, fires on every relation
+ * whose storage is actually replaced, which is the set we want by definition.
+ *
+ * Only relations that took the rewrite branch land here, so a transient relation
+ * built by make_new_heap never does: at its creation there is no columnar fork and
+ * the branch is not taken. That matters, because such a relation is dropped before
+ * this list is drained.
+ *
+ * TopMemoryContext, because the callback runs inside the statement's context and
+ * the list has to outlive it. Cleared when a utility statement starts, drained and
+ * cleared when one finishes, and cleared at transaction end so an ERROR between
+ * those two points cannot carry a relid into the next statement.
+ */
+static List *pgcolumnar_rewritten_relids = NIL;
+static bool pgcolumnar_xact_cb_registered = false;
+
+/*
+ * How deep we are in nested pgcolumnar_process_utility calls.
+ *
+ * ProcessUtility is RE-ENTRANT. An AFTER TRUNCATE trigger whose function runs any
+ * utility statement calls it again from inside the outer statement, after the
+ * callback has already recorded the truncated relation. Measured with the callback
+ * logging its own order:
+ *
+ *     entry: clearing, had 0          the outer TRUNCATE starts
+ *     record: relid=16573             the cascaded child is recorded
+ *     entry: clearing, had 1          the trigger's nested utility clears it
+ *     drain: recorded=0               the outer drain has nothing left
+ *
+ * A directly named table survives that, because the statement's own relation list
+ * supplies it as a second source. A table reached by FK CASCADE does not: the
+ * recorded list is its only route, so the projection stays absent and
+ * read_projection raises 42704. Reproduced with a trigger on the cascaded child.
+ *
+ * So the list is cleared only when the OUTERMOST utility statement begins, and a
+ * drain removes the relids it repaired rather than emptying the list, because an
+ * inner statement must not discard what an outer one is still holding.
+ */
+static int pgcolumnar_utility_depth = 0;
+
+static void
+pgcolumnar_forget_rewritten(void)
+{
+	if (pgcolumnar_rewritten_relids != NIL)
+	{
+		list_free(pgcolumnar_rewritten_relids);
+		pgcolumnar_rewritten_relids = NIL;
+	}
+}
+
+static void
+pgcolumnar_rewritten_xact_callback(XactEvent event, void *arg)
+{
+	/* Any transaction end, committed or not: the list belongs to one statement. */
+	pgcolumnar_forget_rewritten();
+	pgcolumnar_utility_depth = 0;
+}
+
+static void
+pgcolumnar_record_rewritten(Oid relid)
+{
+	MemoryContext old;
+
+	if (!pgcolumnar_xact_cb_registered)
+	{
+		RegisterXactCallback(pgcolumnar_rewritten_xact_callback, NULL);
+		pgcolumnar_xact_cb_registered = true;
+	}
+
+	if (list_member_oid(pgcolumnar_rewritten_relids, relid))
+		return;
+
+	old = MemoryContextSwitchTo(TopMemoryContext);
+	pgcolumnar_rewritten_relids = lappend_oid(pgcolumnar_rewritten_relids, relid);
+	MemoryContextSwitchTo(old);
+}
+
 static object_access_hook_type prev_object_access_hook = NULL;
 static ProcessUtility_hook_type prev_process_utility_hook = NULL;
 static ExecutorEnd_hook_type prev_executor_end_hook = NULL;
@@ -818,6 +920,12 @@ pgcolumnar_relation_set_new_filelocator(Relation rel,
 	if (smgrexists(oldsrel, MAIN_FORKNUM) &&
 		smgrnblocks(oldsrel, MAIN_FORKNUM) >= COLUMNAR_INITIALIZED_NBLOCKS)
 	{
+		/*
+		 * Remember that this relation was rewritten, before the storage tree that
+		 * proves it goes away. pgcolumnar_process_utility drains the list.
+		 */
+		pgcolumnar_record_rewritten(RelationGetRelid(rel));
+
 		pgcolumnar_delete_storage_tree(PgColumnarStorageId(rel));
 
 		/*
@@ -2608,6 +2716,15 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 {
 	Node	   *parsetree = pstmt->utilityStmt;
 
+	/*
+	 * Start from empty, but only for the OUTERMOST statement: a statement that
+	 * ERRORED between recording and draining must not leave a relid for the next
+	 * one, while a NESTED statement must not discard what its caller is holding.
+	 */
+	if (pgcolumnar_utility_depth == 0)
+		pgcolumnar_forget_rewritten();
+	pgcolumnar_utility_depth++;
+
 	/* read-only inspection, so readOnlyTree needs no copy of the tree */
 	if (parsetree != NULL && IsA(parsetree, AlterTableStmt))
 	{
@@ -2617,12 +2734,125 @@ pgcolumnar_process_utility(PlannedStmt *pstmt, const char *queryString,
 		pgcolumnar_reject_set_am_to_columnar(stmt);
 	}
 
-	if (prev_process_utility_hook)
-		prev_process_utility_hook(pstmt, queryString, readOnlyTree, context,
-								  params, queryEnv, dest, qc);
-	else
-		standard_ProcessUtility(pstmt, queryString, readOnlyTree, context,
-								params, queryEnv, dest, qc);
+	PG_TRY();
+	{
+		if (prev_process_utility_hook)
+			prev_process_utility_hook(pstmt, queryString, readOnlyTree, context,
+									  params, queryEnv, dest, qc);
+		else
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree, context,
+									params, queryEnv, dest, qc);
+	}
+	PG_CATCH();
+	{
+		pgcolumnar_utility_depth--;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/*
+	 * A rewrite loses this relation's declared projections, so re-record them
+	 * (#876, #887).
+	 *
+	 * AFTER the statement, for the same reason the rename block below runs there:
+	 * the rewrite has committed to the catalog by this point, the new storage id
+	 * is readable, and a statement that ERRORED has left nothing to repair.
+	 *
+	 * Here rather than in pgcolumnar_relation_set_new_filelocator, which is where
+	 * #887 proposed it. Measured on 18.4 with that callback logging its own
+	 * relid: TRUNCATE reaches it as the user's relation with the fork attached
+	 * and both projection rows in scope, but a rewriting ALTER TABLE reaches it
+	 * as the TRANSIENT relation make_new_heap builds -- pg_temp_<oid>, no
+	 * columnar fork -- so the rewrite branch is not taken and the old storage id
+	 * and projection list are never in scope. The callback can serve one of the
+	 * two shapes and not the other.
+	 *
+	 * Every relation the statement could have rewritten, and their descendants.
+	 * A TRUNCATE names any number of relations and rewrites all of them
+	 * (measured), and a type change on a PARTITIONED parent rewrites each
+	 * columnar partition while the parent named in the statement is not itself a
+	 * columnar relation (measured: the child loses its projection). Both shapes
+	 * are arms in test/projection_rewrite.sh. find_all_inheritors for the same
+	 * reason the rename block walks it; the statement already holds
+	 * AccessExclusiveLock on the hierarchy, so NoLock takes nothing new.
+	 */
+	if (parsetree != NULL &&
+		(IsA(parsetree, AlterTableStmt) || IsA(parsetree, TruncateStmt) ||
+		 IsA(parsetree, RefreshMatViewStmt)))
+	{
+		List	   *targets = NIL;
+		ListCell   *lc;
+
+		/*
+		 * Everything the callback saw rewritten. This is the set that catches a
+		 * TRUNCATE ... CASCADE, whose extra tables the statement never names.
+		 */
+		foreach(lc, pgcolumnar_rewritten_relids)
+			targets = lappend_oid(targets, lfirst_oid(lc));
+
+		/*
+		 * TRUNCATE needs nothing from the statement itself.
+		 *
+		 * It reaches the table-AM callback for every relation it rewrites,
+		 * including the ones it never names -- a CASCADE, and every partition of a
+		 * named parent -- so the recorded list already holds them. Walking the
+		 * statement's own relation list on top of that was measured to add nothing:
+		 * instrumented across the 80 checks in test/projection_rewrite.sh it fired
+		 * twice, both times for a NON-columnar parent in a cascade arm, where the
+		 * repair is a no-op. Deleting it left all 80 green (@jdatcmd, #892 review).
+		 *
+		 * A rewriting ALTER is the opposite case, and the reason this branch exists
+		 * at all: it reaches the callback as the TRANSIENT relation make_new_heap
+		 * builds, so nothing is recorded for the user's relation and the statement's
+		 * own name is the only route to it.
+		 */
+		if (!IsA(parsetree, TruncateStmt))
+		{
+			RangeVar   *rv;
+			Oid			relid;
+
+			/*
+			 * Dispatch on the node type rather than casting to AlterTableStmt for
+			 * both. The two structs happen to place `relation` at the same offset
+			 * -- measured as 8 on PG 15 through 19, because NodeTag is 4 bytes and
+			 * RefreshMatViewStmt's two bools fit in its tail padding -- so a single
+			 * cast reads the right field today. It does so by coincidence of
+			 * layout, not by any rule, and one added field in either struct turns
+			 * it into a wrong pointer with no diagnostic.
+			 */
+			if (IsA(parsetree, RefreshMatViewStmt))
+				rv = ((RefreshMatViewStmt *) parsetree)->relation;
+			else
+				rv = ((AlterTableStmt *) parsetree)->relation;
+
+			relid = rv ? RangeVarGetRelid(rv, NoLock, true) : InvalidOid;
+
+			if (OidIsValid(relid) && !list_member_oid(targets, relid))
+				targets = lappend_oid(targets, relid);
+		}
+
+		foreach(lc, targets)
+		{
+			List	   *kin = find_all_inheritors(lfirst_oid(lc), NoLock, NULL);
+			ListCell   *lc2;
+
+			foreach(lc2, kin)
+				PgColumnarRerecordProjectionsAfterRewrite(lfirst_oid(lc2));
+			list_free(kin);
+		}
+
+		/*
+		 * Forget only what was repaired here. Emptying the list would discard a
+		 * relid an OUTER statement recorded and has not drained yet, which is the
+		 * same defect as clearing on entry from a nested call.
+		 */
+		foreach(lc, targets)
+			pgcolumnar_rewritten_relids =
+				list_delete_oid(pgcolumnar_rewritten_relids, lfirst_oid(lc));
+		list_free(targets);
+	}
+
+	pgcolumnar_utility_depth--;
 
 	/*
 	 * A column rename must be carried through the ordering mark (#778). The

@@ -50,6 +50,112 @@ true until the next version shipped.
   appear in the stored columns. `DROP COLUMN IF EXISTS` of a column that is not
   there is unaffected.
 
+- A rewrite no longer loses a declared projection (#876, #887).
+
+  `TRUNCATE`, `ALTER TABLE ... ALTER COLUMN ... TYPE` and `ALTER TABLE ... ADD
+  COLUMN` with a volatile default each mint a new base storage id.
+  `pgcolumnar.projection` is keyed by that id, so afterwards
+  `pgcolumnar.read_projection` raised `42704` for a projection that was still
+  declared over an intact table. 1.0-alpha3 shipped only a `HINT` naming
+  `pgcolumnar.rebuild_projections()`; the projections are now re-recorded
+  automatically and the manual call is no longer part of the routine path.
+
+  **Five shapes lost the projection, not the two the issue named.** Swept on
+  18.4 rather than reasoned about: `TRUNCATE` including its multi-table form and
+  its `CASCADE` form, a type change on a covered or an uncovered column, `ADD
+  COLUMN` with a volatile default, **a partitioned child rewritten by a type
+  change on its parent** -- where the statement names the parent, which is not
+  itself a columnar relation -- and `REFRESH MATERIALIZED VIEW`, which is neither
+  an `AlterTableStmt` nor a `TruncateStmt` and so escaped a gate naming only those
+  two. `REFRESH ... CONCURRENTLY` is not a rewrite: the storage id is unchanged
+  across it, measured.
+  `ADD COLUMN` with a constant default, `DROP COLUMN`, `VACUUM`, `SET ACCESS
+  METHOD` to the same method, `SET TABLESPACE` and a no-op type change do not
+  rewrite and were never affected. Core `VACUUM FULL` and `CLUSTER` are refused
+  on a columnar table, which bounds the class.
+
+  **The repair runs after the statement, in `ProcessUtility`, not in the table-AM
+  callback.** `pgcolumnar_relation_set_new_filelocator` cannot do this job, which
+  is measurable rather than arguable: with the callback logging its own relid,
+  `TRUNCATE` reaches it as the user's relation with the old fork attached and both
+  projection rows in scope, but a rewriting `ALTER TABLE` reaches it as the
+  transient relation `make_new_heap` builds -- `pg_temp_<oid>`, no columnar fork --
+  so the rewrite branch is not taken and neither the old storage id nor the
+  projection list is ever in scope. A re-record placed there also records under the
+  id the rewrite just retired, because `PgColumnarStorageId(rel)` still returns the
+  old id after the new metapage is written.
+
+  **The projections are re-derived from the declaration, not copied forward.**
+  `pgcolumnar.projection_declaration` records column NAMES and survives a rewrite,
+  and resolving those names against the relation as it is now is what makes `ADD
+  COLUMN` correct: the base projection records every live column, so a copy of the
+  old row would leave it naming a stale column set. `materialize_projection` is
+  extracted from `pgcolumnar.add_projection` so both paths drive one
+  implementation.
+
+  **A repair that cannot run degrades to a WARNING and never fails the statement
+  that triggered it.** A declaration can name a column the table no longer has;
+  `ALTER TABLE ... RENAME COLUMN` used to leave one behind and no longer does, so
+  the reachable case is a database created before that fix. Before this was
+  handled, the repair raised `column "a" does not exist` inside an unrelated
+  `ALTER TABLE ... ALTER COLUMN id TYPE bigint` and rolled that type change back --
+  turning a silently lost projection into a blocked schema change. It now reports
+
+      WARNING:  42703: could not restore projection "p" on "public.t" after rewrite
+      DETAIL:   Its declaration names a column the table no longer has.
+      HINT:     Call pgcolumnar.add_projection('public.t', 'p', ...) again,
+                naming columns the table has. That replaces the declaration.
+
+  **The HINT names `add_projection`, not `rebuild_projections`, because the other
+  two candidates were measured to fail.** `rebuild_projections()` re-runs the same
+  stale declaration and raises the same missing-column error;
+  `drop_projection()` refuses with `42704`, because the projection row is exactly
+  what is absent. `add_projection()` with the same name replaces the declaration
+  and materialises it. The relation name in both messages is schema-qualified:
+  unqualified, a HINT for a table outside the reader's `search_path` told them to
+  run a statement that fails with `relation "t" does not exist`.
+
+  **Every other failure is contained too.** The resolves-check covers one cause,
+  and `materialize_projection` can raise for others, so it runs in an internal
+  subtransaction. A failure is rolled back and reported as a WARNING carrying the
+  original SQLSTATE, and the user's statement continues.
+
+  **The repair decides under `AccessShareLock` and escalates only when there is
+  work.** It is reached for every `AlterTableStmt` on a relation with a declared
+  projection, not only for one that rewrote it, so an unconditional `ShareLock`
+  blocked concurrent writers on statements that rewrite nothing: `ALTER COLUMN SET
+  STATISTICS` and `SET (autovacuum_enabled)` take only
+  `ShareUpdateExclusiveLock`, and each opened the relation with `ShareLock` with
+  nothing to repair.
+
+  **The rewritten relations are recorded, not re-derived from the statement.** A
+  `TRUNCATE ... CASCADE` rewrites tables it never names, so the table-AM callback
+  records each relation whose storage it retires and `ProcessUtility` drains that
+  list. The list survives a nested utility statement -- a cascade whose trigger
+  runs one -- because it is cleared only for the outermost statement, and the
+  drain removes only the relids it repaired rather than emptying it.
+
+- The `42704` hint no longer names a rewrite as the likely cause, since a rewrite
+  now re-records. It names the two cases that remain: a declaration that no longer
+  resolves, and the implicit base projection, which is not readable by name at all.
+
+### Added
+
+- `test/projection_rewrite.sh`, 84 checks. Nothing in the tree asserted that a
+  projection answers after a rewrite, which is why this was silent.
+
+  Every arm compares a `pgc_set_hash` of `read_projection` against the base table
+  rather than checking that the call did not raise, so a projection re-recorded
+  EMPTY fails -- which matters because the correct end state after a bare
+  `TRUNCATE` is an empty projection that answers. Every arm also asserts what its
+  operation DID (`REWROTE`, `NOOP` or `FAILED`) and reports its properties as
+  `UNMET_PRECONDITION` rather than as passes when it did not: an operation that
+  failed or no-opped leaves the storage id unchanged and `read_projection`
+  answering, which is indistinguishable from a path that handles projections
+  correctly. Three arms carry `pgcolumnar.vacuum`, `vacuum_sorted` and `cluster`,
+  which already re-record for themselves, so a future fix moved into the table-AM
+  callback reddens here instead of double-recording.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
