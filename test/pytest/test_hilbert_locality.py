@@ -10,8 +10,21 @@ fixture and no vacuity plugin, and pytest will fail at collection. It is
 committed here so that the port exists and can be reviewed beside the bash
 suite; it becomes runnable when #897 lands, and not before.
 
-It was RUN against #897 head 5f3dedb, which merges cleanly with this branch,
-in a scratch worktree on PostgreSQL 18.4: 18 passed, 3.20s on a warm tree. The eight pins below came out
+It was RUN against **#897 at b785795d7ccd** -- the head as of 2026-09-09 -- and
+passed 18 of 18 there. It was originally written against 5f3dedb; those two trees
+are NOT identical (e09554995ebe vs c8120cdfca1e, +925 lines including the
+`cannot_run` fix this file depends on), so it was re-run rather than relabelled.
+The SHA is pinned rather than the branch name because a branch name cannot be
+checked six weeks from now, and this one moved three times while the file was
+being written.
+
+ONE THING THIS FILE CANNOT SATISFY ON ITS OWN. #897 at b785795 adds
+`test_docs_cover_the_corpus.py`, a gate requiring every pytest file and every
+`def test_` to be named in `test/pytest/TESTS.md`. With this file present and
+undocumented that gate is RED -- measured, 2 failed, `got '(66, 6)' want
+'(78, 7)'`. TESTS.md lives on #897's branch, so the entry cannot be written from
+here; it lands when the two branches meet. That is a real dependency and not an
+oversight.
 identical to the bash suite's, from a different harness and a different way of
 reading the counters -- 241/118, 351/209, 588/402, 1624/1313, and z/h of
 2.0424, 1.6794, 1.4627, 1.2369.
