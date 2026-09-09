@@ -103,9 +103,25 @@ static const struct config_enum_entry pgcolumnar_compression_options[] = {
 static const TableAmRoutine pgcolumnar_am_methods;
 
 /*
- * Relations this statement actually rewrote, recorded by
+ * Relations whose columnar storage was replaced, recorded by
  * pgcolumnar_relation_set_new_filelocator and drained by
  * pgcolumnar_process_utility so their projections can be re-recorded (#876, #887).
+ *
+ * THE RECORDING IS WIDER THAN THE DRAIN, deliberately, and this is the invariant
+ * to hold in mind: the callback records every replaced storage, while the drain
+ * runs only for AlterTableStmt, TruncateStmt and RefreshMatViewStmt. So the list
+ * can hold a relid nothing will drain -- pgcolumnar.vacuum() rewrites through the
+ * same callback, and it is a function call, not a utility statement
+ * (@jdatcmd, #892 review).
+ *
+ * Narrowing the recording to match the drain was considered and not done, because
+ * nothing observable follows from the asymmetry and a change no test can redden is
+ * worse than a stated invariant. Two reasons it is inert. A relid recorded outside
+ * a utility statement is cleared by pgcolumnar_forget_rewritten() when the next
+ * outermost one begins, before that statement records anything of its own. And a
+ * relid recorded by a nested call -- a vacuum() run from a trigger inside an ALTER
+ * -- is drained by the enclosing statement, where the repair finds the projection
+ * already present and returns under AccessShareLock without doing work.
  *
  * Recorded rather than re-derived from the statement, because the statement does
  * not name everything it rewrites. TRUNCATE ... CASCADE reaches a table through a
