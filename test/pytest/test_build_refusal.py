@@ -20,7 +20,9 @@ sourcing, the quoting and the exit-status path -- which an injected runner
 cannot reach and which is where a wrong quote would hide.
 """
 
+import os
 import pathlib
+import re
 import subprocess
 
 import pytest
@@ -455,3 +457,336 @@ def test_the_two_fingerprint_implementations_cover_the_same_inputs(tmp_path, exp
         path.write_text(old)
         expect.text(f"{sh_after != sh_before} {py_after != py_before}", "True True",
                     f"editing {edit} moves both fingerprints")
+
+
+# ---------------------------------------------------------------------------
+# THE TWIN of test/selftest/340's fingerprint-integrity arms. Two observers, one
+# implementation: these drive the real shell functions through bash rather than
+# reimplementing them, for the reason four fingerprint defects in one day proved
+# — a second implementation of one idea drifts, and the drift is invisible until
+# someone diffs the two.
+
+
+def _sh_fp(expr, path_env=None, env=None):
+    """Evaluate a lib.sh expression, optionally with a stubbed PATH."""
+    script = f'. "{SRCDIR}/test/lib.sh" || exit 1; {expr}'
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    if path_env:
+        e["PATH"] = path_env + ":" + e.get("PATH", "")
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e)
+    return p.stdout.strip(), p.returncode
+
+
+def _fp_tree(tmp_path, name="t"):
+    t = tmp_path / name
+    (t / "src").mkdir(parents=True, exist_ok=True)
+    (t / "objstore").mkdir(parents=True, exist_ok=True)
+    (t / "src" / "a.c").write_text("int a;\n")
+    (t / "src" / "b.c").write_text("int b;\n")
+    (t / "src" / "c.c").write_text("int c;\n")
+    (t / "objstore" / "m.c").write_text("int m;\n")
+    (t / "objstore" / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "pgcolumnar.control").write_text("x\n")
+    return t
+
+
+def _md5_stub(tmp_path, fail_on):
+    """A stub md5sum: real, except that its Nth call fails with no output.
+
+    Models one transient failure -- a fork that hits EAGAIN, an OOM kill, a
+    loaded runner -- rather than a permanently broken md5sum, because the
+    permanent case is not the one that produced a wrong answer in CI.
+    """
+    b = tmp_path / f"bin{fail_on}"
+    b.mkdir(exist_ok=True)
+    counter = tmp_path / f"count{fail_on}"
+    counter.write_text("0")
+    (b / "md5sum").write_text(
+        "#!/bin/bash\n"
+        f'_n=$(( $(cat "{counter}" 2>/dev/null || echo 0) + 1 ))\n'
+        f'echo "$_n" > "{counter}"\n'
+        f'[ "$_n" = "{fail_on}" ] && exit 1\n'
+        'exec /usr/bin/md5sum "$@"\n'
+    )
+    (b / "md5sum").chmod(0o755)
+    return str(b)
+
+
+def test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one(tmp_path, expect):
+    """`$(md5sum ... 2>/dev/null)` substituted an EMPTY digest and returned rc=0.
+
+    One failed invocation among many silently changed the whole hash, so the
+    function gave three different confident answers for one unchanged tree.
+    """
+    t = _fp_tree(tmp_path)
+    base, rc = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    expect.at_least(len(base), 12, "premise: the tree fingerprints at all")
+
+    # Premise for the stub: with nothing configured to fail it must agree with
+    # the real md5sum, or the arms below measure the stub and not the fix.
+    quiet = _md5_stub(tmp_path, 0)
+    got, _ = _sh_fp(f'pgc_source_fingerprint "{t}"', path_env=quiet)
+    expect.text(got, base, "premise: the stub agrees with md5sum when nothing fails")
+
+    for n in (2, 3):
+        stub = _md5_stub(tmp_path, n)
+        got, _ = _sh_fp(f'pgc_source_fingerprint "{t}"', path_env=stub)
+        expect.text(got or "empty", "empty",
+                    f"a failed digest on file {n} yields no fingerprint")
+
+
+def test_a_failed_digest_gives_unverified_and_never_a_false_stale(tmp_path, expect):
+    """The property that matters. `stale` is the FATAL; `unknown` is UNVERIFIED.
+
+    A false UNVERIFIED costs a line of output. A false FATAL costs a matrix and
+    teaches people to re-run past a freshness check.
+    """
+    t = _fp_tree(tmp_path, "v")
+    base, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    stub = _md5_stub(tmp_path, 2)
+    verdict, _ = _sh_fp(
+        f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"',
+        path_env=stub)
+    expect.text(verdict, "unknown", "a failed digest reads as unknown, not stale")
+    healthy, _ = _sh_fp(f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"')
+    expect.text(healthy, "fresh", "control: an unstubbed run still reads fresh")
+
+
+def test_one_tree_hashes_one_way_however_the_path_is_spelled(tmp_path, expect):
+    """`${f#"$dir"/}` strips a prefix that must match character for character."""
+    t = _fp_tree(tmp_path, "s")
+    link = tmp_path / "s_link"
+    link.symlink_to(t)
+    plain, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    expect.at_least(len(plain), 12, "premise: the fixture fingerprints at all")
+    for label, spelling in (
+        ("a trailing slash", f"{t}/"),
+        ("a /./ segment", f"{t}/./"),
+        ("a /src/.. segment", f"{t}/src/.."),
+        ("a symlink", str(link)),
+    ):
+        got, _ = _sh_fp(f'pgc_source_fingerprint "{spelling}"')
+        expect.text(got, plain, f"{label} hashes the same tree the same way")
+    rel, _ = _sh_fp(f'cd "{t}" && pgc_source_fingerprint .')
+    expect.text(rel, plain, "a relative path hashes the same tree the same way")
+
+
+def test_the_fix_does_not_rebaseline_stamps_already_on_disk(tmp_path, expect):
+    """A COMPATIBILITY assertion, not a tidiness one.
+
+    Capturing the per-file lines to inspect them strips the trailing newline the
+    old straight-pipe into md5sum included. Without restoring it the same
+    unchanged tree hashes differently before and after the fix, every stamp on
+    disk reads `stale`, and a fix for false FATALs becomes a false FATAL for
+    everyone holding a built worktree. The matrix cannot catch this: it copies a
+    fresh tree and re-stamps every run.
+    """
+    t = _fp_tree(tmp_path, "c")
+    previous = r'''
+_prev() { local dir="$1" d
+  { while IFS= read -r d; do [ -n "$d" ] || continue
+      find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -print0 2>/dev/null
+    done < <(pgc_source_build_dirs "$dir")
+    find "$dir" -maxdepth 1 -type f \( -name 'Makefile' -o -name '*.control' -o -name '*.sql' \) -print0 2>/dev/null
+  } | sort -z | while IFS= read -r -d '' _f; do
+      printf '%s %s\n' "${_f#"$dir"/}" "$(md5sum < "$_f" 2>/dev/null | cut -d' ' -f1)"
+    done | md5sum | cut -c1-12; }
+'''
+    now, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    before, _ = _sh_fp(previous + f'_prev "{t}"')
+    expect.text(now, before,
+                "the fixed fingerprint equals what the previous implementation produced")
+
+
+def test_the_fingerprint_still_moves_on_a_real_change(tmp_path, expect):
+    """Without this the spelling arms are vacuous.
+
+    "Every spelling agrees" is satisfied perfectly by a fingerprint that ignores
+    its input, so the set needs one arm proving the hash still moves.
+    """
+    t = _fp_tree(tmp_path, "m")
+    before, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    (t / "src" / "a.c").write_text("int a = 2;\n")
+    after, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    expect.text(str(after != before), "True", "a real content change moves the fingerprint")
+    (t / "src" / "a.c").write_text("int a;\n")
+    restored, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    expect.text(restored, before, "and restoring the content restores it")
+
+
+def test_a_tree_with_nothing_hashable_reports_no_fingerprint(tmp_path, expect):
+    """The hash of an empty stream is a stable, comparable value: two empty
+    trees would have "matched".
+
+    THE PREMISE IS LOAD-BEARING AND WAS MISSING. This arm asserts an EMPTY
+    result, and an empty result is also what a harness that cannot run at all
+    produces: point the helper at a `lib.sh` that does not exist and stdout is
+    `''`, so `got or "empty"` is `"empty"` and the arm passes green over a
+    completely broken tree. That is the same shape as the `expect.refusal`
+    defect @OffgridwithJD found on main -- a failure that produces exactly the
+    value the test expects. The populated-tree premise below fails first when
+    the harness is broken, which is what makes the empty assertion mean
+    anything.
+    """
+    live = _fp_tree(tmp_path, "hollow_premise")
+    base, _ = _sh_fp(f'pgc_source_fingerprint "{live}"')
+    expect.at_least(len(base), 12,
+                    "premise: the same helper returns a fingerprint for a real tree")
+    empty = tmp_path / "hollow"
+    empty.mkdir()
+    got, _ = _sh_fp(f'pgc_source_fingerprint "{empty}"')
+    expect.text(got or "empty", "empty", "an unhashable tree yields no fingerprint")
+
+
+def _mf_tree(tmp_path, name):
+    t = tmp_path / name
+    (t / "src").mkdir(parents=True, exist_ok=True)
+    (t / "objstore").mkdir(parents=True, exist_ok=True)
+    (t / "src" / "a.c").write_text("int a;\n")
+    (t / "src" / "h.h").write_text("void h(void);\n")
+    (t / "objstore" / "m.c").write_text("int m;\n")
+    (t / "objstore" / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "pgcolumnar.control").write_text("x\n")
+    return t
+
+
+def test_the_manifest_names_what_the_fingerprint_hashed(tmp_path, expect):
+    """Twelve hex characters cannot say which file moved.
+
+    Two CI failures reported `source now a735c673b129, binary built from
+    6d122a7158d5` and nothing else -- identically, across two branches, two
+    majors and two build directories, with the fingerprint fix present in one of
+    them. A bare hash made the second occurrence another sample rather than an
+    answer.
+    """
+    t = _mf_tree(tmp_path, "mf")
+    out, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    lines = [l for l in out.splitlines() if l.strip()]
+    expect.num(len(lines), 6, "the manifest names every file the fingerprint hashes")
+    shaped = [l for l in lines if re.fullmatch(r"[A-Za-z0-9_./-]+ [0-9a-f]{32}", l)]
+    expect.num(len(shaped), 6, "each line is a tree-relative path and a digest")
+    expect.num(len([l for l in lines if l.startswith("/")]), 0,
+               "the manifest is tree-relative, never absolute")
+
+
+def test_the_fingerprint_is_the_hash_of_the_manifest(tmp_path, expect):
+    """One is defined as the other, so the two cannot drift apart."""
+    t = _mf_tree(tmp_path, "mh")
+    fp, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    via, _ = _sh_fp(f'pgc_source_manifest "{t}" | md5sum | cut -c1-12')
+    expect.text(fp, via, "the fingerprint is the hash of the manifest")
+
+
+def test_an_added_file_is_named_rather_than_merely_changing_the_hash(tmp_path, expect):
+    """The class the two CI failures fall into, and the one a hash cannot report.
+
+    An addition is the only class that explains one deviant value from two
+    different build directories: the manifest carries the path RELATIVE to the
+    tree, so the same file added under matrix-17 and matrix-18 contributes the
+    same line.
+    """
+    t = _mf_tree(tmp_path, "add")
+    before, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    (t / "src" / "zz_appeared.c").write_text("int zz;\n")
+    after, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    gained = set(after.splitlines()) - set(before.splitlines())
+    expect.num(len(gained), 1, "exactly one manifest line appears")
+    expect.text(sorted(gained)[0].split()[0], "src/zz_appeared.c",
+                "and it names the file that appeared")
+
+
+def test_the_fatal_report_can_be_run_rather_than_grepped_for(tmp_path, expect):
+    """A dump nobody can run is a dump nobody knows is empty."""
+    t = _mf_tree(tmp_path, "rep")
+    out, _ = _sh_fp(f'pgc_freshness_report "{t}"')
+    expect.num(len([l for l in out.splitlines() if l.strip().startswith("| src/a.c ")]), 1,
+               "the report names each hashed file")
+    expect.num(len([l for l in out.splitlines() if "(6 files, under" in l]), 1,
+               "the report states how many files it hashed")
+
+
+def test_an_empty_manifest_is_reported_as_empty_not_as_silence(tmp_path, expect):
+    """A silent empty dump reads as "the manifest was fine", which is the failure
+    this report exists to end."""
+    hollow = tmp_path / "hollow_report"
+    hollow.mkdir()
+    out, _ = _sh_fp(f'pgc_freshness_report "{hollow}"')
+    expect.num(len([l for l in out.splitlines() if "empty -- nothing under" in l]), 1,
+               "an empty manifest says so")
+
+
+def test_no_selftest_part_writes_into_the_live_source_tree(expect):
+    """A suite that runs beside others must not write into the tree they read.
+
+    `test/selftest/340` used to write `objstore/.pgc_fingerprint_probe.c` into
+    $PGC_SRCDIR to prove that a new file under a recursed directory moves the
+    fingerprint. `harness_selftest` runs IN the matrix, so at PGC_JOBS=4 it
+    created that file in the shared build directory while sibling suites
+    fingerprinted concurrently, and whichever sampled inside the window reported
+
+        FATAL: the binary under test was not built from this source
+               source now a735c673b129, binary built from 6d122a7158d5
+
+    against a tree that was correct. Four pull requests and two wrong diagnoses
+    before @linuxhikerpm found it by reading the suite.
+
+    WHY THIS IS A STATIC SCAN AND NOT A BEFORE/AFTER RUN. I wrote the behavioural
+    version first: fingerprint the tree, run the suite, fingerprint again. It
+    CANNOT CATCH THIS DEFECT. The probe was created and `rm -f`'d inside the same
+    suite, so the tree is byte-identical by the time the run ends and the
+    comparison passes. The damage is done to whoever samples DURING the window,
+    and an after-the-fact observer is blind to it by construction. Sampling
+    concurrently instead would make the arm racy -- it would pass whenever the
+    timing missed. So the observable property is the one in the source: no part
+    directs a write at the live tree.
+
+    ITS LIMIT, stated because I have spent today objecting to guards that catch
+    one spelling: this recognises a redirection whose target mentions the tree
+    root variables the parts actually use. A write reaching the tree by some other
+    route -- a `cp` destination, a path assembled elsewhere -- would evade it. The
+    `.sh` half asserts the concrete probe path is outside the tree and reddens
+    with `got [INSIDE ...]`; between them they cover this instance and the obvious
+    generalisations of it, not every conceivable one.
+    """
+    parts = sorted((SRCDIR / "test" / "selftest").glob("*.sh"))
+    expect.at_least(len(parts), 5, "premise: the selftest parts were found")
+
+    def offenders_in(text):
+        """Redirections that land in the live tree, following one indirection.
+
+        The real defect is written in two steps -- `_bd_probe="$_bd_root/..."`
+        and then `printf ... > "$_bd_probe"` -- so a scan that only looks for the
+        tree root INSIDE a redirection target misses it entirely. That was this
+        arm's first version, and it passed against the reverted defect.
+        """
+        root = r"(?:PGC_SRCDIR|_bd_root)"
+        tainted = set(re.findall(r'^\s*([A-Za-z_][A-Za-z0-9_]*)=\"?\$\{?' + root + r'\b',
+                                 text, re.M))
+        names = "|".join([root] + sorted(re.escape(t) for t in tainted))
+        redirect = re.compile(r'>\s*"?\$\{?(?:' + names + r')\b')
+        found = []
+        for n, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if redirect.search(line):
+                found.append(n)
+        return found
+
+    bad = []
+    for part in parts:
+        bad += [f"{part.name}:{n}" for n in offenders_in(part.read_text())]
+    expect.text(", ".join(bad) or "none", "none",
+                "no selftest part directs a write at the live source tree")
+
+    # PREMISES: the scan must be able to see each shape it claims to cover, or it
+    # passes on a pattern that matches nothing -- the shape it exists to refuse.
+    expect.num(len(offenders_in('printf x > "$PGC_SRCDIR/objstore/p.c"\n')), 1,
+               "premise: a direct write at the tree root is seen")
+    expect.num(len(offenders_in('_p="$_bd_root/objstore/p.c"\nprintf x > "$_p"\n')), 1,
+               "premise: and the INDIRECT form, which is the defect's own shape")
+    expect.num(len(offenders_in('_p="$_bd_copy/objstore/p.c"\nprintf x > "$_p"\n')), 0,
+               "control: a write into a COPY is not an offender")

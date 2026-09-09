@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**78 tests in 6 files.** Sixty-three of them test the harness rather than the
+**90 tests in 6 files.** Seventy-five of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -428,6 +428,152 @@ one of `fresh`, `predates` or `unknown`, and `unknown` is what an unreadable mti
 an unreadable postmaster start time, or a non-numeric epoch all produce. The
 boundary arm is separate on purpose: mtime resolution is one second, so a run fast
 enough to install and start within the same second must not refuse itself.
+
+### The fingerprint's own integrity, and why it needed six more arms
+
+Six tests, added with the fix that closed three defects in `pgc_source_fingerprint`
+itself. The subject is the instrument every other arm in this section depends on:
+if the fingerprint can be wrong, `never report on source you did not build` reports
+on nothing.
+
+`test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one` drives the
+real shell function with a **stub `md5sum` that is the real one except on its Nth
+call**, where it fails with no output — a fork that hits `EAGAIN`, an OOM kill, a
+loaded runner. The old code substituted that empty digest into the hash and
+returned status 0, so one unchanged tree produced three different confident
+answers. The premise arm requires the stub to agree with the real `md5sum` when
+nothing is configured to fail, or the test would be measuring the stub.
+
+`test_a_failed_digest_gives_unverified_and_never_a_false_stale` is the property
+that matters. `stale` is the FATAL; `unknown` prints `freshness UNVERIFIED` and
+runs the suites. The asymmetry is the whole argument for the change: a false
+UNVERIFIED costs a line of output, a false FATAL costs a matrix **and** teaches
+people to re-run past a freshness check, which is the failure this controller
+exists to prevent.
+
+`test_one_tree_hashes_one_way_however_the_path_is_spelled` pins five spellings —
+trailing slash, `/./`, `/src/..`, a symlink, and a relative `.` — against the plain
+path. Three of them disagreed before the fix, because `${f#"$dir"/}` strips a
+prefix that has to match character for character.
+
+`test_the_fix_does_not_rebaseline_stamps_already_on_disk` is a **compatibility**
+assertion rather than a tidiness one, and it is the arm that would have caught the
+worst version of this change. Detecting a failed digest means capturing the
+per-file lines to inspect them, and `$(...)` strips the trailing newline that the
+old straight pipe into `md5sum` included. Without restoring it, the same unchanged
+tree hashes differently before and after the fix, every stamp already on disk reads
+`stale`, and a fix for false FATALs becomes a false FATAL for everyone holding a
+built worktree. The matrix cannot catch that: it copies a fresh tree and re-stamps
+every run, so it lands on developers and on nobody's CI. The arm transcribes the
+previous implementation and requires the same answer.
+
+`test_the_fingerprint_still_moves_on_a_real_change` is the control without which
+the spelling arms are vacuous — "every spelling agrees" is satisfied perfectly by a
+fingerprint that ignores its input.
+
+`test_a_tree_with_nothing_hashable_reports_no_fingerprint` closes the last one: the
+hash of an empty stream is a stable, comparable value, so two trees with no source
+would have *matched*.
+
+**That last arm is the only one in this set with a real observation behind it
+rather than a model, and it was not the case it was written for.** It shipped as
+"a legitimate empty tree". @OffgridwithJD then observed the WHOLE manifest coming
+back empty under process pressure, on a read-only bind mount where content was
+excluded by construction: two distinct fingerprints over a tree incapable of
+changing, and the deviant value was `d41d8cd98f00`, which is md5 of the empty
+string — not a corrupted manifest but *no* manifest, hashed confidently. Measured
+here as an A/B with the real `md5sum` and no stub, 20 samples per cell:
+
+    true fingerprint = eebe35d6eaed ; md5("") = d41d8cd98f00
+
+    OLD ulimit -u 45   correct=19  md5("")=1   refused=0  other=0  | sum=20 of 20
+    OLD ulimit -u 40   correct=8   md5("")=11  refused=0  other=1  | sum=20 of 20
+    NEW ulimit -u 45   correct=20  md5("")=0   refused=0  other=0  | sum=20 of 20
+    NEW ulimit -u 40   correct=20  md5("")=0   refused=0  other=0  | sum=20 of 20
+
+At `ulimit -u 40` the old function returns a confident answer about nothing in 11
+runs of 20. The guard covers it structurally rather than statistically: a
+non-empty `out` has at least one line, so `md5("")` is not a reachable return
+value.
+
+### When it refuses, it says what it hashed
+
+Six more tests, added after two CI failures reported *the same pair of hashes and
+nothing else* — `source now a735c673b129, binary built from 6d122a7158d5`,
+identically, across two branches, two majors and two build directories, with the
+fingerprint fix present in one of them. **A bare hash made the second occurrence
+another sample rather than an answer.**
+
+So the manifest is a function in its own right, `pgc_source_fingerprint` is
+defined as its hash — the two cannot drift apart, and one test asserts exactly
+that — and the FATAL path prints it through `pgc_freshness_report`.
+
+`test_an_added_file_is_named_rather_than_merely_changing_the_hash` is the arm
+aimed at the open question. An addition is the only class that explains one
+deviant value from two different build directories, because the manifest carries
+the path RELATIVE to the tree: the same file appearing under `matrix-17` and
+`matrix-18` contributes the same line and therefore the same hash. The test
+requires the diff to name the file rather than report that something changed.
+
+`test_the_manifest_names_what_the_fingerprint_hashed` pins the shape of each line
+— a tree-relative path and a 32-character digest, never an absolute path, because
+an absolute path in the digest is the spelling defect returning by another route.
+`test_the_fingerprint_is_the_hash_of_the_manifest` is the arm that keeps the two
+from drifting, and `test_an_empty_manifest_is_reported_as_empty_not_as_silence`
+covers the case the report exists for.
+
+`test_the_fatal_report_can_be_run_rather_than_grepped_for` exists because the
+alternative was asserting that the source calls the function, which is the shape
+this suite refuses everywhere else. The report is a function so an arm can drive
+it, and the empty case says `(empty -- nothing under ...)` rather than printing
+nothing, because a silent empty dump reads as *the manifest was fine*.
+
+### The suite that wrote into the tree the other suites were reading
+
+`test_no_selftest_part_writes_into_the_live_source_tree` scans the parts for a
+redirection aimed at the live tree.
+
+`test/selftest/340` used to write `objstore/.pgc_fingerprint_probe.c` into
+`$PGC_SRCDIR`, to prove that a new file under a recursed directory moves the
+fingerprint. `harness_selftest` runs IN the matrix, so at `PGC_JOBS=4` it created
+that file in the shared build directory while sibling suites fingerprinted
+concurrently, and whichever sampled inside that window reported `FATAL: the binary
+under test was not built from this source` against a tree that was correct. The
+path is tree-relative and the content fixed, so the deviant value was *identical*
+across majors, build directories and branches — which is what made it look like a
+real staleness. It cost four pull requests and two wrong diagnoses before
+@linuxhikerpm found it by reading the suite.
+
+The arm now probes a hardlinked COPY of the tree. The intent survives, because the
+defect it was written for was that the *real* tree's `objstore/` was not being
+read, and a hand-built fixture could not have caught that — so a premise requires
+the copy to discover the same build directories as the real tree. **That premise
+immediately earned itself**: the first fix hardlinked across a filesystem
+boundary, `cp -al` failed after creating the destination, `cp -a` then copied the
+tree *inside* it, and the copy's build directories came out as `bfix src` rather
+than `objstore src`.
+
+**A BEFORE/AFTER RUN CANNOT CATCH THIS, and that is worth recording because it
+was my first attempt.** Fingerprint the tree, run the suite, fingerprint again:
+the probe was created and `rm -f`'d inside the same suite, so the tree is
+byte-identical by the time the run ends and the comparison passes. The damage is
+done to whoever samples DURING the window, and an after-the-fact observer is blind
+to it by construction. Sampling concurrently instead would make the arm racy — it
+would pass whenever the timing missed. So the observable property is the one in
+the source: no part directs a write at the live tree.
+
+Its limit is stated in the test: it recognises a redirection whose target mentions
+the tree-root variables the parts actually use, and a write reaching the tree by
+another route would evade it. It carries three premises of its own — that the scan
+recognises a write at `$PGC_SRCDIR`, that it recognises one through `$_bd_root`,
+and that a write into a COPY is *not* flagged — because a pattern that matches
+nothing would otherwise pass this arm silently.
+
+**What is still not guarded**, named here rather than left for someone to find: a
+TRUNCATED manifest — `find` returning fewer files rather than none — would produce
+a plausible wrong hash that neither the per-file sentinel nor the empty-manifest
+guard can see. It has not been observed. The boundary of this change is "the three
+observed variants are closed", not "the function is now infallible".
 
 ## 6. test_docs_cover_the_corpus.py: this document, checked
 
