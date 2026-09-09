@@ -36,13 +36,19 @@ true until the next version shipped.
 - `ALTER TABLE ... DROP COLUMN` is now refused when a projection depends on the
   column, instead of leaving the table unreadable (#891).
 
-  Dropping a column that any projection stores produced
-  `ERROR: type with OID 0 does not exist` on the next `INSERT`, and the table
-  stayed in that state. The refusal raises `2BP01`
-  (`dependent_objects_still_exist`) and names the projection, so the remedy is
-  to drop the projection first. One loop covers sort keys too, because
-  `add_projection()` requires every sort-key column to appear in the stored
-  columns. `DROP COLUMN IF EXISTS` of a column that is not there is unaffected.
+  Dropping a column any projection stores left the table broken, in one of two
+  ways. Dropping the **sort-key** column produced
+  `ERROR: type with OID 0 does not exist` on the next `INSERT`. Dropping any
+  other stored column let writes continue while `pgcolumnar.read_projection`
+  raised `cache lookup failed for type 0` and `pgcolumnar.rebuild_projections()`
+  reported repairing nothing -- the quieter and worse half, because it tells an
+  operator there was nothing to do.
+
+  The refusal raises `2BP01` (`dependent_objects_still_exist`) and names the
+  projection, so the remedy is to drop the projection first. One loop covers
+  sort keys too, because `add_projection()` requires every sort-key column to
+  appear in the stored columns. `DROP COLUMN IF EXISTS` of a column that is not
+  there is unaffected.
 
 ## [1.0-alpha3] - 2026-09-02
 
