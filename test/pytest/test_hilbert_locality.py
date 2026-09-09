@@ -18,6 +18,14 @@ The SHA is pinned rather than the branch name because a branch name cannot be
 checked six weeks from now, and this one moved three times while the file was
 being written.
 
+It moved a fourth time after this header was written: #897 is now 9064a46eb57d.
+That pin is deliberately NOT updated, because the point of a SHA is to say what
+was tested. `test/pytest/` is byte-identical between the two -- both trees hash
+to b20ad7e388e0, and the whole delta is thirty lines in one
+`test/selftest/` file the pytest harness never reads -- so the 18-of-18 result
+above still describes the current head. Verified here rather than taken from the
+push notice.
+
 ONE THING THIS FILE CANNOT SATISFY ON ITS OWN. #897 at b785795 adds
 `test_docs_cover_the_corpus.py`, a gate requiring every pytest file and every
 `def test_` to be named in `test/pytest/TESTS.md`. With this file present and
