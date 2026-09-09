@@ -77,6 +77,33 @@ if ! bash test/rebuild.sh "$PGC"; then
 	exit 1
 fi
 
+# THIS SCRIPT IS A CONTROLLER, so it records what it just installed.
+#
+# It builds and installs, then runs every suite with PGC_SKIP_BUILD=1. Without a
+# stamp those suites print "freshness UNVERIFIED" and continue, so the class this
+# check exists to catch -- edit a file, forget to rebuild, measure the old binary
+# -- was unprotected in exactly the loop where a human does it (@jdatcmd, #898
+# review). run_all_versions.sh was the only writer, and nobody edits C inside the
+# matrix.
+#
+# In a subshell sourcing lib.sh rather than recomputing the hash here: two
+# implementations of one fingerprint drift, and the suites compare against
+# whatever this writes.
+#
+# NOT `|| true`. If the stamp cannot be written, every suite below reports
+# UNVERIFIED and this stops being a controller with nothing saying so.
+if (
+	. "$BUILD/test/lib.sh"
+	pgc_write_source_stamp \
+		"$(pgc_source_stamp_path "$BUILD" "$(pgc_major_of "$PGC")")" \
+		"$(pgc_source_fingerprint "$BUILD")"
+); then
+	:
+else
+	echo "devloop: could not record the source stamp; the suites below will" >&2
+	echo "         report freshness UNVERIFIED rather than checking it" >&2
+fi
+
 rc=0
 for s in "$@"; do
 	echo "===================================================================="

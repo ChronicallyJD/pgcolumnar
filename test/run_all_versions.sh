@@ -710,6 +710,31 @@ for pgc in "${CONFIGS[@]}"; do
 		continue
 	fi
 
+	# THIS RUNNER IS THE CONTROLLER FOR THIS MAJOR'S BATCH. It built and installed
+	# once; the suites below all run with PGC_SKIP_BUILD=1 and would otherwise have
+	# no way to tell whether the binary they measure came from this tree. Record the
+	# fingerprint of the build inputs so each of them can check it.
+	#
+	# In a subshell sourcing lib.sh rather than recomputing the hash here: two
+	# implementations of one fingerprint would drift, and the suites compare against
+	# whatever this writes. lib.sh's top level is assignments and function
+	# definitions only, so sourcing it costs nothing and starts nothing.
+	# NOT `|| true`. If the stamp cannot be written, every suite in this batch
+	# reports "freshness UNVERIFIED" and the controller arm silently stops being a
+	# controller arm -- the whole batch degrades to the state this exists to
+	# prevent, and nothing says so. Say so.
+	if (
+		. "$builddir/test/lib.sh"
+		pgc_write_source_stamp \
+			"$(pgc_source_stamp_path "$builddir" "$major")" \
+			"$(pgc_source_fingerprint "$builddir")"
+	); then
+		:
+	else
+		echo "WARNING: could not record the source stamp for major $major." >&2
+		echo "         Every suite below will report freshness UNVERIFIED." >&2
+	fi
+
 	verfail=0
 	results=""
 	maxjobs="${PGC_JOBS:-6}"
