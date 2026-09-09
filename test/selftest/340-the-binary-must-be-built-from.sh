@@ -286,3 +286,152 @@ check "two unreadable pg_configs do not alias onto one stamp" \
 	    && echo different || echo SAME)" "different"
 
 unset _fs_bad _fs_ok _fs_rp _fs_before _fs_cfg _fs_n _fs_pa _fs_pb
+
+# ---- every caller must pass a pg_config, not a major ------------------------
+#
+# WHY THIS EXISTS, AND WHY IT IS A SWEEP RATHER THAN AN ARM ABOUT ONE LINE.
+# Changing pgc_source_stamp_path from `DIR MAJOR` to `DIR PG_CONFIG` changes a
+# CONTRACT, and a contract change is only as good as the sweep that finds every
+# caller. @jdatcmd merged the two branches and found the case this misses
+# (#903 review): #897 adds a NEW writer inside pgc_build_and_install, and
+# `test/lib.sh` conflicts in pgc_setup while that new call site merges CLEANLY
+# and is then wrong. The resolution you are shown is not the defect.
+#
+# What the mismatch costs, measured by driving the real function both ways:
+#
+#     correct (PG_CONFIG):     /t/.pgc_source_stamp.18.603d6145
+#     a major passed instead:  /t/.pgc_source_stamp.0.nolib6f4
+#
+# `pgc_major_of 18` finds no version in the string "18", so the major becomes 0
+# and the id becomes a hash of the literal "18". The writer and the reader then
+# address DIFFERENT FILES and never meet, so every suite reports
+# "freshness UNVERIFIED" -- and unknown is deliberately not a failure, so
+# NOTHING SAYS SO. Worse for the case this file exists for: a key derived from
+# the literal "18" is the same for every PG18 prefix, so pg18a, pg18n and
+# pg18_san collide again on the writer path.
+#
+# So this arm is about the CLASS. It reddens for any caller, in any file, that
+# passes a major where a pg_config belongs -- including one that arrives through
+# a clean merge in a hunk nobody was asked to resolve.
+
+_sc_sites="$(grep -rn 'pgc_source_stamp_path ' "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh 2>/dev/null \
+	| grep -v 'pgc_source_stamp_path() {')"
+
+# A sweep that found nothing reports "no bad callers" and looks exactly like a
+# sweep that works.
+check "premise: the sweep finds the call sites it is meant to police" \
+	"$([ "$(printf '%s\n' "$_sc_sites" | grep -c .)" -ge 3 ] && echo enough \
+		|| printf '%s\n' "$_sc_sites" | grep -c .)" "enough"
+
+# The second argument, per call site. A major-shaped one is the defect: a bare
+# integer, or a variable whose name ends in _major, or PGC_MAJOR.
+_sc_bad=""; _sc_n=0
+while IFS= read -r _sc_l; do
+	[ -n "$_sc_l" ] || continue
+	_sc_arg="$(printf '%s' "$_sc_l" | sed -n 's/.*pgc_source_stamp_path "[^"]*" "\([^"]*\)".*/\1/p')"
+	[ -n "$_sc_arg" ] || continue
+	case "$_sc_arg" in
+		'$PGC_MAJOR' | *_major'}' | *_major | [0-9] | [0-9][0-9])
+			_sc_n=$((_sc_n + 1))
+			[ "$_sc_n" -le 4 ] && _sc_bad="$_sc_bad ${_sc_l%%:*}:$(printf '%s' "$_sc_l" | cut -d: -f2)"
+			;;
+	esac
+done <<EOF
+$_sc_sites
+EOF
+
+check "no caller passes a major where a pg_config belongs" \
+	"$([ "$_sc_n" -eq 0 ] && echo none || echo "[$_sc_n:$_sc_bad]")" "none"
+
+# And the sweep must be able to SEE a bad caller, or "none" means nothing. The
+# fixture is the exact line #897 adds, so this arm is the one that would have
+# caught the merge @jdatcmd found.
+_sc_fix="$PGC_WORKDIR/contract"; rm -rf "$_sc_fix"; mkdir -p "$_sc_fix"
+# ASSEMBLED, NOT WRITTEN OUT. The sweep above greps the tree for exactly this
+# shape, so a fixture that spells the forbidden line literally IS a bad caller
+# as far as the sweep is concerned -- and it found this one, at this line, on
+# the first run. selftest 320 records the same lesson: a test for a pattern must
+# not contain the pattern.
+_sc_bad_arg="\$_pgc_bi""_major"
+printf '\t\t"$(pgc_source_stamp_path "$_pgc_bi_src" "%s")" \\\n' "$_sc_bad_arg" \
+	> "$_sc_fix/bad.sh"
+_sc_probe="$(sed -n 's/.*pgc_source_stamp_path "[^"]*" "\([^"]*\)".*/\1/p' "$_sc_fix/bad.sh")"
+check "premise: the argument parser reads the second argument at all" \
+	"$_sc_probe" '$_pgc_bi_major'
+
+check "a caller passing a major is caught" \
+	"$(case "$_sc_probe" in '$PGC_MAJOR' | *_major'}' | *_major | [0-9] | [0-9][0-9]) echo caught ;; *) echo MISSED ;; esac)" \
+	"caught"
+
+# The mirror: a correct caller must NOT be flagged, or the arm reddens on every
+# healthy tree and gets switched off.
+printf '\t\t"$(pgc_source_stamp_path "$_pgc_bi_src" "$_pgc_bi_cfg")" \\\n' \
+	> "$_sc_fix/good.sh"
+_sc_probe2="$(sed -n 's/.*pgc_source_stamp_path "[^"]*" "\([^"]*\)".*/\1/p' "$_sc_fix/good.sh")"
+check "control: a caller passing a pg_config is not flagged" \
+	"$(case "$_sc_probe2" in '$PGC_MAJOR' | *_major'}' | *_major | [0-9] | [0-9][0-9]) echo FLAGGED ;; *) echo clean ;; esac)" \
+	"clean"
+
+unset _sc_sites _sc_bad _sc_n _sc_l _sc_arg _sc_fix _sc_probe _sc_probe2
+
+# ---- the writer and the reader must address the SAME file -------------------
+#
+# THE CLASS, NOT THE INSTANCE (@jdatcmd, #903 review). The arm above sweeps for
+# a major passed where a pg_config belongs, which catches the shape. This one
+# catches the CONSEQUENCE regardless of shape: it drives the real
+# pgc_build_and_install and then asks the real reader for the value, so ANY
+# disagreement between the two about which file the stamp lives in reddens here
+# -- a renamed variable, a reordered argument, a third caller nobody swept.
+#
+# It is the property that actually matters. The writer and the reader agreeing
+# on a path is what makes the freshness check a check; when they disagree the
+# reader finds nothing, the verdict is `unknown`, and unknown is DELIBERATELY
+# not a failure -- so the whole mechanism goes quiet and every suite prints
+# "freshness UNVERIFIED" while looking healthy. Nothing else in this file
+# asserts it.
+#
+# `make` is stubbed on PATH so this costs nothing: the subject is which path the
+# stamp lands on, not whether the tree compiles.
+
+_wr="$PGC_WORKDIR/writer_reader"; rm -rf "$_wr"; mkdir -p "$_wr/src" "$_wr/bin"
+printf 'int x;\n' > "$_wr/src/a.c"
+printf 'all:\n\ttrue\n' > "$_wr/Makefile"
+printf '#!/bin/sh\nexit 0\n' > "$_wr/bin/make"; chmod 755 "$_wr/bin/make"
+{
+	printf '#!/bin/sh\n'
+	printf 'case "$1" in\n'
+	printf '  --version) echo "PostgreSQL 18.4" ;;\n'
+	printf '  --pkglibdir) echo "%s/lib" ;;\n' "$_wr"
+	printf 'esac\n'
+} > "$_wr/pg_config"; chmod 755 "$_wr/pg_config"
+
+# Drive the REAL function, exactly as pgc_setup calls it.
+( PATH="$_wr/bin:$PATH"; pgc_build_and_install "$_wr" "$_wr/pg_config" 18 ) >/dev/null 2>&1
+_wr_rc=$?
+
+check "premise: the build path ran to completion, so a stamp was due" "$_wr_rc" "0"
+
+# What landed, and what the reader will look for. Globbed rather than computed,
+# so this reads the writer's ACTUAL choice instead of re-deriving it.
+_wr_written=""
+for _wr_f in "$_wr"/.pgc_source_stamp.*; do
+	[ -e "$_wr_f" ] && _wr_written="$_wr_f"
+done
+_wr_expected="$(pgc_source_stamp_path "$_wr" "$_wr/pg_config")"
+
+check "premise: the writer wrote a stamp at all" \
+	"$([ -n "$_wr_written" ] && echo yes || echo "none in $_wr")" "yes"
+
+check "the writer writes the file the reader looks for" \
+	"$_wr_written" "$_wr_expected"
+
+# And end to end: the reader gets the fingerprint back, so the verdict is
+# `fresh` rather than `unknown`.
+check "and the reader reads back the fingerprint the writer recorded" \
+	"$(pgc_read_source_stamp "$_wr_expected")" "$(pgc_source_fingerprint "$_wr")"
+
+check "so the verdict is fresh, not unknown" \
+	"$(pgc_freshness_verdict "$(pgc_read_source_stamp "$_wr_expected")" \
+		"$(pgc_source_fingerprint "$_wr")")" "fresh"
+
+unset _wr _wr_rc _wr_written _wr_expected _wr_f
