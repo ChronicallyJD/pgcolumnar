@@ -6,6 +6,7 @@ the string "100" and leaves every conversion to the reader.
 """
 
 import decimal
+import pathlib
 
 
 def test_cluster_fixture_gives_a_typed_connection(pgc_conn, expect):
@@ -18,11 +19,30 @@ def test_cluster_fixture_gives_a_typed_connection(pgc_conn, expect):
 
 
 def test_the_extension_is_installed_and_columnar(pgc_conn, expect):
-    """The fixture must give a cluster with pgcolumnar loaded and usable."""
+    """The loaded extension is the version THIS CHECKOUT declares.
+
+    The expected version is read from `pgcolumnar.control` rather than written
+    here. A hardcoded "1.0-alpha3" is wrong the moment a release cycle opens, and
+    on 2026-09-09 it became wrong: #899 moved the tree to 1.0-alpha4 and this arm
+    would have failed for a reason that has nothing to do with what it tests.
+
+    It is also the wrong ASSERTION. A constant tests that the extension is a
+    particular version; reading the control file tests that the extension is the
+    one this source tree describes, which is the property the arm is named after
+    and the one that catches a foreign install.
+    """
+    from pgc_cluster import control_default_version
+
+    srcdir = pathlib.Path(__file__).resolve().parents[2]
+    want = control_default_version((srcdir / "pgcolumnar.control").read_text())
+    expect.text(bool(want), True,
+                "PREMISE the checkout declares a version to compare against")
+
     with pgc_conn.cursor() as cur:
         cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'pgcolumnar'")
         row = cur.fetchone()
-    expect.rows([row[0]] if row else [], ["1.0-alpha3"], "the extension version")
+    expect.rows([row[0]] if row else [], [want],
+                f"the loaded extension is this tree's {want}")
 
 
 def test_a_columnar_table_round_trips_with_real_types(pgc_conn, expect):
@@ -113,18 +133,36 @@ def test_the_worker_owns_its_own_cluster(pgc_cluster, expect):
     Two workers installing into one pkglibdir race, and a shared cluster lets one
     test see another's tables.
 
-    This asserts the port is the one DERIVED FROM THIS WORKER'S ID, which is what
-    makes distinctness a property rather than a hope: the mapping from worker id to
-    port is injective, so if every worker's port matches its own id, no two workers
-    share a port. Asserting only "the port is an int" would have passed while every
-    worker sat on 54600.
-    """
-    from pgc_cluster import PORT_BASE
+    This used to assert `port == PORT_BASE + slot`, an injective formula, so that
+    distinctness was a property rather than a hope. The formula is gone: the
+    harness now WALKS to a free port, because a fixed base is only a claim about
+    probability and this harness was broken by exactly that -- 54600 sat inside
+    the kernel's ephemeral range and something else was holding it
+    (@jdatcmd, #897 review).
 
+    So the assertions moved to the properties that survive a walk, starting with
+    the one that was actually false. `port < ephemeral floor` is the invariant
+    the old constant violated, and it is checked against the floor READ from the
+    kernel rather than a number written here.
+
+    Distinctness is now held by the walk starting each worker at its own offset
+    plus `is_ours()`, which fails loudly if the server answering is not the one
+    this worker started. A guard that says NO is what makes the yes mean
+    something; the arm below drives that guard to False on purpose.
+    """
+    from pgc_cluster import aux_band, read_ephemeral_floor
+
+    floor = read_ephemeral_floor()
+    lo, hi = aux_band(floor)
     wid = pgc_cluster.worker_id
-    slot = 0 if wid in (None, "master") else int(str(wid).lstrip("gw") or 0)
-    expect.num(pgc_cluster.port, PORT_BASE + slot,
-               f"worker {wid} owns the port derived from its id")
+
+    expect.at_least(pgc_cluster.port, lo,
+                    f"worker {wid} sits at or above the AUX band floor {lo}")
+    expect.at_least(hi - pgc_cluster.port, 1,
+                    f"and below the AUX band ceiling {hi}")
+    expect.at_least(floor - pgc_cluster.port, 1,
+                    f"and below the kernel's ephemeral floor {floor}, which is "
+                    "the invariant the old constant broke")
     expect.text(pgc_cluster.is_ours(), True,
                 "and the server answering there runs from our datadir")
 

@@ -219,6 +219,29 @@ class Expect:
             raise AssertionError(f"{name}: got {got!r}, wanted at least {floor!r}")
 
     # -- the layer's own tests ---------------------------------------------
+    def refusal(self, result, name, *patterns):
+        """The inner run failed, AND it failed for the REASON named.
+
+        `outcomes(result, failed=1)` alone is satisfied by any refusal, so a
+        guard whose neighbour catches the same input is pinned by nothing. A
+        mutation census over this layer found 12 of 17 guards deletable with the
+        corpus still green, and two of those were UNREACHABLE-by-subsumption
+        rather than untested: neuter `ordered_rows`'s both-empty guard and the
+        unobservable guard fires on the same input, so the inner run still fails
+        and an outcome-only assertion still passes (@jdatcmd, #897 review).
+
+        Every pattern must appear. Naming the message is what makes the arm
+        about one guard instead of about the layer in general.
+        """
+        if not patterns:
+            raise VacuityError(
+                f"{name}: refusal() with no pattern asserts only that something "
+                f"failed, which is the defect it exists to remove."
+            )
+        self._counted()
+        result.assert_outcomes(failed=1, passed=0)
+        result.stdout.fnmatch_lines([f"*{p}*" for p in patterns])
+
     def outcomes(self, result, name, **want):
         """Assert on an INNER pytest run's outcomes, and count it.
 

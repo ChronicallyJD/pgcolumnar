@@ -8,12 +8,14 @@ guard is proven to REFUSE rather than assumed to.
 """
 
 import os
+import re
+import pathlib
 import shutil
 
 import psycopg
 import pytest
 
-from pgc_cluster import make_cluster
+from pgc_cluster import build_once, make_cluster
 
 pytest_plugins = ["pytester"]
 
@@ -29,6 +31,16 @@ def pytest_addoption(parser):
     )
 
 
+SRCDIR = pathlib.Path(__file__).resolve().parents[2]
+
+
+def major_of(version_text):
+    """"PostgreSQL 18.4" -> "18". The build stamp is per major, because objects
+    from another major link and then fail to load (#536)."""
+    m = re.search(r"(\d+)", version_text or "")
+    return m.group(1) if m else ""
+
+
 @pytest.fixture(scope="session")
 def pgc_cluster(request, worker_id):
     """One cluster per xdist worker, built once and torn down at session end."""
@@ -38,6 +50,21 @@ def pgc_cluster(request, worker_id):
     # binary produced the results below.
     print(f"\n-- cluster: worker={worker_id} port={cluster.port} "
           f"{cluster.version} .so={cluster.so_md5()}")
+    # AND THE BINARY IS BUILT FROM THIS TREE, which the fingerprint above never
+    # established. Printing a fingerprint tells a reader which binary ran; it
+    # does not stop the run when that binary came from somewhere else.
+    #
+    # Comparing the INSTALLED artifacts against the source was my first fix and
+    # it was not enough: appending `#error` to a .c file leaves the .control and
+    # the .sql byte-identical, so the corpus would still have reported 25 passed
+    # on source that cannot compile (@jdatcmd, #897 review). The only honest
+    # check is the one the bash harness has made since #536 -- build, install,
+    # and refuse to report if either fails.
+    #
+    # The install itself is the reason this harness skipped it: the workers
+    # share one pkglibdir. That is a reason to serialise it, not to skip it.
+    verdict = build_once(str(SRCDIR), pg_config, major_of(cluster.version))
+    print(f"-- build: {verdict} from {SRCDIR}")
     try:
         with psycopg.connect(cluster.dsn(), autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS pgcolumnar")

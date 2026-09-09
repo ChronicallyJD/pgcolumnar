@@ -134,6 +134,77 @@ pgc_so_line() {
 	fi
 }
 
+# pgc_build_and_install SRCDIR PG_CONFIG MAJOR
+#
+# Build and install the extension, or fail. Extracted from pgc_setup UNCHANGED so
+# the pytest harness can drive the same implementation instead of carrying a
+# second one: test/pytest/ never built or installed, so it reported 25 passed
+# against source carrying `#error THIS SOURCE IS BROKEN AND CANNOT BUILD`
+# (@jdatcmd, #897 review). Two implementations of "is the thing under test the
+# thing in this tree" would drift, and the drift would be invisible in exactly
+# the way that defect was.
+#
+# Returns non-zero rather than calling exit, so a caller that is not a suite --
+# the Python harness -- can turn it into its own kind of failure. pgc_setup
+# passes the exit through, so bash behaviour is unchanged.
+pgc_build_and_install() {
+	_pgc_bi_src="$1"
+	_pgc_bi_cfg="$2"
+	_pgc_bi_major="$3"
+	_pgc_bi_stamp="$_pgc_bi_src/.pgc_built_for_major"
+	_pgc_bi_had="$(cat "$_pgc_bi_stamp" 2>/dev/null | tr -dc '0-9')"
+	_pgc_bi_objs=no
+	[ -n "$(find "$_pgc_bi_src/src" -maxdepth 1 -name '*.o' -print -quit 2>/dev/null)" ] && _pgc_bi_objs=yes
+	# Objects from another major link but do not load (#536).
+	if [ "$(pgc_build_needs_clean "$_pgc_bi_had" "$_pgc_bi_major" "$_pgc_bi_objs")" = yes ]; then
+		pgc_build_stale_message "$_pgc_bi_had" "$_pgc_bi_major"
+		make -C "$_pgc_bi_src" clean PG_CONFIG="$_pgc_bi_cfg" >/dev/null 2>&1 || true
+	fi
+	echo "-- building"
+	if ! make -C "$_pgc_bi_src" PG_CONFIG="$_pgc_bi_cfg" >/dev/null; then
+		echo "FATAL: the build failed, so there is nothing new to test" >&2
+		echo "       (refusing to report checks against the previously installed .so)" >&2
+		return 1
+	fi
+	# Stamped only after a build that succeeded. printf '%s\n', NOT '%s\\n':
+	# the doubled backslash writes the four bytes 1 9 \ n, which only worked
+	# because the reader strips non-digits. Caught in review, not by a test.
+	pgc_write_build_stamp "$_pgc_bi_stamp" "$_pgc_bi_major"
+	echo "-- installing"
+	if ! make -C "$_pgc_bi_src" install PG_CONFIG="$_pgc_bi_cfg" >/dev/null; then
+		echo "FATAL: the install failed, so the .so under test is not the one just built" >&2
+		echo "       (refusing to report checks against the previously installed .so)" >&2
+		return 1
+	fi
+
+	# THIS CALL IS THE CONTROLLER for whatever follows in this batch: it built
+	# and installed, so record what the binary was built from.
+	#
+	# THE STAMP IS WRITTEN ON THE PATH THAT BUILT AND INSTALLED, AND ON NO OTHER.
+	# That is a statement about WHICH PATH, not about which line, and it is why
+	# the write lives HERE rather than in pgc_setup. The pytest harness calls
+	# this function directly, so a stamp written in the caller is not written at
+	# all for that harness, and every pytest run reports "freshness UNVERIFIED"
+	# while looking healthy. Hoisted above the install it would be written for
+	# an install that may have failed.
+	#
+	# The wording matters because this is a merge conflict site. #898's version
+	# of this comment said the stamp is "written HERE and nowhere else", meaning
+	# not in the SKIP-build branch -- but at the conflict that reads as a claim
+	# about the LINE and argues for leaving the write in pgc_setup, which is the
+	# resolution that silently disables the check for the pytest harness
+	# (@jdatcmd, #898 approval).
+	#
+	# An earlier revision wrote it in the SKIP-build branch, which made the check
+	# tautological -- every run recorded the source it was about to compare
+	# against, so a suite measuring an edited tree reported "matches the binary
+	# under test". A red arm caught it, which is the only reason this exists.
+	pgc_write_source_stamp \
+		"$(pgc_source_stamp_path "$_pgc_bi_src" "$_pgc_bi_major")" \
+		"$(pgc_source_fingerprint "$_pgc_bi_src")"
+	return 0
+}
+
 pgc_setup() {
 	PGC_PG_CONFIG="${1:-/usr/local/pg17/bin/pg_config}"
 	PGC_BINDIR="$("$PGC_PG_CONFIG" --bindir)"
@@ -197,42 +268,7 @@ pgc_setup() {
 	# installed .so and saw the same hash either side of a source change that could
 	# not have produced it.
 	if [ -z "${PGC_SKIP_BUILD:-}" ]; then
-		# Objects from another major link but do not load (#536).
-		_pgc_stamp="$PGC_SRCDIR/.pgc_built_for_major"
-		_pgc_had="$(cat "$_pgc_stamp" 2>/dev/null | tr -dc '0-9')"
-		_pgc_objs=no
-		[ -n "$(find "$PGC_SRCDIR/src" -maxdepth 1 -name '*.o' -print -quit 2>/dev/null)" ] && _pgc_objs=yes
-		if [ "$(pgc_build_needs_clean "$_pgc_had" "$PGC_MAJOR" "$_pgc_objs")" = yes ]; then
-			pgc_build_stale_message "$_pgc_had" "$PGC_MAJOR"
-			make -C "$PGC_SRCDIR" clean PG_CONFIG="$PGC_PG_CONFIG" >/dev/null 2>&1 || true
-		fi
-		echo "-- building"
-		if ! make -C "$PGC_SRCDIR" PG_CONFIG="$PGC_PG_CONFIG" >/dev/null; then
-			echo "FATAL: the build failed, so there is nothing new to test" >&2
-			echo "       (refusing to report checks against the previously installed .so)" >&2
-			exit 1
-		fi
-		# Stamped only after a build that succeeded. printf '%s\n', NOT '%s\\n':
-		# the doubled backslash writes the four bytes 1 9 \ n, which only worked
-		# because the reader strips non-digits. Caught in review, not by a test.
-		pgc_write_build_stamp "$_pgc_stamp" "$PGC_MAJOR"
-		echo "-- installing"
-		if ! make -C "$PGC_SRCDIR" install PG_CONFIG="$PGC_PG_CONFIG" >/dev/null; then
-			echo "FATAL: the install failed, so the .so under test is not the one just built" >&2
-			echo "       (refusing to report checks against the previously installed .so)" >&2
-			exit 1
-		fi
-
-		# THIS RUN IS THE CONTROLLER for whatever follows in this batch: it built
-		# and installed, so record what the binary was built from. The stamp is
-		# written HERE and nowhere else. An earlier revision wrote it in the
-		# skip-build branch instead, which made the check tautological -- every run
-		# recorded the source it was about to compare against, so a suite measuring
-		# an edited tree reported "matches the binary under test". My own red arm
-		# caught it, which is the only reason this comment exists.
-		pgc_write_source_stamp \
-			"$(pgc_source_stamp_path "$PGC_SRCDIR" "$PGC_MAJOR")" \
-			"$(pgc_source_fingerprint "$PGC_SRCDIR")"
+		pgc_build_and_install "$PGC_SRCDIR" "$PGC_PG_CONFIG" "$PGC_MAJOR" || exit 1
 	else
 		# Named because the variable is not what it says. It reads as "skip the
 		# build" and means "skip the build AND the install, and test whatever is
