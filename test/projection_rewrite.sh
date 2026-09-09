@@ -248,40 +248,42 @@ arm r_cluster     "SELECT pgcolumnar.cluster('r_cluster','a');"           REWROT
 # ---------------------------------------------------------------------------
 # The re-record must never abort the statement that triggered it.
 #
-# A declaration can name a column the relation no longer has: ALTER TABLE ...
-# RENAME COLUMN does not carry the rename through projection_declaration's
-# columns/sort_key arrays (#888). The re-record resolves those NAMES against the
-# relation as it is now, so on such a table it cannot materialise the projection.
+# A declaration can name a column the relation no longer has. Measured before this
+# arm existed: the re-record raised `column "a" does not exist` inside an unrelated
+# ALTER TABLE ... ALTER COLUMN id TYPE bigint, exit 1, and the type change was
+# rolled back -- turning a silently lost projection into a blocked schema change. A
+# repair that cannot run must degrade to a WARNING and leave the projection for
+# rebuild_projections, which is the documented recovery.
 #
-# What it must not do is take the user's statement down with it. Measured before
-# this arm existed: the re-record raised `column "a" does not exist` inside an
-# unrelated ALTER TABLE ... ALTER COLUMN id TYPE bigint, exit 1, and the type
-# change was rolled back -- turning a silently lost projection into a blocked
-# schema change. A repair that cannot run must degrade to a WARNING and leave
-# the projection for rebuild_projections, which is the documented recovery.
-#
-# This arm is independent of whether #888 lands: a declaration can also go stale
-# through a path nobody has closed yet, and the statement must survive either way.
-echo "-- a stale declaration must not abort the statement (#888 interaction)"
+# HOW THE STALE DECLARATION IS PRODUCED, and why it is not a rename.
+# ALTER TABLE ... RENAME COLUMN used to leave the declaration behind, and #888 fixed
+# that. So a rename can no longer produce this state, and an earlier version of this
+# arm correctly reported UNMET_PRECONDITION once #888 landed rather than passing
+# vacuously. The state is still reachable: any database created before #888 carries
+# it, and nothing guarantees some future path cannot reintroduce it. So the arm
+# writes the stale name directly into pgcolumnar.projection_declaration, which is
+# exactly what such a database looks like, and keeps testing the property that
+# matters -- that the repair cannot take a user's statement down with it.
+echo "-- a stale declaration must not abort the statement"
 psql_run "CREATE TABLE stale (id int, a int, b text) USING pgcolumnar;"
 psql_run "INSERT INTO stale SELECT g, g%50, 'b'||g FROM generate_series(1,$N) g;"
 psql_run "SELECT pgcolumnar.add_projection('stale','pp',ARRAY['a','b'],ARRAY['a']);"
-psql_run "ALTER TABLE stale RENAME COLUMN a TO a2;"
+# Name a column the table does not have, as a pre-#888 database would after a rename.
+psql_run "UPDATE pgcolumnar.projection_declaration
+             SET columns = ARRAY['gone','b'], sort_key = ARRAY['gone']
+           WHERE rel = 'stale'::regclass AND name = 'pp';"
 STALE_DECL="$(q "SELECT columns::text FROM pgcolumnar.projection_declaration WHERE rel='stale'::regclass;")"
-if [ "$STALE_DECL" = "{a,b}" ]; then
-	pgc_pass "PREMISE the rename left the declaration naming a dead column"
+if [ "$STALE_DECL" = "{gone,b}" ]; then
+	pgc_pass "PREMISE the declaration names a column the table lacks"
 else
-	# #888 landing makes this premise false, and then the arm below is vacuous
-	# rather than passing: it can only test a statement that must survive a
-	# stale declaration if the declaration is actually stale.
 	check_unrunnable "stale: the statement survives a stale declaration" \
-		UNMET_PRECONDITION "declaration is $STALE_DECL, not stale; #888 may have landed"
+		UNMET_PRECONDITION "declaration is $STALE_DECL, so it is not stale"
 	check_unrunnable "stale: the base table keeps its rows" \
-		UNMET_PRECONDITION "declaration is $STALE_DECL, not stale; #888 may have landed"
+		UNMET_PRECONDITION "declaration is $STALE_DECL, so it is not stale"
 	check_unrunnable "stale: the unrelated type change took effect" \
-		UNMET_PRECONDITION "declaration is $STALE_DECL, not stale; #888 may have landed"
+		UNMET_PRECONDITION "declaration is $STALE_DECL, so it is not stale"
 fi
-if [ "$STALE_DECL" = "{a,b}" ]; then
+if [ "$STALE_DECL" = "{gone,b}" ]; then
 	if psql_run "ALTER TABLE stale ALTER COLUMN id TYPE bigint;" >/dev/null 2>&1; then
 		pgc_pass "stale: the statement survives a stale declaration"
 	else
@@ -293,15 +295,15 @@ if [ "$STALE_DECL" = "{a,b}" ]; then
 		"$(q "SELECT format_type(atttypid,atttypmod) FROM pg_attribute
 		       WHERE attrelid='stale'::regclass AND attname='id';")" "bigint"
 
-	# A skip the user is never told about is a silent projection loss, which is
-	# the whole complaint in #876. Assert the WARNING from its own output, and
-	# assert the negative control in the same breath: a table whose declaration
-	# is intact must not produce one, or the arm passes on a warning that fires
-	# unconditionally.
+	# A skip the user is never told about is a silent projection loss, which is the
+	# whole complaint in #876. Assert the WARNING from its own output, and assert the
+	# negative control in the same breath: a table whose declaration is intact must
+	# not produce one, or the arm passes on a warning that fires unconditionally.
 	psql_run "CREATE TABLE stale2 (id int, a int, b text) USING pgcolumnar;" >/dev/null
 	psql_run "INSERT INTO stale2 SELECT g, g%50, 'b'||g FROM generate_series(1,$N) g;" >/dev/null
 	psql_run "SELECT pgcolumnar.add_projection('stale2','pp',ARRAY['a','b'],ARRAY['a']);" >/dev/null
-	psql_run "ALTER TABLE stale2 RENAME COLUMN a TO a2;" >/dev/null
+	psql_run "UPDATE pgcolumnar.projection_declaration SET columns = ARRAY['gone','b'],
+	             sort_key = ARRAY['gone'] WHERE rel = 'stale2'::regclass;" >/dev/null
 	check "stale: the skip warns, naming the projection and the recovery" \
 		"$(psql_run "ALTER TABLE stale2 ALTER COLUMN id TYPE bigint;" 2>&1 |
 		    grep -cE 'WARNING:.*could not restore projection "pp"|rebuild_projections')" "2"
@@ -312,6 +314,22 @@ if [ "$STALE_DECL" = "{a,b}" ]; then
 		"$(psql_run "ALTER TABLE fresh2 ALTER COLUMN id TYPE bigint;" 2>&1 |
 		    grep -ci warning)" "0"
 fi
+
+# And the property #888 now guarantees, asserted here too because this suite is the
+# one that breaks if it regresses: a rename carries into the declaration, so the
+# repair after a later rewrite still resolves.
+echo "-- a renamed column no longer strands the declaration (#888)"
+psql_run "CREATE TABLE renamed (id int, a int, b text) USING pgcolumnar;"
+psql_run "INSERT INTO renamed SELECT g, g%50, 'b'||g FROM generate_series(1,$N) g;"
+psql_run "SELECT pgcolumnar.add_projection('renamed','pp',ARRAY['a','b'],ARRAY['a']);"
+psql_run "ALTER TABLE renamed RENAME COLUMN a TO a2;"
+check "renamed: the declaration followed the rename" \
+	"$(q "SELECT columns::text FROM pgcolumnar.projection_declaration WHERE rel='renamed'::regclass;")" \
+	"{a2,b}"
+psql_run "ALTER TABLE renamed ALTER COLUMN id TYPE bigint;"
+check "renamed: and the projection survives a later rewrite" \
+	"$(pgc_set_hash "SELECT pgcolumnar.read_projection('renamed','pp')")" \
+	"$(pgc_set_hash "SELECT a2::text||'|'||b FROM renamed")"
 
 echo "-- rebuild_projections stays the documented manual recovery (#876)"
 psql_run "CREATE TABLE rec (id int, a int, b text) USING pgcolumnar;"
