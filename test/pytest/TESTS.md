@@ -65,6 +65,9 @@ assertion, so the two read differently in output.
 | `num(got, want, name)` | two numbers are equal | anything that is not a number, including `bool`, and including the string `"100"` that `psql -At` would have given |
 | `at_least(got, floor, name)` | `got >= floor` | non-numbers, and a floor of zero or less, which any count satisfies |
 | `rows(got, want, name, allow_empty=None)` | two result sets are equal | both sides empty, unless `allow_empty` gives a reason |
+| `row_set(got, want, name, allow_empty=None)` | two result sets are equal **ignoring order** | what `rows` refuses |
+| `ordered_rows(got, want, name)` | two sequences are equal **in order** | two empty sequences, and a sequence whose elements are all identical, where order cannot be observed |
+| `ordering_observable(forward, reverse, name)` | this fixture can distinguish order at all | a fixture that reads identically both ways |
 | `hash(got, want, name)` | two oracle hashes are equal | comparing an object against itself, either side being a `QUERY_ERROR` sentinel, both sides empty |
 | `text(got, want, name)` | two strings are equal | an empty expectation, which anything empty satisfies |
 | `plan_marker(plan, key, name, absent=False)` | some plan node carries a `Columnar` property key | nothing; `absent=True` inverts it |
@@ -79,6 +82,14 @@ failed is not the same as asserting that a named guard fired: several guards are
 subsumed by a neighbouring one, so the inner run fails either way and an
 outcome-only assertion cannot tell which. Requiring the message is the same move as
 asserting on a SQLSTATE rather than on prose -- name the contract, not the symptom.
+
+**Which oracle you pick is an assertion, not a formatting choice.** `row_set`
+ignores order by declaration; `ordered_rows` asserts it. The collection scan refuses
+`sorted()` or `set()` feeding `ordered_rows`, because that reads as an ordering claim
+and is not one. This is `pgc_seq_hash`, `diff_query_ordered` and
+`pgc_check_ordered_oracle` ported, including that third one's control: the set oracle
+must be order-blind BY DESIGN, or an ordered oracle could quietly be implemented as a
+set one and every ordering test would go silent while staying green.
 
 `rows` compares row sets rather than `md5(string_agg(...))`. That asserts the same
 property as the bash oracle by a stronger means: a hash mismatch says two hashes
@@ -794,7 +805,7 @@ an arm where the two differ is void rather than reported.
 ## 10. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 21
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 22
 of them.** The other 56, of which 50 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 

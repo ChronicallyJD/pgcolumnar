@@ -40,8 +40,8 @@ recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 21 |
-| named in section 3, not refused | 51 |
+| named in section 2, refused today | 22 |
+| named in section 3, not refused | 50 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -58,7 +58,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-21 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+22 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -75,6 +75,7 @@ test in `test_layer.py` that fails without it.
 | `xfail_strict = true` | `xfail-xpass-and-the-wrong-exception`, `xfail-and-xpass-are-green` |
 | `--pgc-expect-tests` asserts the run's own shape | `zero-collected-exit-5`, `filters-select-nothing`, `partial-selection-exits-zero` |
 | the connection fixture is autocommit | `uncommitted-fixture-measures-an-empty-table` |
+| `ordered_rows` refuses an unobservable ordering, and the scan refuses `sorted()` feeding it | `set-oracle-on-an-ordered-claim` |
 
 Three of those were added after checking this layer against the inventory rather
 than reasoning about it, and all three had passed silently before:
@@ -87,7 +88,7 @@ than reasoning about it, and all three had passed silently before:
 
 ## 3. What it does not refuse
 
-56 modes by the run's count, **51 of them named below**, **50 demonstrated by a run**. 52 have a refusal already designed.
+55 modes by the run's count, **50 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -133,11 +134,6 @@ is the same reason `test/run_all_versions.sh` carries its own accounting.
 
 ### 3.4 The assertion is shaped so it cannot fail
 
-- `set-oracle-on-an-ordered-claim` — a test that names `ORDER BY` and compares
-  `sorted(got) == sorted(want)` cannot fail on order. `lib.sh` closes this with
-  `diff_query_ordered`, `pgc_seq_hash` and `pgc_check_ordered_oracle`; **the port
-  has no ordered oracle at all.** Note `expect.rows` is order-sensitive, so the
-  collapse comes from callers sorting, as `test_native_projection.py` does.
 - `raises-too-broad`, `raises-catches-setup` — `pytest.raises(psycopg.Error)` is
   satisfied by an unrelated failure of the same family.
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
@@ -204,8 +200,6 @@ Each entry names the red test to write first.
 2. `test_layer_rejects_an_empty_parametrize` — closes the shape most likely to bite
    a corpus-driven port.
 3. `test_layer_rejects_a_fixture_that_skips` — closes the largest blast radius.
-4. `test_expect_ordered_rows_refuses_a_sorted_comparison` — port `pgc_seq_hash` and
-   `diff_query_ordered`. The port cannot express an ordered claim today.
 5. `test_expect_query_error_sentinel_is_unique_per_failure` — make something produce
    `QUERY_ERROR.<seq>`; the constant exists and nothing writes it.
 6. `test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.
@@ -222,6 +216,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 21 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 22 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.

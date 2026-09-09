@@ -110,6 +110,80 @@ class Expect:
         if got != want:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
+    def row_set(self, got, want, name, allow_empty=None):
+        """Compare two result sets as SETS, order deliberately ignored.
+
+        The counterpart to ordered_rows, and the port of pgc_set_hash. It exists so
+        that ignoring order is DECLARED rather than smuggled in by sorting at the
+        call site: `ordered_rows(sorted(x), ...)` reads like an ordering claim and is
+        not one, which is why the collection scan refuses it.
+
+        pgc_check_ordered_oracle asserts three things, and this is the third: the set
+        oracle must be order-blind BY DESIGN. Without a control proving the two
+        instruments differ, an ordered oracle could quietly be implemented as a set
+        one and every ordering test in the tree would go silent.
+        """
+        self.rows(sorted(map(repr, got)), sorted(map(repr, want)), name,
+                  allow_empty=allow_empty)
+
+    # -- ordered sequences ---------------------------------------------------
+    def ordered_rows(self, got, want, name):
+        """Compare two sequences IN ORDER, refusing the cases where order says nothing.
+
+        This is the port of `pgc_seq_hash` and `diff_query_ordered`, which the harness
+        has had since #418 and this layer did not. It compares the sequences rather
+        than hashing them, for the same reason `rows` does: a mismatch names the
+        position, where a hash mismatch only says two hashes differ.
+
+        THE REFUSAL THAT MATTERS IS THE SECOND ONE. A sequence whose elements are all
+        equal reads the same forwards and backwards, so an ordering claim about it
+        cannot fail. That is `pgc_check_ordered_oracle`'s premise inverted: the bash
+        version proves its oracle order-sensitive by requiring forward != reverse on a
+        known fixture, and the same requirement applied to a caller's data is what
+        stops an ordered assertion being decorative.
+        """
+        g, w = list(got), list(want)
+        if not g and not w:
+            raise VacuityError(
+                f"{name}: both sequences are empty, so this comparison could not "
+                f"have failed. Use rows(..., allow_empty='why') if empty is the point."
+            )
+        if len(set(map(repr, g))) < 2 and len(set(map(repr, w))) < 2:
+            raise VacuityError(
+                f"{name}: order cannot be observed in these sequences. Every element "
+                f"is the same, so the reverse ordering is identical and the claim "
+                f"asserts nothing beyond what rows() already asserts."
+            )
+        self._counted()
+        if g != w:
+            for i, (a, b) in enumerate(zip(g, w)):
+                if a != b:
+                    raise AssertionError(
+                        f"{name}: first difference at position {i}: got {a!r} want {b!r}"
+                    )
+            raise AssertionError(
+                f"{name}: same prefix, different length: got {len(g)} rows want {len(w)}"
+            )
+
+    def ordering_observable(self, forward, reverse, name):
+        """Assert this fixture can distinguish order at all, before relying on it.
+
+        `pgc_check_ordered_oracle` ported. Read the same rows both ways and require
+        the two to differ: a fixture that reads identically forwards and backwards
+        supports no ordering claim, and every ordered assertion over it is vacuous
+        however carefully it is written.
+        """
+        f, r = list(forward), list(reverse)
+        if not f and not r:
+            raise VacuityError(f"{name}: both directions are empty.")
+        self._counted()
+        if f == r:
+            raise AssertionError(
+                f"{name}: the forward and reverse readings are identical, so nothing "
+                f"in this fixture can detect an ordering error. Give it rows whose "
+                f"order is observable before asserting order."
+            )
+
     # -- row counts ---------------------------------------------------------
     def rowcount(self, got, want, name):
         """Compare a row count, refusing psycopg's "no count available" sentinel.
@@ -540,6 +614,41 @@ def pytest_collection_finish(session):
 # somebody switches off, and a line regex over source cannot tell code from a string
 # literal -- the same mistake as matching a plan by substring. ast can: a handler
 # inside a string is not an ExceptHandler node.
+# An ordered claim whose inputs were SORTED cannot fail on order.
+#
+# ordered_rows is order-sensitive, so the vacuity is introduced at the call site:
+# `expect.ordered_rows(sorted(got), sorted(want))` compares two sequences that were
+# just put in the same order. This is the collapse VACUITY_MODES.md records as
+# set-oracle-on-an-ordered-claim, and lib.sh has no equivalent because bash has no
+# sorted() to reach for.
+#
+# Parsed, not grepped, for the same reason as the except scan below.
+_ORDER_KILLERS = ("sorted", "set", "frozenset")
+
+
+def _sorted_ordered_sites(path):
+    try:
+        tree = ast.parse(pathlib.Path(path).read_text())
+    except (OSError, SyntaxError):
+        return []
+    out = []
+    name = pathlib.Path(path).name
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if not (isinstance(f, ast.Attribute) and f.attr in ("ordered_rows",
+                                                            "ordering_observable")):
+            continue
+        for arg in node.args:
+            if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
+                    and arg.func.id in _ORDER_KILLERS):
+                out.append(
+                    f"{name}:{node.lineno} {arg.func.id}() feeds an ordered claim"
+                )
+    return out
+
+
 def _broad_except_sites(path):
     try:
         tree = ast.parse(pathlib.Path(path).read_text())
@@ -594,12 +703,14 @@ def pytest_collection_modifyitems(config, items):
             seen_files.add(f)
             for site in _broad_except_sites(f):
                 offenders.append(f"{site} catches Exception broadly")
+            offenders.extend(_sorted_ordered_sites(f))
     if offenders:
         # One hook, two offences, so the message must say which. An earlier version
         # reused the skip wording and told a reader with a broad `except` to call
         # expect.cannot_run, which would not have helped them.
         skips = [o for o in offenders if "@pytest.mark." in o]
         excepts = [o for o in offenders if "catches Exception broadly" in o]
+        ordered = [o for o in offenders if "feeds an ordered claim" in o]
         parts = []
         if skips:
             parts.append(
@@ -613,6 +724,13 @@ def pytest_collection_modifyitems(config, items):
                 "after one failed statement psycopg raises for every later one: "
                 + "; ".join(excepts)
                 + " -- catch the specific exception class instead"
+            )
+        if ordered:
+            parts.append(
+                "sorted() or set() feeding an ordered claim removes the very "
+                "ordering it asserts: "
+                + "; ".join(ordered)
+                + " -- pass the rows in the order the query returned them"
             )
         raise pytest.UsageError(
             "the pgColumnar vacuity layer refuses this run: " + ". ".join(parts) + "."
