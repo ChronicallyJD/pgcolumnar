@@ -121,6 +121,46 @@ class Cluster:
         self.sharedir = _pg_config(pg_config, "--sharedir")
         self._started = False
 
+    def server_binary_verdict(self, so_mtime, postmaster_epoch):
+        """fresh | predates | unknown, from two epochs.
+
+        Pure, so it is driven without a server. `predates` means the postmaster
+        started BEFORE the library on disk was written, so the backends are
+        executing older code than the file -- shared_preload_libraries maps the
+        library at start and a reinstall does not reload it.
+        """
+        try:
+            so, pm = float(so_mtime), float(postmaster_epoch)
+        except (TypeError, ValueError):
+            return "unknown"
+        return "predates" if so > pm else "fresh"
+
+    def require_server_loaded_this_binary(self):
+        """Refuse if the running server predates the installed library."""
+        try:
+            so_mtime = os.stat(self.so_path).st_mtime
+        except OSError:
+            so_mtime = None
+        pm = None
+        try:
+            import psycopg
+            with psycopg.connect(self.dsn(), autocommit=True) as conn:
+                row = conn.execute(
+                    "SELECT extract(epoch from pg_postmaster_start_time())"
+                ).fetchone()
+                pm = row[0] if row else None
+        except Exception:
+            pm = None
+        verdict = self.server_binary_verdict(so_mtime, pm)
+        if verdict == "predates":
+            raise RuntimeError(
+                f"this server started before {self.so_path} was installed, so its "
+                f"backends are running older code than the file on disk. "
+                f"shared_preload_libraries maps the library at start; a reinstall "
+                f"does not reload it."
+            )
+        return verdict
+
     # -- is the installed extension the one this checkout describes? -------
     @property
     def extension_dir(self):

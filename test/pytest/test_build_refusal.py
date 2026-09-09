@@ -197,3 +197,47 @@ def test_an_unfingerprintable_tree_always_rebuilds(tmp_path, expect):
     build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
     build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
     expect.num(len(calls), 2, "both calls build, because neither could be certified")
+
+
+# ---------------------------------------------------------------------------
+# The ORDER of build and server start, which is not a detail.
+#
+# shared_preload_libraries maps the library at postmaster start, so a cluster
+# started before the install keeps the OLD .so mapped for its whole life. The
+# build reports success and every test still measures the previous branch's
+# code -- the guard defeated by the order of two lines. This is how it showed
+# up: the first run after a source change failed to start a cluster, and the
+# next run passed because the install had already landed.
+
+
+class _C:
+    """Just enough Cluster to drive the verdict."""
+    from pgc_cluster import Cluster
+    server_binary_verdict = Cluster.server_binary_verdict
+
+
+def test_a_server_older_than_the_library_is_refused(expect):
+    expect.text(_C().server_binary_verdict(so_mtime=200, postmaster_epoch=100),
+                "predates", "the .so was written after the server started")
+
+
+def test_a_server_started_after_the_library_is_fresh(expect):
+    expect.text(_C().server_binary_verdict(so_mtime=100, postmaster_epoch=200),
+                "fresh", "the server started after the .so was installed")
+
+
+def test_equal_timestamps_are_fresh_not_predates(expect):
+    """The exact boundary. A one-second-resolution mtime and a start time in the
+    same second must not read as stale, or every fast run refuses itself."""
+    expect.text(_C().server_binary_verdict(so_mtime=100, postmaster_epoch=100),
+                "fresh", "same second is not stale")
+
+
+def test_an_unreadable_side_is_unknown_not_fresh(expect):
+    """`unknown` never reads as `fresh` anywhere in this harness."""
+    expect.text(_C().server_binary_verdict(so_mtime=None, postmaster_epoch=100),
+                "unknown", "no .so mtime")
+    expect.text(_C().server_binary_verdict(so_mtime=100, postmaster_epoch=None),
+                "unknown", "no postmaster start time")
+    expect.text(_C().server_binary_verdict(so_mtime="x", postmaster_epoch="y"),
+                "unknown", "non-numeric epochs")

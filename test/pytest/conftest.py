@@ -15,7 +15,7 @@ import shutil
 import psycopg
 import pytest
 
-from pgc_cluster import build_once, make_cluster
+from pgc_cluster import _pg_config, build_once, make_cluster
 
 pytest_plugins = ["pytester"]
 
@@ -45,26 +45,33 @@ def major_of(version_text):
 def pgc_cluster(request, worker_id):
     """One cluster per xdist worker, built once and torn down at session end."""
     pg_config = request.config.getoption("--pg-config")
+
+    # BUILD BEFORE THE SERVER STARTS. This ran the other way round first, and the
+    # ordering was not a detail: shared_preload_libraries maps the library at
+    # postmaster start, so a cluster started before the install keeps the OLD
+    # .so mapped for its whole life. The build would report success and every
+    # test would still measure the previous branch's code -- the same defect the
+    # build guard exists to close, reintroduced by the order of two lines.
+    #
+    # It showed up as a flake: the first run after a source change failed to
+    # start a cluster, and the next run passed because the install had already
+    # landed.
+    major = major_of(_pg_config(pg_config, "--version"))
+    verdict = build_once(str(SRCDIR), pg_config, major)
+
     cluster, root = make_cluster(pg_config, worker_id)
+    print(f"\n-- build: {verdict} from {SRCDIR}")
     # Printed for the same reason lib.sh prints it: so a reader can tell which
     # binary produced the results below.
-    print(f"\n-- cluster: worker={worker_id} port={cluster.port} "
+    print(f"-- cluster: worker={worker_id} port={cluster.port} "
           f"{cluster.version} .so={cluster.so_md5()}")
-    # AND THE BINARY IS BUILT FROM THIS TREE, which the fingerprint above never
-    # established. Printing a fingerprint tells a reader which binary ran; it
-    # does not stop the run when that binary came from somewhere else.
-    #
-    # Comparing the INSTALLED artifacts against the source was my first fix and
-    # it was not enough: appending `#error` to a .c file leaves the .control and
-    # the .sql byte-identical, so the corpus would still have reported 25 passed
-    # on source that cannot compile (@jdatcmd, #897 review). The only honest
-    # check is the one the bash harness has made since #536 -- build, install,
-    # and refuse to report if either fails.
-    #
-    # The install itself is the reason this harness skipped it: the workers
-    # share one pkglibdir. That is a reason to serialise it, not to skip it.
-    verdict = build_once(str(SRCDIR), pg_config, major_of(cluster.version))
-    print(f"-- build: {verdict} from {SRCDIR}")
+    # And the running server is the one that loaded THAT library. @jdatcmd noted
+    # a start-time check would be near-vacuous because the cluster is initdb'd
+    # fresh each session, so the postmaster always starts after the .so. That is
+    # true once the order above is right, and it is exactly what pins the order:
+    # with the build after the start, the .so is NEWER than the postmaster and
+    # this refuses.
+    cluster.require_server_loaded_this_binary()
     try:
         with psycopg.connect(cluster.dsn(), autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS pgcolumnar")
