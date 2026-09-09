@@ -222,6 +222,33 @@ true until the next version shipped.
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
+- The test harness refuses to measure a binary that was not built from the source
+  under test.
+
+  `test/run_all_versions.sh` builds and installs once per major and then runs every
+  suite with `PGC_SKIP_BUILD=1`, so no suite could tell whether the binary it
+  measured came from this tree. The controller now records a fingerprint of the
+  build inputs after a successful install, and `pgc_setup` checks it in every
+  suite, whether that suite built or skipped. A mismatch is fatal and names both
+  fingerprints.
+
+  A second check covers the other half. `make install` does not reload anything:
+  `shared_preload_libraries` maps the library at postmaster start, so a reinstall
+  under a running server leaves the backends executing older code than the file on
+  disk. The `.so` mtime is compared against `pg_postmaster_start_time()`, and the
+  message says to restart rather than only that something is wrong.
+
+  Neither check fails when it cannot answer. Someone who ran `make install` by hand
+  has no stamp, so that case prints `freshness UNVERIFIED` and says which question
+  went unanswered, rather than printing nothing and letting a reader assume it
+  passed.
+
+  `pgc_freshness_verdict` and `pgc_running_binary_verdict` are pure functions of
+  strings, so `test/selftest/340-the-binary-must-be-built-from.sh` drives them
+  directly: 16 arms including both empty inputs, a non-numeric epoch, equal
+  timestamps on the boundary, and sensitivity to each fingerprint input class.
+  `harness_selftest` goes from 261 checks to 277.
+
 
 - A nanosecond Arrow import says how many values lost precision, and still
   imports every row.
