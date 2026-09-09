@@ -32,10 +32,44 @@ In scope for the first landing:
 
 Out of scope, deliberately:
 
-- Porting the other 254 suites. Nothing is deleted in this landing.
+- Porting the other 255 suites. Nothing is deleted in this landing.
 - Replacing `test/run_all_versions.sh`. It stays the gate.
 - Porting any suite that starts, kills or crashes a server.
 - FreeBSD support. It is a reason to prefer Python, not a deliverable here.
+- **Registering the pytest run in `SUITES` or in CI.** Section 1a says why that is
+  a decision rather than an oversight.
+
+## 1a. Why this is not registered in the gate yet, and what registering costs
+
+An unregistered test suite rots. So this needs a decision rather than a default, and
+the decision has a measured price.
+
+`pgc_skip` in `lib.sh` **does not skip**. Read it: it increments the failure count and
+prints
+
+```
+FAIL  <message>
+      A missing dependency is an environment defect, not a pass. Install
+      it, or set PGC_ALLOW_MISSING_<CAP>=1 to run knowingly without this coverage.
+```
+
+That is a deliberate house rule and it is the right one. It also means a wrapper
+registered in `SUITES` cannot quietly stand aside on a machine without pytest. CI has
+no pytest, no psycopg and no xdist, so registering the run today makes **every** CI job
+red until `ci.yml` installs them.
+
+So registering is one line in `SUITES` plus a real change to `ci.yml`: a step that
+installs from `test/pytest/requirements-test.txt` on the suite jobs. That is a change
+to the gate every other PR depends on, and it belongs to whoever owns the gate rather
+than to the pilot that wants it.
+
+Until then the pytest run is a local command, documented in `test/pytest/README.md`,
+and the bash matrix remains the only gate. Anyone reviewing this should treat "not
+gated" as the open question it is, not as a claim that it does not matter.
+
+The alternative, `PGC_ALLOW_MISSING_PYTEST=1` in CI, is worse than either. It reads as
+coverage and provides none, which is the vacuity defect this whole document exists to
+prevent, one level up.
 
 ## 2. Prerequisites, measured
 

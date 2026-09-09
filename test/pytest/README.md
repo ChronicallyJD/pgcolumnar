@@ -41,6 +41,14 @@ It compares the two by assertion NAME and exits non-zero if the bash suite asser
 a property the port does not. A port keeps this working by passing each assertion
 the same name string the bash check uses.
 
+## This is not in the gate yet
+
+`test/run_all_versions.sh` does not run these tests, and neither does CI. That is a
+decision with a price, recorded in section 1a of the design document: `pgc_skip`
+treats a missing dependency as a failure rather than a skip, so registering this run
+in `SUITES` would redden every CI job until `ci.yml` installs from
+`requirements-test.txt`. Until someone takes that decision, run it by hand.
+
 ## Warnings
 
 The vacuity layer is loaded through `pytest.ini` and cannot be turned off by a test
