@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**62 tests in 6 files.** Forty-seven of them test the harness rather than the
+**66 tests in 6 files.** Fifty-one of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -90,9 +90,9 @@ Python, where encoding or collation could make identical rows hash differently.
 
 ## 3. test_layer.py: the guards, testing themselves
 
-These ten run pytest inside pytest through the `pytester` fixture. Each writes a
-small test file, runs it with the plugin loaded, and asserts on the INNER run's
-outcome. That is what proves a guard REFUSES, rather than assuming it.
+These fourteen run pytest inside pytest through the `pytester` fixture. Each
+writes a small test file, runs it with the plugin loaded, and asserts on the INNER
+run's outcome. That is what proves a guard REFUSES, rather than assuming it.
 
 Each row names the measured bare-pytest behaviour the guard exists to stop. Every
 one of those eight measurements exited 0.
@@ -109,8 +109,12 @@ one of those eight measurements exited 0.
 | `test_layer_rejects_a_bare_skip` | a bare `@pytest.mark.skip` fails the run | `2 skipped`, exit 0 |
 | `test_layer_fails_on_a_collected_count_mismatch` | a run that collects fewer tests than expected fails | a filtered run exits 5, widely treated as fine |
 | `test_layer_refuses_a_zero_expectation` | `--pgc-expect-tests 0` is refused | it would be satisfied by collecting nothing |
+| `test_an_unrunnable_test_does_not_leave_the_run_green` | a test declaring itself unrunnable exits 67 | **`1 passed`, exit 0** |
+| `test_an_unrunnable_test_names_its_reason_and_its_detail` | the `UNRUN` line carries reason and detail | nothing was printed at all |
+| `test_a_real_failure_outranks_an_unrunnable_test` | a run with both exits 1, not 67 | — |
+| `test_a_run_with_nothing_unrunnable_still_exits_zero` | **control**: a green run is untouched | — |
 
-Four of the ten are controls rather than guards. They are not decoration. A guard
+Five of the fourteen are controls rather than guards. They are not decoration. A guard
 with a bad false-positive rate gets switched off, and then the guard it replaced is
 gone too. `test_a_counted_assertion_passes` and
 `test_layer_matches_the_exact_provider` exist so that a guard which starts
@@ -120,6 +124,52 @@ The escape hatches are deliberately more expensive to type than the honest form.
 `allow_empty` takes a reason, not `True`. `--pgc-expect-tests` takes the real
 number. `cannot_run` takes a reason from a closed list. None of them can become the
 default by being shorter.
+
+### The third state, and the hole it left
+
+**`cannot_run` reported a pass.** It wrote `self.unrunnable` and nothing read it,
+so a test that declared itself unrunnable printed `1 passed` and exited 0 —
+measured, not inferred. A write-only field, the same shape
+`test/selftest/320-a-check-that-could-not-run.sh` polices in the runner, where an
+INCOMPLETE branch set a variable the verdict never read.
+
+**It made the layer's own escape hatch its largest hole.** A bare
+`@pytest.mark.skip` FAILS the run. The honest-looking alternative greened
+silently, so the layer refused the cheap dishonest escape and permitted the
+expensive-looking one. An escape hatch that costs nothing is the default.
+
+The run now ends `EXIT_INCOMPLETE`, which is 67 — deliberately the same number as
+`PGC_EXIT_INCOMPLETE` in `lib.sh:58`, because a runner that learns the code should
+learn it once. pytest itself uses 0–6, so 67 collides with nothing. The reason and
+detail print in lib.sh's shape:
+
+```
+UNRUN  test_probe.py::test_cannot: ABSENT_FIXTURE: the parquet corpus was not built
+checks unrunnable: 1
+```
+
+**Failure still dominates**, exactly as in lib.sh: a run with both a failure and an
+unrunnable test is a failure, because the failure is the more urgent fact. The
+override only ever moves a run off zero. Measured in all four combinations, serial
+and under `-n 2`:
+
+```
+unrunnable only          exit 67    exit 67  (-n 2)
+unrunnable + a failure   exit  1    exit  1  (-n 2)
+```
+
+The xdist column is not decoration. The declaration travels to the controller as a
+`user_property` on the test report, because a worker's own exit status is discarded
+by xdist and a variable held in the worker process would never be seen. The
+collector is held on the **config**, not in a module global, because `pytester`
+runs the layer's own tests in-process: a module-level list would leak an inner
+run's declarations into the outer session and exit the whole corpus INCOMPLETE.
+
+The structural half of this is pinned in the gate by
+`test/selftest/360-an-unrunnable-pytest-test-must.sh`, which is greppable from a
+checkout with nothing installed — it asserts the field is read, that the read
+reaches the exit status, that the override is conditional, and that the two
+harnesses agree on 67. Against the pre-fix layer it reddens six arms.
 
 ## 4. test_guards_pinned.py: every refusal, pinned to its own message
 

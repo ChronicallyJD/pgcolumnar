@@ -261,7 +261,7 @@ true until the next version shipped.
 
   This ports ONE bash suite. `test/` carries 4,429 anchored assertions across 256
   suites, so this is 0.18% of them and is not coverage. The layer is the point:
-  62 tests in 6 files, of which 47 test the harness rather than the product.
+  66 tests in 6 files, of which 51 test the harness rather than the product.
 
   A pytest run fails open in several ways this project has already been bitten by:
   a test that asserts nothing passes, a filter that selects nothing exits 0, and a
@@ -296,6 +296,17 @@ true until the next version shipped.
   two that can drift, and it runs BEFORE the cluster starts --
   `shared_preload_libraries` maps the library at postmaster start, so a cluster
   started before the install keeps the old one mapped for its whole life.
+
+  **The third state is a state, not a comment.** `expect.cannot_run(REASON,
+  detail)` wrote a field nothing read, so a test declaring itself unrunnable
+  reported `1 passed` and exit 0 -- a write-only flag, the shape selftest 320
+  already polices in the runner. It made the layer's own escape hatch its largest
+  hole, because a bare `@pytest.mark.skip` fails the run while the honest-looking
+  alternative greened silently. A run holding one now exits 67, the same number as
+  `PGC_EXIT_INCOMPLETE` in `lib.sh`, and prints the reason and detail in the same
+  shape; a run holding a real failure as well still exits 1, because failure
+  dominates. Verified serial and under `-n 2`, the declaration travelling to the
+  xdist controller on the test report.
 
   **`test/pytest/TESTS.md` is checked rather than trusted.** It documents every
   test in the corpus, and it went stale inside a single rework: 29 of 54 tests

@@ -42,6 +42,12 @@ UNRUNNABLE_REASONS = (
 # own tests and two workers cannot share a counter.
 _RECORDERS = {}
 
+# lib.sh:58 PGC_EXIT_INCOMPLETE. The same number deliberately: a suite that could
+# not evaluate something exits 67 there, and a runner that learns the code learns
+# it once. pytest itself uses 0-6 (`pytest.ExitCode`), so 67 collides with
+# nothing.
+EXIT_INCOMPLETE = 67
+
 
 class VacuityError(AssertionError):
     """Raised when an assertion could not have failed, or asserted nothing."""
@@ -295,7 +301,19 @@ class Expect:
 
     # -- the third state ---------------------------------------------------
     def cannot_run(self, reason, detail=""):
-        """Declare this test unrunnable. Not a pass, and not a silent skip."""
+        """Declare this test unrunnable. Not a pass, and not a silent skip.
+
+        THE STATE HAS TO COST SOMETHING OR IT IS A SKIP WITH BETTER MANNERS. It
+        did not, at first: this wrote `self.unrunnable` and nothing read it, so a
+        test calling this reported `1 passed` and exit 0. A write-only field --
+        the same shape selftest 320 polices in the runner, where an INCOMPLETE
+        branch set a flag the verdict never read. It made the layer's own escape
+        hatch its largest hole: a bare `@pytest.mark.skip` FAILS the run, while
+        the honest-looking alternative greened silently.
+
+        The run now ends `EXIT_INCOMPLETE` unless something failed outright, and
+        the reason and detail are printed. See `_UnrunnableCollector` below.
+        """
         if reason not in UNRUNNABLE_REASONS:
             raise VacuityError(
                 f"unrunnable reason {reason!r} is not one of {UNRUNNABLE_REASONS}"
@@ -328,6 +346,84 @@ def pytest_runtest_call(item):
             f"Use the `expect` fixture, or declare it unrunnable with a reason."
         )
     return result
+
+
+class _UnrunnableCollector:
+    """Gathers the unrunnable declarations of ONE session.
+
+    Held on the config rather than in a module global, because `pytester` runs
+    the layer's own tests IN-PROCESS: an inner run imports this same module, so a
+    module-level list would leak the inner run's declarations into the outer
+    session and exit the whole corpus INCOMPLETE. One collector per config is one
+    per session, inner runs included.
+    """
+
+    def __init__(self):
+        self.items = []
+
+    def pytest_runtest_logreport(self, report):
+        # This hook fires on the CONTROLLER for reports received from xdist
+        # workers, which is why the declaration travels as a user_property
+        # rather than in a variable the worker process owns. A worker's own
+        # exit status is discarded by xdist; the controller's is the run's.
+        if report.when != "call":
+            return
+        for key, value in getattr(report, "user_properties", ()):
+            if key == "pgc_unrunnable":
+                reason, _, detail = value.partition("\n")
+                self.items.append((report.nodeid, reason, detail))
+
+
+def pytest_configure(config):
+    collector = _UnrunnableCollector()
+    config.pluginmanager.register(collector, "pgc_unrunnable_collector")
+    config.pgc_unrunnable = collector
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Carry an unrunnable declaration out on the report itself.
+
+    `user_properties` is serialised across the xdist boundary; an attribute of
+    our own would not be.
+    """
+    report = yield
+    if call.when == "call":
+        rec = _RECORDERS.get(item.nodeid)
+        if rec is not None and rec.unrunnable:
+            reason, detail = rec.unrunnable
+            report.user_properties.append(("pgc_unrunnable", f"{reason}\n{detail}"))
+    return report
+
+
+def pytest_terminal_summary(terminalreporter):
+    """Print the third state, in lib.sh's shape.
+
+    `UNRUN  <name>: <REASON>: <detail>`, then the count. A state that does not
+    say why is a skip with better manners, and a state with no count cannot be
+    reconciled against the total.
+    """
+    collector = getattr(terminalreporter.config, "pgc_unrunnable", None)
+    if collector is None or not collector.items:
+        return
+    terminalreporter.write_line("")
+    for nodeid, reason, detail in collector.items:
+        terminalreporter.write_line(f"UNRUN  {nodeid}: {reason}: {detail}")
+    terminalreporter.write_line(f"checks unrunnable: {len(collector.items)}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """An unrunnable test must not leave the run green.
+
+    FAILURE STILL DOMINATES, exactly as in lib.sh: a run with both a failure and
+    an unrunnable test is a failure, because the failure is the more urgent fact.
+    So this only ever moves a run OFF zero, and never off a non-zero status.
+    """
+    collector = getattr(session.config, "pgc_unrunnable", None)
+    if collector is None or not collector.items:
+        return
+    if exitstatus == 0:
+        session.exitstatus = EXIT_INCOMPLETE
 
 
 def pytest_addoption(parser):

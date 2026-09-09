@@ -175,3 +175,82 @@ def test_layer_refuses_a_zero_expectation(pytester, expect):
     pytester.makepyfile("def test_one(expect): expect.num(1, 1, 'one')")
     result = pytester.runpytest("-p", "pgc_vacuity", "--pgc-expect-tests", "0")
     expect.run_failed(result, "an expectation of zero asserts nothing")
+
+
+# ---------------------------------------------------------------------------
+# THE THIRD STATE. `cannot_run` declared a test unrunnable and the run reported
+# it as a PASS, exit 0: `self.unrunnable` was written and read nowhere. That is
+# a write-only field, the same shape selftest 320 polices in the runner ("no
+# write-only failure flag survives"), and it made the layer's own escape hatch
+# the largest vacuity hole in it -- a bare skip FAILS the run, while the
+# supposedly honest alternative greened silently.
+#
+# lib.sh has kept this state honest since #418: an unrunnable check counts
+# toward checks run, is reported separately, and the suite exits
+# PGC_EXIT_INCOMPLETE (67) so no runner can call it a pass. These four arms are
+# the pytest mirror of selftest 320's four, including which state dominates.
+
+
+def test_an_unrunnable_test_does_not_leave_the_run_green(pytester, expect):
+    """The defect itself. Measured before the fix: `1 passed`, exit 0."""
+    pytester.makeconftest("pytest_plugins = ['pgc_vacuity']")
+    pytester.makepyfile(
+        """
+        def test_cannot(expect):
+            expect.cannot_run("ABSENT_FIXTURE", "the parquet corpus was not built")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.num(result.ret, 67, "an unrunnable test exits INCOMPLETE, not 0")
+
+
+def test_an_unrunnable_test_names_its_reason_and_its_detail(pytester, expect):
+    """A third state that does not say why is a skip with better manners.
+
+    The reason travels with the state, exactly as lib.sh prints
+    `UNRUN  <name>: <REASON>: <detail>`.
+    """
+    pytester.makeconftest("pytest_plugins = ['pgc_vacuity']")
+    pytester.makepyfile(
+        """
+        def test_cannot(expect):
+            expect.cannot_run("ABSENT_FIXTURE", "the parquet corpus was not built")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    result.stdout.fnmatch_lines(
+        ["*UNRUN*test_cannot*ABSENT_FIXTURE*the parquet corpus was not built*"])
+    expect.num(result.ret, 67, "and it is still not a pass")
+
+
+def test_a_real_failure_outranks_an_unrunnable_test(pytester, expect):
+    """Which state dominates, asserted rather than left to fall out.
+
+    lib.sh: a suite with both a FAIL and an UNRUN is FAILED, because the failure
+    is the more urgent fact. Exit 1, not 67.
+    """
+    pytester.makeconftest("pytest_plugins = ['pgc_vacuity']")
+    pytester.makepyfile(
+        """
+        def test_cannot(expect):
+            expect.cannot_run("ABSENT_FIXTURE", "no corpus")
+        def test_fails(expect):
+            expect.num(1, 2, "one is not two")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.num(result.ret, 1, "a failure outranks an unrunnable test")
+
+
+def test_a_run_with_nothing_unrunnable_still_exits_zero(pytester, expect):
+    """Control. A guard that reddens a healthy run gets switched off, and then
+    the guard it replaced is gone too."""
+    pytester.makeconftest("pytest_plugins = ['pgc_vacuity']")
+    pytester.makepyfile(
+        """
+        def test_ok(expect):
+            expect.num(2 + 2, 4, "arithmetic still works")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.num(result.ret, 0, "an ordinary green run is untouched")
