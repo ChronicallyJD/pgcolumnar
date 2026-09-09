@@ -32,9 +32,11 @@ behaviour, the source of that number is named.
 - [6. test_docs_cover_the_corpus.py: this document, checked](#6-test_docs_cover_the_corpuspy-this-document-checked)
 - [7. test_connection.py: the cluster and the direct connection](#7-test_connectionpy-the-cluster-and-the-direct-connection)
 - [8. test_native_projection.py: the ported suite](#8-test_native_projectionpy-the-ported-suite)
-- [9. Adding a test](#9-adding-a-test)
-- [10. What this corpus does NOT yet refuse](#10-what-this-corpus-does-not-yet-refuse)
-- [11. Traps this corpus records](#11-traps-this-corpus-records)
+- [9. test_ordered.py: the ordered oracle](#9-test_orderedpy-the-ordered-oracle)
+- [10. test_runshape.py: the shape of the run itself](#10-test_runshapepy-the-shape-of-the-run-itself)
+- [11. Adding a test](#11-adding-a-test)
+- [12. What this corpus does NOT yet refuse](#12-what-this-corpus-does-not-yet-refuse)
+- [13. Traps this corpus records](#13-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -775,7 +777,75 @@ The mutation makes `PgColumnarProjectionFanoutRow` return without writing. Each 
 builds and installs once, and both harnesses print the `.so` md5 they measured, so
 an arm where the two differ is void rather than reported.
 
-## 9. Adding a test
+## 9. test_ordered.py: the ordered oracle
+
+`lib.sh` has two oracles and this port had one. `pgc_set_hash` sorts before hashing,
+so a bash test naming `ORDER BY` and comparing with `diff_query` cannot fail on
+order; `pgc_seq_hash` and `diff_query_ordered` are the ones that can. These nine
+tests port that pair and its premise check.
+
+| test | the guard | what it stops |
+| --- | --- | --- |
+| `test_ordered_rows_refuses_a_sequence_whose_order_is_unobservable` | an ordered claim over a constant sequence is refused | forward equals reverse, so order asserts nothing |
+| `test_ordered_rows_refuses_two_empty_sequences` | two empty sides are refused here too | inherits `rows()`'s refusal instead of losing it |
+| `test_ordered_rows_accepts_a_real_ordering` | **positive control** | a genuine ordered claim still passes |
+| `test_ordered_rows_fails_on_the_wrong_order` | the oracle detects order | proves it can fail, not merely that it permits |
+| `test_layer_refuses_sorting_the_input_to_an_ordered_claim` | `sorted()` feeding `ordered_rows` is uncollectable, found by AST | `ordered_rows(sorted(got), sorted(want))` cannot fail on order |
+| `test_ordering_observable_requires_the_two_directions_to_differ` | a fixture reading the same forwards and backwards is refused | the premise `pgc_check_ordered_oracle` asserts in bash |
+| `test_ordering_observable_passes_when_the_directions_differ` | **positive control** | a real fixture is untouched |
+| `test_the_two_oracles_are_different_instruments` | the set oracle and the sequence oracle must disagree on a permutation | if they agree, one of them is not the instrument it claims to be |
+| `test_row_set_still_refuses_two_empty_sides` | **regression control** | adding the sequence oracle must not weaken the set one |
+
+The third property is the one worth reading twice. Two oracles that always agree are
+one oracle with two names, and a suite built on them would pass every ordering claim
+by construction. The test feeds both a permutation and requires the set oracle to
+accept while the sequence oracle rejects.
+
+The AST scan matters for the same reason the broad-`except` scan does. A line regex
+for `sorted(` fired inside the `pytester.makepyfile` string of the test that tests
+it, so the guard rejected its own corpus. Walking the tree and looking at real call
+nodes is the only version that distinguishes code from a string holding code.
+
+## 10. test_runshape.py: the shape of the run itself
+
+The other guards ask whether a test asserted anything. These six ask whether the
+**run** did. Each of the three failure shapes turns a whole session green rather
+than a single test, which is why they were built before the rest of the backlog.
+
+| test | the guard | bare pytest, measured |
+| --- | --- | --- |
+| `test_layer_fails_when_a_collected_test_never_reports` | the reported node-id set is reconciled against the collected one | 6 collected, 5 reported; the crash is named, the lost test is not |
+| `test_layer_accepts_a_run_where_every_test_reports` | **positive control** | an honest parallel run is untouched |
+| `test_layer_rejects_a_parametrize_over_an_empty_list` | an empty parameter set fails the run | `1 skipped`, exit 0 |
+| `test_layer_accepts_a_parametrize_with_cases` | **positive control** | a real parameter set is untouched |
+| `test_layer_rejects_a_fixture_that_skips` | a skip arriving during setup fails the run | every dependent test skips, exit 0 |
+| `test_layer_allows_a_declared_unrunnable_test` | **escape hatch and control** | `expect.cannot_run` records a counted assertion instead of skipping |
+
+Half of these are controls, and deliberately so: a run-shape guard fires on the whole
+session, so a false positive costs the entire suite rather than one test.
+
+Read that first row precisely, because bare pytest is not silent here: it exits 1
+and prints `worker 'gw1' crashed while running 'test_loss.py::test_kills'`. What it
+never mentions is `test_loss.py::test_d`, which was collected, assigned to the dead
+worker, and never ran. Measured on a 6-test corpus under `-n 2
+--max-worker-restart=0`: 6 collected, 5 node-ids reported, and the missing one
+appears in no line of the output. A suite whose crash happens to land on a test
+already expected to fail therefore reports exactly what you expected while running
+fewer tests than you wrote.
+
+Two things about the reconciliation took a measurement to get right. Under `xdist`
+the **workers** collect, not the controller, so the controller's collected set stayed
+empty and the guard was present and blind until it also listened to
+`pytest_xdist_node_collection_finished`. And the state has to live on a per-config
+plugin instance rather than module globals: `pytester.runpytest()` runs the inner
+session in-process, so module-level sets leaked between these tests and the sessions
+they drive. The corpus reported 44 passed and exited 1.
+
+The empty-parametrize refusal carries its own message rather than folding into the
+bare-skip refusal. When a corpus glob matches nothing, the cause the reader needs to
+see is the corpus, not the marker.
+
+## 11. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -802,19 +872,19 @@ an arm where the two differ is void rather than reported.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 10. What this corpus does NOT yet refuse
+## 12. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 22
-of them.** The other 56, of which 50 were demonstrated, are listed there with the
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
+of them.** The other 47, of which 46 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
-Read it before adding a test, because the gap most likely to affect a new test is
-that the port has **no ordered oracle**: a claim about `ORDER BY` compared with
-sorted lists cannot fail on order, and `lib.sh` closes that with `pgc_seq_hash` and
-`diff_query_ordered` while the port has nothing.
+Read it before adding a test. The gaps most likely to affect a new test are that
+`pytest.raises` is still allowed to be broad enough that an unrelated failure of the
+same family satisfies it, and that a write is not required to have written anything.
+Both are named there with the refusal each needs.
 
-## 11. Traps this corpus records
+## 13. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.

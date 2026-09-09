@@ -1,0 +1,116 @@
+"""The three modes that turn a WHOLE RUN green rather than one test.
+
+Each is measured in VACUITY_MODES.md and each is worth more than the per-assertion
+guards, because a single occurrence silently removes many tests at once.
+"""
+
+
+def test_layer_fails_when_a_collected_test_never_reports(pytester, expect):
+    """A crashed xdist worker loses its remaining tests and pytest says nothing.
+
+    Measured with --max-worker-restart=0: 8 collected, summary "1 failed, 6 passed",
+    and one named test never reported. Counting collected tests cannot see it; only
+    reconciling the reported node-ids against the collected ones can.
+    """
+    pytester.makepyfile(
+        """
+        import os, signal
+        def test_a(expect): expect.num(1, 1, "a")
+        def test_b(expect): expect.num(1, 1, "b")
+        def test_kills_its_worker(expect):
+            os.kill(os.getpid(), signal.SIGKILL)
+        def test_d(expect): expect.num(1, 1, "d")
+        def test_e(expect): expect.num(1, 1, "e")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity", "-n", "2",
+                                "--max-worker-restart=0")
+    expect.run_failed(result, "a lost test must fail the run")
+    result.stdout.fnmatch_lines(["*never reported*"])
+
+
+def test_layer_accepts_a_run_where_every_test_reports(pytester, expect):
+    """The control: reconciliation must not fire on an honest parallel run."""
+    pytester.makepyfile(
+        """
+        def test_a(expect): expect.num(1, 1, "a")
+        def test_b(expect): expect.num(1, 1, "b")
+        def test_c(expect): expect.num(1, 1, "c")
+        def test_d(expect): expect.num(1, 1, "d")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity", "-n", "2")
+    expect.outcomes(result, "an honest parallel run is untouched", passed=4, failed=0)
+
+
+def test_layer_rejects_a_parametrize_over_an_empty_list(pytester, expect):
+    """A corpus glob that matches nothing becomes one 's' and exit 0.
+
+    Measured: pytest generates a single SKIPPED placeholder for an empty argvalues
+    list. The suite reads as run and asserted nothing.
+    """
+    pytester.makepyfile(
+        """
+        import pytest
+        CORPUS = []            # a glob that matched nothing
+        @pytest.mark.parametrize("path", CORPUS)
+        def test_decode_roundtrip(path, expect):
+            expect.num(1, 1, "would run if the corpus were not empty")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "an empty parameter set must fail the run")
+    result.stderr.fnmatch_lines(["*empty parameter set*"])
+
+
+def test_layer_accepts_a_parametrize_with_cases(pytester, expect):
+    """The control: a real parameter set is untouched."""
+    pytester.makepyfile(
+        """
+        import pytest
+        @pytest.mark.parametrize("n", [1, 2, 3])
+        def test_cases(n, expect):
+            expect.num(n, n, "a real case")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a real parameter set runs", passed=3, failed=0)
+
+
+def test_layer_rejects_a_fixture_that_skips(pytester, expect):
+    """A session fixture calling pytest.skip() skips every dependent test.
+
+    "The cluster would not start" becomes exit 0. This is the single largest blast
+    radius in the inventory: one skip removes an entire suite while it reads green.
+    """
+    pytester.makepyfile(
+        conftest="""
+        import pytest
+        @pytest.fixture(scope="session")
+        def cluster():
+            pytest.skip("the cluster would not start")
+        """,
+        test_uses_cluster="""
+        def test_one(cluster, expect): expect.num(1, 1, "one")
+        def test_two(cluster, expect): expect.num(2, 2, "two")
+        """,
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a fixture that skips must fail the run")
+    result.stdout.fnmatch_lines(["*skipped during setup*"])
+
+
+def test_layer_allows_a_declared_unrunnable_test(pytester, expect):
+    """The control and the escape hatch: expect.cannot_run stays available.
+
+    A test that declares itself unrunnable with a reason from the closed list is the
+    supported way to not run, and it must not be caught by the fixture-skip guard.
+    """
+    pytester.makepyfile(
+        """
+        def test_declares_itself(expect):
+            expect.cannot_run("MISSING_DEPENDENCY", "no iceberg endpoint here")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a declared unrunnable test is allowed", passed=1, failed=0)

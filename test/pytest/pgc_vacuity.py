@@ -517,10 +517,6 @@ class _UnrunnableCollector:
                 self.items.append((report.nodeid, reason, detail))
 
 
-def pytest_configure(config):
-    collector = _UnrunnableCollector()
-    config.pluginmanager.register(collector, "pgc_unrunnable_collector")
-    config.pgc_unrunnable = collector
 
 
 @pytest.hookimpl(wrapper=True)
@@ -565,8 +561,95 @@ def pytest_sessionfinish(session, exitstatus):
     collector = getattr(session.config, "pgc_unrunnable", None)
     if collector is None or not collector.items:
         return
-    if exitstatus == 0:
+    # Both, not just the argument: _RunShape may already have escalated this run
+    # to 1 for a lost test, and `exitstatus` is the value from before that.
+    if exitstatus == 0 and session.exitstatus == 0:
         session.exitstatus = EXIT_INCOMPLETE
+
+
+# THE RUN'S OWN SHAPE, HELD PER SESSION.
+#
+# Three modes remove many tests at once while the run reads green, so they are worth
+# more than any per-assertion guard. Counting collected tests cannot see them: a
+# crashed xdist worker loses its remaining tests and the collected count is still
+# right. Measured under --max-worker-restart=0: 8 collected, summary "1 failed,
+# 6 passed", one named test never reported, and pytest printed no warning.
+#
+# AN INSTANCE PER CONFIG, NOT MODULE GLOBALS. pytester.runpytest() runs the inner
+# session IN-PROCESS, so module-level sets are shared between the layer's own tests
+# and the sessions they drive. Measured before this was fixed: 44 tests passed and
+# the run exited 1, because the outer session had inherited every inner run's
+# collected ids and setup skips. State that belongs to a session has to live on the
+# session.
+class _RunShape:
+    def __init__(self):
+        self.collected = set()
+        self.reported = set()
+        self.setup_skips = []
+
+    def pytest_collection_modifyitems(self, items):
+        # Fires in the controller when running serially, and in each worker under
+        # xdist. Harmless in a worker: the worker's own sessionfinish returns early.
+        self.collected.update(i.nodeid for i in items)
+
+    def pytest_xdist_node_collection_finished(self, node, ids):
+        """Under xdist the WORKERS collect, not the controller.
+
+        Measured: with -n 2 the controller's collected set stayed empty, so the
+        reconciliation had nothing to compare and a crashed worker's lost tests went
+        unreported -- the guard was there and blind. xdist hands the controller each
+        node's collected ids through this hook, which is the only place the
+        controller learns what was found.
+        """
+        self.collected.update(ids)
+
+    def pytest_runtest_logreport(self, report):
+        """Record that a test produced an outcome, and catch a skip during SETUP.
+
+        A skip in setup is how one fixture removes every test that depends on it: a
+        session fixture calling pytest.skip() turns "the cluster would not start"
+        into exit 0. expect.cannot_run does not skip, it records a counted
+        assertion, so any skip arriving here came from somewhere else.
+        """
+        if report.when == "call" or (report.when == "setup"
+                                     and report.outcome != "passed"):
+            self.reported.add(report.nodeid)
+        if report.when == "setup" and report.skipped:
+            self.setup_skips.append(report.nodeid)
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        # Only the process holding the whole picture can reconcile: an xdist worker
+        # sees a slice, and the controller receives every worker's reports.
+        if hasattr(session.config, "workerinput"):
+            return
+        problems = []
+        missing = sorted(self.collected - self.reported)
+        if missing:
+            problems.append(
+                f"{len(missing)} collected test(s) never reported an outcome, so the "
+                f"run lost them silently: " + ", ".join(missing[:5])
+                + (" ..." if len(missing) > 5 else "")
+            )
+        if self.setup_skips:
+            problems.append(
+                f"{len(self.setup_skips)} test(s) were skipped during setup, which is "
+                f"how one fixture removes every test that depends on it: "
+                + ", ".join(sorted(self.setup_skips)[:5])
+                + (" ..." if len(self.setup_skips) > 5 else "")
+                + " -- use expect.cannot_run(REASON, detail) in the test instead"
+            )
+        if problems:
+            print("\nVACUITY: " + " AND ".join(problems))
+            session.exitstatus = 1
+
+
+def pytest_configure(config):
+    # Two independent per-session mechanisms, both registered here because a
+    # plugin module may define pytest_configure only once.
+    collector = _UnrunnableCollector()
+    config.pluginmanager.register(collector, "pgc_unrunnable_collector")
+    config.pgc_unrunnable = collector
+    config.pluginmanager.register(_RunShape(), f"pgc_runshape_{id(config)}")
 
 
 def pytest_addoption(parser):
@@ -696,14 +779,40 @@ def pytest_collection_modifyitems(config, items):
     seen_files = set()
     for item in items:
         for marker in ("skip", "skipif"):
-            if item.get_closest_marker(marker) is not None:
-                offenders.append(f"{item.name} carries a bare @pytest.mark.{marker}")
+            mk = item.get_closest_marker(marker)
+            if mk is None:
+                continue
+            why = str(mk.kwargs.get("reason", "")) or (str(mk.args[0]) if mk.args else "")
+            if "empty parameter set" in why:
+                continue    # reported below, with a message about the real cause
+            offenders.append(f"{item.name} carries a bare @pytest.mark.{marker}")
         f = str(getattr(item, "fspath", "") or "")
         if f and f not in seen_files:
             seen_files.add(f)
             for site in _broad_except_sites(f):
                 offenders.append(f"{site} catches Exception broadly")
             offenders.extend(_sorted_ordered_sites(f))
+
+    # An empty parametrize is not a bare skip and deserves its own message: pytest
+    # generates ONE skipped placeholder for an empty argvalues list, so a corpus glob
+    # that matched nothing turns a data-driven suite into a single "s" and exit 0.
+    empty_params = []
+    for item in items:
+        m = item.get_closest_marker("skip")
+        reason = ""
+        if m is not None:
+            reason = str(m.kwargs.get("reason", "")) or (
+                str(m.args[0]) if m.args else "")
+        if "empty parameter set" in reason:
+            empty_params.append(f"{item.name}: {reason}")
+    if empty_params:
+        raise pytest.UsageError(
+            "the pgColumnar vacuity layer refuses this run: a parametrize over an "
+            "empty parameter set produces one skipped placeholder and exits 0, so a "
+            "corpus that matched nothing reads as a suite that ran: "
+            + "; ".join(empty_params)
+            + " -- assert the corpus is non-empty before parametrizing over it."
+        )
     if offenders:
         # One hook, two offences, so the message must say which. An earlier version
         # reused the skip wording and told a reader with a broad `except` to call

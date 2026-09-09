@@ -35,13 +35,20 @@ stating a residual. None of the 74 has been adversarially tested.
 document had none and its numbers therefore could not be checked — which is a
 poor property for a document about claims that cannot be checked.
 
+**A mode named in section 2 is refused, even where section 3 also names it.**
+Section 3 keeps a back-reference to every mode that moved — "`X` is now closed"
+— so a reader who knew a mode as unrefused finds out where it went. Counting
+those references as unrefused lists one mode in both states, which is how the
+first version of this rule reported 25 refused and 50 unrefused out of 72 named.
+Section 3's total is therefore the ids it names MINUS the ids section 2 claims.
+
 Counted that way, and this is a measurement of the file rather than a
 recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 22 |
-| named in section 3, not refused | 50 |
+| named in section 2, refused today | 25 |
+| named in section 3, not refused | 47 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -58,7 +65,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-22 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+25 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -76,6 +83,9 @@ test in `test_layer.py` that fails without it.
 | `--pgc-expect-tests` asserts the run's own shape | `zero-collected-exit-5`, `filters-select-nothing`, `partial-selection-exits-zero` |
 | the connection fixture is autocommit | `uncommitted-fixture-measures-an-empty-table` |
 | `ordered_rows` refuses an unobservable ordering, and the scan refuses `sorted()` feeding it | `set-oracle-on-an-ordered-claim` |
+| the reported node-id set is reconciled against the collected one | `crashed-worker-silently-loses-tests` |
+| an empty parameter set fails the run, with its own message | `empty-parametrize-is-a-silent-skip` |
+| a skip during fixture setup fails the run | `session-fixture-skip-greens-the-whole-suite` |
 
 Three of those were added after checking this layer against the inventory rather
 than reasoning about it, and all three had passed silently before:
@@ -88,25 +98,37 @@ than reasoning about it, and all three had passed silently before:
 
 ## 3. What it does not refuse
 
-55 modes by the run's count, **50 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
+55 modes by the run's count, **47 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
 
-The layer asserts how many tests were **collected**. It does not assert how many
-**reported**.
+A run that starts N tests and finishes fewer can still exit 0. Losing a test looks
+exactly like never having written it.
 
-- `crashed-worker-silently-loses-tests` — measured under `--max-worker-restart=0`:
-  8 collected, summary says "1 failed, 6 passed", and one named test never reported.
-  pytest prints no warning.
+**`crashed-worker-silently-loses-tests` is now closed.** The layer reconciles the
+collected node-id set against the reported one in the controlling process.
+
+The measurement is narrower than the mode name suggests. On a 6-test corpus under
+`-n 2 --max-worker-restart=0`, bare pytest exits 1 and names the crash, so the run
+is not green. But 5 node-ids reported against 6 collected, and `test_d` appears
+nowhere in the output: it was assigned to the dead worker and never ran. The loss is
+what is silent, not the crash. The guard names the missing node-ids and fails the
+run on the difference.
+
+Two things that took a measurement to get right. Under xdist the **workers** collect,
+not the controller, so the controller's set stayed empty and the guard was present
+and blind until it also listened to `pytest_xdist_node_collection_finished`. And the
+state has to live on a per-config plugin instance: `pytester.runpytest()` runs the
+inner session in-process, so module-level sets leaked between the layer's own tests
+and the sessions they drive, and 44 passing tests exited 1.
+
+Still open in this family:
+
 - `xdist-drops-the-deselected-count`, `env-deselect-passes-xdist-divergence-guard`,
   `session-fixture-runs-once-per-worker`, `xdist-split-makes-a-loop-assert-vacuous`
 - `process-exits-0-mid-run`, `retry-wrapper-greens-a-lossy-run`,
   `junit-records-a-crash-as-error-failures-zero`
-
-The designed refusal is to reconcile the collected node-id **set** against the
-reported node-id **set** in the controlling process, and fail on any difference.
-That is strictly stronger than the count check the layer has, and it subsumes it.
 
 ### 3.2 The invocation throws the verdict away
 
@@ -122,12 +144,15 @@ is the same reason `test/run_all_versions.sh` carries its own accounting.
 
 ### 3.3 Collection can go quiet
 
-- `empty-parametrize-is-a-silent-skip` — measured: a corpus glob matching nothing
-  turns a data-driven suite into one `s` and exit 0. This is the shape most likely
-  to bite a port, because the bash suites read corpora from disk.
-- `session-fixture-skip-greens-the-whole-suite` — a session fixture calling
-  `pytest.skip()` skips every dependent test. "The cluster would not start" becomes
-  exit 0. The enumerating agent called this the single largest blast radius.
+**`empty-parametrize-is-a-silent-skip` and
+`session-fixture-skip-greens-the-whole-suite` are now closed.** The first has its own
+message rather than being folded into the bare-skip refusal, because the cause a
+reader needs to see is the corpus, not the marker. The second catches any skip
+arriving during setup, since `expect.cannot_run` records a counted assertion instead
+of skipping.
+
+Still open in this family:
+
 - `conftest-import-failure`, `collection-error-and-continue-flag`,
   `collection-error-loses-a-module-silently`, `collect-only-and-collect_ignore`,
   `mark-typos-and-bare-marks`
@@ -195,19 +220,15 @@ is the same mistake as matching a plan by substring.**
 
 Each entry names the red test to write first.
 
-1. `test_layer_fails_when_a_reported_test_is_missing` — reconcile collected node-ids
-   against reported node-ids. Subsumes the count check and closes §3.1.
-2. `test_layer_rejects_an_empty_parametrize` — closes the shape most likely to bite
-   a corpus-driven port.
-3. `test_layer_rejects_a_fixture_that_skips` — closes the largest blast radius.
-5. `test_expect_query_error_sentinel_is_unique_per_failure` — make something produce
+1. `test_expect_query_error_sentinel_is_unique_per_failure` — make something produce
    `QUERY_ERROR.<seq>`; the constant exists and nothing writes it.
-6. `test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.
-7. `test_layer_requires_ab_arms_to_differ` — closes `mutation-arm-unobservable`.
-8. `test_raises_requires_a_sqlstate` — closes `raises-too-broad`.
+2. `test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.
+3. `test_layer_requires_ab_arms_to_differ` — closes `mutation-arm-unobservable`.
+4. `test_raises_requires_a_sqlstate` — closes `raises-too-broad`.
 
-Items 1 to 3 are worth more than the rest combined, because each turns a whole run
-green rather than one test.
+The three that turned a whole run green rather than one test are done. What remains
+is per-assertion work, so the ordering matters less: take the sentinel first, since
+the constant already exists and nothing writes it.
 
 ## 6. What this document cannot tell you
 
@@ -216,6 +237,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 22 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 25 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.
