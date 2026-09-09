@@ -671,106 +671,85 @@ pgc_freshness_report() {	# pgc_freshness_report DIR -> the manifest, annotated
 	echo "       ($n files, under $dir)"
 }
 
+# THE ONE IMPLEMENTATION LIVES IN test/pgc_fingerprint.py.
+#
+# This file and test/pytest/pgc_cluster.py each used to carry their own, and the
+# pair produced four defects in one day -- two in each copy, and not one found by
+# whoever wrote that copy (#907). The Python docstring asserted parity with this
+# function throughout all four; it was false when written and stayed false through
+# two rounds of fixing.
+#
+# PYTHON RATHER THAN SHELL, which is the opposite of what was first proposed here.
+# The single implementation belongs in the more portable language: bash is largely
+# a GNU thing, while Python is present on FreeBSD and Windows where bash is not
+# (jd). This file already requires bash, so calling a more portable interpreter
+# from it cannot cost portability. It is also not a cost at all -- the shell forked
+# md5sum once per file, and one interpreter start beats 64 forks:
+#
+#     shell, forking md5sum per file    239 ms/call
+#     the module                         26 ms/call
+#     across 261 suites x 2 calls        124 s  ->  13 s
+#
+# It fixed a defect on the way, which is the argument for one implementation in
+# miniature: `sort -z` uses LOCALE COLLATION and no locale is pinned anywhere in
+# this harness, so the same tree fingerprinted two ways depending on whose desktop
+# it was --
+#
+#     LC_ALL=C            6d122a7158d5
+#     LC_ALL=en_US.UTF-8  0b59bd75fa4f
+#
+# A developer on an en_US.UTF-8 default stamping a tree that CI then reads under
+# C.UTF-8 is a FATAL naming a stale binary against a clean tree. The module sorts
+# bytes, which is what LC_ALL=C did and what every stamp on disk was written with.
+_pgc_fp_module() {
+	printf '%s\n' "$(dirname "${BASH_SOURCE[0]}")/pgc_fingerprint.py"
+}
+
+# SYSTEM python3, NOT the pytest venv. test/pytest/README.md records that the
+# interpreter is EXTERNALLY-MANAGED and that pytest runs from a virtualenv; a
+# freshness gate that needed those test dependencies would make every suite in
+# this directory unrunnable until somebody had installed pytest. The module
+# imports nothing outside the standard library and nothing from test/pytest/.
+_pgc_fp_python() {
+	command -v python3 2>/dev/null
+}
+
+# A MISSING python3 IS REPORTED, NOT SWALLOWED. Returning empty alone would make
+# the verdict `unknown` and print "freshness UNVERIFIED", which is deliberately
+# not a failure -- and the whole gate would then be off with nothing saying so.
+# Loud but not fatal: the asymmetry this controller is built on is that a false
+# UNVERIFIED costs a line of output while a false FATAL costs a matrix.
+_pgc_fp_warn_once() {
+	[ -n "${_pgc_fp_warned:-}" ] && return 0
+	_pgc_fp_warned=1
+	echo "-- python3 not found: the freshness check cannot run (see test/pgc_fingerprint.py)" >&2
+}
+
 pgc_source_manifest() {	# pgc_source_manifest DIR -> "relpath digest" per file, or EMPTY
-	local dir="${1:-.}"
-	local d
-	# THE MANIFEST IS THE THING; THE FINGERPRINT IS ITS HASH.
-	#
-	# Twelve hex characters cannot say which file moved. Two CI failures reported
-	# `source now a735c673b129, binary built from 6d122a7158d5` and nothing else,
-	# identically, across two branches and two majors -- so a bare hash gave us a
-	# second sample of a mystery rather than an answer. The controller's FATAL
-	# path prints this, and a diff of two manifests names the file.
-	# ONE TREE HASHES ONE WAY, HOWEVER THE PATH IS SPELLED. `${f#"$dir"/}` below
-	# strips a prefix that has to match character for character, so `$dir` with a
-	# trailing slash, or with a `/./` segment, or reached through a symlink, put
-	# the full ABSOLUTE path into the digest instead of the tree-relative one and
-	# the same tree hashed three different ways (@OffgridwithJD). Canonicalised
-	# ONCE here rather than defended at each call site, so a future caller cannot
-	# reintroduce it: the writer and the reader reach the tree by different routes
-	# and a disagreement between them is a FATAL about nothing.
-	#
-	# pgc_norm_path rather than a second `cd && pwd -P` of my own. This file has
-	# spent the day proving that two implementations of one idea drift, and a
-	# private copy here would be the third normaliser in one tree. Its fallback
-	# hands back the raw path for a directory that cannot be entered, which needs
-	# no special case: nothing is found under it, `out` is empty, and the guard
-	# below returns no fingerprint.
-	dir="$(pgc_norm_path "$dir")"
-	{
-		while IFS= read -r d; do
-			[ -n "$d" ] || continue
-			find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \
-				-o -name 'Makefile' \) -print0 2>/dev/null
-		done < <(pgc_source_build_dirs "$dir")
-		find "$dir" -maxdepth 1 -type f \( -name 'Makefile' -o -name '*.control' \
-			-o -name '*.sql' \) -print0 2>/dev/null
-	} | sort -z | while IFS= read -r -d '' _pgc_fp_f; do
-		# EACH FILE'S PATH AND ITS OWN DIGEST, not the concatenated stream.
-		#
-		# `xargs -0 cat | md5sum` hashed the bytes of every file run together,
-		# so it could not see a change that PRESERVES the stream while moving
-		# bytes between translation units. Two files, `static int x=1;` and
-		# `static int x=2;`, both compile; move the second into the first and
-		# empty it and the source no longer compiles, while the hash does not
-		# move (@linuxhikerpm, #898 review):
-		#
-		#     before_hash=bfce474cc159 after_hash=bfce474cc159
-		#     initial_compile=0 repartitioned_compile=1
-		#     error: redefinition of 'x'
-		#
-		# A skip-build run then printed "matches the binary under test" for
-		# source that cannot produce any binary at all. The path makes the
-		# partition part of the input, and the per-file digest is an
-		# unambiguous boundary between one file's bytes and the next's.
-		#
-		# A DIGEST THAT FAILED MUST NOT LOOK LIKE ONE THAT SUCCEEDED. This was
-		# `$(md5sum < "$f" 2>/dev/null | cut -d' ' -f1)` inline, so a failed
-		# md5sum -- a fork that hits EAGAIN, an OOM kill, a loaded runner --
-		# contributed an EMPTY digest and the function returned a confident
-		# WRONG hash with status 0. One stubbed failure among many, on one
-		# unchanged tree, gave three different answers:
-		#
-		#     baseline                   c8e6b23db1c9
-		#     one digest empty (call 2)  22897add806e
-		#     one digest empty (call 3)  58c76fdab962
-		#
-		# On the READ side that costs one suite at random, which is what #902's
-		# PG18 leg showed. On the WRITE side it is worse and deterministic: a
-		# failed digest while the controller stamps bakes a wrong hash, and every
-		# suite in the batch then reports `stale` -- a FATAL naming a stale binary
-		# -- against a tree that is perfectly clean (@OffgridwithJD, measured:
-		# 5 of 5 suites stale on a correct tree).
-		_pgc_fp_h="$(md5sum < "$_pgc_fp_f" 2>/dev/null | cut -d' ' -f1)"
-		[ -n "$_pgc_fp_h" ] || { printf '%s\n' "$_pgc_fp_failed"; break; }
-		printf '%s %s\n' "${_pgc_fp_f#"$dir"/}" "$_pgc_fp_h"
-	done
+	local py out rc
+	py="$(_pgc_fp_python)" || true
+	[ -n "$py" ] || { _pgc_fp_warn_once; printf '%s\n' "$_pgc_fp_failed"; return 0; }
+	out="$("$py" "$(_pgc_fp_module)" manifest "${1:-.}" 2>/dev/null)"
+	rc=$?
+	# A DIGEST THAT FAILED MUST NOT LOOK LIKE ONE THAT SUCCEEDED. The module exits
+	# 1 and prints nothing when a file could not be read, so the marker is emitted
+	# here and pgc_source_fingerprint below turns it into no fingerprint at all.
+	# Before this was true anywhere, a failed md5sum contributed an EMPTY digest
+	# and the function returned a confident WRONG hash at status 0, which cost a
+	# matrix (@OffgridwithJD, measured: 5 of 5 suites stale on a correct tree).
+	[ "$rc" -eq 0 ] || { printf '%s\n' "$_pgc_fp_failed"; return 0; }
+	[ -n "$out" ] || return 0
+	printf '%s\n' "$out"
 }
 
 pgc_source_fingerprint() {	# pgc_source_fingerprint DIR -> hash, or EMPTY if it could not be computed
-	local out
-	out="$(pgc_source_manifest "${1:-.}")"
-	# Empty rather than a hash, which pgc_freshness_verdict turns into `unknown`
-	# and the controller prints as "freshness UNVERIFIED" -- already designed, and
-	# already deliberately not a failure. The asymmetry is the whole argument: a
-	# false UNVERIFIED costs a line of output, a false FATAL costs a matrix AND
-	# teaches people to re-run past a freshness check, which is the failure this
-	# controller exists to prevent.
-	case "$out" in *"$_pgc_fp_failed"*) printf ''; return 0 ;; esac
-	# A tree with no hashable file cannot be verified, so it gets no fingerprint
-	# either -- and md5 of an empty stream is a stable, comparable value that
-	# would have made two empty trees "match". Observed rather than hypothetical:
-	# under process pressure the whole manifest came back empty and the old code
-	# returned md5("") = d41d8cd98f00 in 11 runs of 20 (@OffgridwithJD).
-	[ -n "$out" ] || { printf ''; return 0; }
-	# THE TRAILING NEWLINE IS LOAD-BEARING. The old code piped the loop straight
-	# into md5sum, so the stream md5sum saw ended with one; `$(...)` strips it.
-	# Without `printf '%s\n'` here the same unchanged tree hashes differently
-	# before and after this change, every stamp already on disk reads `stale`, and
-	# a fix for false FATALs becomes a false FATAL for everyone holding a built
-	# worktree (@OffgridwithJD, caught before it shipped). The matrix could not
-	# have caught it: it copies a fresh tree and re-stamps every run.
-	printf '%s\n' "$out" | md5sum | cut -c1-12
+	local py out rc
+	py="$(_pgc_fp_python)" || true
+	[ -n "$py" ] || { _pgc_fp_warn_once; printf ''; return 0; }
+	out="$("$py" "$(_pgc_fp_module)" fingerprint "${1:-.}" 2>/dev/null)"
+	rc=$?
+	[ "$rc" -eq 0 ] || { printf ''; return 0; }
+	printf '%s\n' "$out"
 }
 
 # fresh   the binary was built from this source

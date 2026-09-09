@@ -21,6 +21,9 @@ cannot reach and which is where a wrong quote would hide.
 """
 
 import os
+import tempfile
+import shutil
+import pwd
 import pathlib
 import re
 import subprocess
@@ -442,10 +445,12 @@ def test_the_two_fingerprint_implementations_cover_the_same_inputs(tmp_path, exp
     missing from the Python side, and the Makefiles were still missing after it
     was fixed.
 
-    The two hashes are NOT required to be equal -- they are different digests
-    over the same files, used independently. What is required is that the same
-    edit moves both, which is what "the same input set" means and all the
-    docstring ever claimed.
+    THEY ARE NOW ONE IMPLEMENTATION (#907), so the requirement has strengthened
+    from "the same edit moves both" to "both are the same value". That is worth
+    asserting rather than merely allowing: equality is what makes the shell's
+    stamp readable by the Python harness and back, and if someone reintroduces a
+    private copy on either side this arm reddens on the first edit rather than on
+    the first edit that happens to diverge.
     """
     t = _tree_with_module(tmp_path, "cover")
     for edit, path, body in (
@@ -464,6 +469,8 @@ def test_the_two_fingerprint_implementations_cover_the_same_inputs(tmp_path, exp
         path.write_text(old)
         expect.text(f"{sh_after != sh_before} {py_after != py_before}", "True True",
                     f"editing {edit} moves both fingerprints")
+        expect.text(f"{sh_before} {sh_after}", f"{py_before} {py_after}",
+                    f"and one implementation gives one value, editing {edit}")
 
 
 # ---------------------------------------------------------------------------
@@ -500,66 +507,126 @@ def _fp_tree(tmp_path, name="t"):
     return t
 
 
-def _md5_stub(tmp_path, fail_on):
-    """A stub md5sum: real, except that its Nth call fails with no output.
+def _unprivileged_user():
+    """A user that is not root, or None.
 
-    Models one transient failure -- a fork that hits EAGAIN, an OOM kill, a
-    loaded runner -- rather than a permanently broken md5sum, because the
-    permanent case is not the one that produced a wrong answer in CI.
+    THE MECHANISM HAD TO CHANGE WHEN THE IMPLEMENTATION DID. These arms used to
+    stub `md5sum` on PATH, because the shell forked it once per file. The digest
+    is now hashlib inside test/pgc_fingerprint.py, which no PATH can reach, so a
+    stub would have left both arms passing while testing nothing -- the exact
+    shape this suite exists to refuse.
+
+    A real read failure needs a real reader who is denied, and root is denied
+    nothing: chmod 000 is invisible to it. Measured, before this was written:
+
+        as root      : 28a7149e07ae   <- reads the mode-000 file anyway
+        as postgres  : ''             <- the failure the arm needs
     """
-    b = tmp_path / f"bin{fail_on}"
-    b.mkdir(exist_ok=True)
-    counter = tmp_path / f"count{fail_on}"
-    counter.write_text("0")
-    (b / "md5sum").write_text(
-        "#!/bin/bash\n"
-        f'_n=$(( $(cat "{counter}" 2>/dev/null || echo 0) + 1 ))\n'
-        f'echo "$_n" > "{counter}"\n'
-        f'[ "$_n" = "{fail_on}" ] && exit 1\n'
-        'exec /usr/bin/md5sum "$@"\n'
-    )
-    (b / "md5sum").chmod(0o755)
-    return str(b)
+    if os.geteuid() != 0:
+        return ""               # already unprivileged; read in this process
+    for name in ("postgres", "nobody"):
+        try:
+            pwd.getpwnam(name)
+            return name
+        except KeyError:
+            continue
+    return None
 
 
-def test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one(tmp_path, expect):
-    """`$(md5sum ... 2>/dev/null)` substituted an EMPTY digest and returned rc=0.
+def _sh_fp_as(user, expr):
+    """Evaluate a lib.sh expression as USER ("" means this process)."""
+    script = f'. "{SRCDIR}/test/lib.sh" || exit 1; {expr}'
+    argv = ["bash", "-c", script] if not user else \
+           ["runuser", "-u", user, "--", "bash", "-c", script]
+    p = subprocess.run(argv, capture_output=True, text=True)
+    return p.stdout.strip(), p.returncode
 
-    One failed invocation among many silently changed the whole hash, so the
+
+def _readable_tree(name):
+    """A fingerprintable tree an unprivileged user can traverse.
+
+    Not under tmp_path: pytest's directories are mode 0700 and owned by the user
+    running the session, so a second user cannot walk into them and every arm
+    below would fail for the wrong reason.
+    """
+    root = pathlib.Path(tempfile.mkdtemp(prefix="pgc-fpfail-"))
+    t = root / name
+    (t / "src").mkdir(parents=True)
+    for n, body in (("a.c", "int a;\n"), ("b.c", "int b;\n"), ("c.c", "int c;\n")):
+        (t / "src" / n).write_text(body)
+    (t / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "pgcolumnar.control").write_text("x\n")
+    for d in (root, t, t / "src"):
+        d.chmod(0o755)
+    for f in t.rglob("*"):
+        if f.is_file():
+            f.chmod(0o644)
+    return root, t
+
+
+def test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one(expect):
+    """A digest that FAILED must not look like one that succeeded.
+
+    The shell substituted an EMPTY digest for a failed md5sum and returned rc=0,
+    so one failed read among many silently changed the whole hash and the
     function gave three different confident answers for one unchanged tree.
     """
-    t = _fp_tree(tmp_path)
-    base, rc = _sh_fp(f'pgc_source_fingerprint "{t}"')
-    expect.at_least(len(base), 12, "premise: the tree fingerprints at all")
+    user = _unprivileged_user()
+    if user is None:
+        expect.cannot_run("MISSING_DEPENDENCY",
+                          "no non-root user to read as; root ignores chmod 000")
+        return
+    root, t = _readable_tree("t")
+    try:
+        base, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+        expect.at_least(len(base), 12, "premise: the tree fingerprints at all")
 
-    # Premise for the stub: with nothing configured to fail it must agree with
-    # the real md5sum, or the arms below measure the stub and not the fix.
-    quiet = _md5_stub(tmp_path, 0)
-    got, _ = _sh_fp(f'pgc_source_fingerprint "{t}"', path_env=quiet)
-    expect.text(got, base, "premise: the stub agrees with md5sum when nothing fails")
+        # Premise for the mechanism itself: the unprivileged reader must agree
+        # with a privileged one while nothing is denied, or the arm below would
+        # be measuring the user switch rather than the failure.
+        mine, _ = _sh_fp_as("", f'pgc_source_fingerprint "{t}"')
+        expect.text(base, mine, "premise: the unprivileged read agrees while readable")
 
-    for n in (2, 3):
-        stub = _md5_stub(tmp_path, n)
-        got, _ = _sh_fp(f'pgc_source_fingerprint "{t}"', path_env=stub)
-        expect.text(got or "empty", "empty",
-                    f"a failed digest on file {n} yields no fingerprint")
+        for name in ("b.c", "c.c"):
+            f = t / "src" / name
+            f.chmod(0o000)
+            got, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+            f.chmod(0o644)
+            expect.text(got or "empty", "empty",
+                        f"an unreadable {name} yields no fingerprint, not a wrong one")
+
+        after, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+        expect.text(after, base, "control: and the tree fingerprints again once readable")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
-def test_a_failed_digest_gives_unverified_and_never_a_false_stale(tmp_path, expect):
+def test_a_failed_digest_gives_unverified_and_never_a_false_stale(expect):
     """The property that matters. `stale` is the FATAL; `unknown` is UNVERIFIED.
 
     A false UNVERIFIED costs a line of output. A false FATAL costs a matrix and
-    teaches people to re-run past a freshness check.
+    teaches people to re-run past a freshness check, which is the failure this
+    controller exists to prevent.
     """
-    t = _fp_tree(tmp_path, "v")
-    base, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
-    stub = _md5_stub(tmp_path, 2)
-    verdict, _ = _sh_fp(
-        f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"',
-        path_env=stub)
-    expect.text(verdict, "unknown", "a failed digest reads as unknown, not stale")
-    healthy, _ = _sh_fp(f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"')
-    expect.text(healthy, "fresh", "control: an unstubbed run still reads fresh")
+    user = _unprivileged_user()
+    if user is None:
+        expect.cannot_run("MISSING_DEPENDENCY",
+                          "no non-root user to read as; root ignores chmod 000")
+        return
+    root, t = _readable_tree("v")
+    try:
+        base, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+        expect.at_least(len(base), 12, "premise: the tree fingerprints at all")
+        (t / "src" / "b.c").chmod(0o000)
+        verdict, _ = _sh_fp_as(
+            user, f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"')
+        expect.text(verdict, "unknown", "a failed digest reads as unknown, not stale")
+        (t / "src" / "b.c").chmod(0o644)
+        healthy, _ = _sh_fp_as(
+            user, f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"')
+        expect.text(healthy, "fresh", "control: a readable run still reads fresh")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_one_tree_hashes_one_way_however_the_path_is_spelled(tmp_path, expect):
@@ -797,3 +864,54 @@ def test_no_selftest_part_writes_into_the_live_source_tree(expect):
                "premise: and the INDIRECT form, which is the defect's own shape")
     expect.num(len(offenders_in('_p="$_bd_copy/objstore/p.c"\nprintf x > "$_p"\n')), 0,
                "control: a write into a COPY is not an offender")
+
+
+def test_one_tree_hashes_one_way_however_the_locale_is_set(expect):
+    """The defect the single implementation removed on the way.
+
+    The shell sorted its manifest with `sort -z`, which uses LOCALE COLLATION,
+    and no locale is pinned anywhere in this harness. So the same tree
+    fingerprinted differently depending on whose machine it was:
+
+        LC_ALL=C            6d122a7158d5
+        LC_ALL=en_US.UTF-8  0b59bd75fa4f
+
+    en_US.UTF-8 is a common desktop default. A developer stamping a tree there
+    and a CI runner reading it under C.UTF-8 disagree, and the disagreement is a
+    FATAL naming a stale binary against a tree that is perfectly clean -- the
+    exact false FATAL this controller exists to prevent, arriving from the
+    environment rather than from the source.
+
+    The filenames matter: `_` and `-` are what the two collations order
+    differently, and `columnar_arrow.c` beside `columnar-arrow.c` is not a
+    contrived pair in this tree.
+    """
+    root = pathlib.Path(tempfile.mkdtemp(prefix="pgc-locale-"))
+    try:
+        t = root / "t"
+        (t / "src").mkdir(parents=True)
+        for n in ("columnar_arrow.c", "columnar-arrow.c", "columnarXarrow.c",
+                  "Columnar.c", "columnar.c"):
+            (t / "src" / n).write_text(f"int x; /* {n} */\n")
+        (t / "Makefile").write_text("all:\n\ttrue\n")
+        (t / "pgcolumnar.control").write_text("x\n")
+
+        available = subprocess.run(["locale", "-a"], capture_output=True,
+                                   text=True).stdout.lower()
+        wanted = [l for l in ("c", "c.utf8", "en_us.utf8") if l in available]
+        if len(wanted) < 2:
+            expect.cannot_run("MISSING_DEPENDENCY",
+                              f"fewer than two locales installed: {wanted}")
+            return
+
+        seen = {}
+        for loc in wanted:
+            got, _ = _sh_fp(f'pgc_source_fingerprint "{t}"',
+                            env={"LC_ALL": loc, "LANG": loc})
+            seen[loc] = got
+        expect.at_least(len(seen[wanted[0]]), 12,
+                        "premise: the tree fingerprints at all")
+        expect.num(len(set(seen.values())), 1,
+                   f"one tree, one fingerprint, across {len(wanted)} locales: {seen}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
