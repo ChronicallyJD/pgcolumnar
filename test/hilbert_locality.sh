@@ -18,22 +18,76 @@
 # "Columnar Chunk Groups Read" over 60 window placements at each of four window
 # sizes. The counts are PINNED AS EXACT INTEGERS.
 #
-# WHY EXACT INTEGERS AND NOT A THRESHOLD
+# WHY EXACT INTEGERS AND NOT A THRESHOLD -- AND WHAT EACH INSTRUMENT CATCHES
 #
 # A threshold is the thing someone lowers when it reddens. "Hilbert reads at
 # most 0.6x the groups Z-order does" survives a regression that costs half the
-# benefit, and it survives it silently. An exact pin cannot: any change to the
-# layout, to the curve, to the group sizing or to the skip logic moves one of
-# these eight numbers and the suite says which. The pins are the measurement,
-# not a target -- if one moves, the correct response is to find out what moved
-# it and then, if the new layout is better, re-pin with the new numbers beside
-# the reason.
+# benefit, and it survives it silently. An exact pin cannot be lowered without
+# saying so, and it names which number moved.
 #
-# Alongside the pins, and separately, h < z is asserted AT EVERY BOX SIZE. That
-# split is deliberate. If the pins move but h < z still holds, the layout
-# changed. If h < z fails, HILBERT STOPPED WINNING, which is a different and
-# much worse fact, and a reader must be able to tell the two apart from the
-# output without re-deriving anything.
+# What an exact pin is NOT is automatically the sensitive instrument in this
+# file. The eight integers were mutation-tested to find out what they, and only
+# they, catch. Measured, not assumed:
+#
+#	- A CHANGED CURVE is caught by the DIGEST PINS in arm 2, about two hundred
+#	  lines above the integers, and the integers add nothing to it. Two
+#	  independently built, valid Hilbert re-orientations -- a point reflection
+#	  inside cluster_hilbert_transpose, and a swap of the clustering axes
+#	  before the transpose -- each moved the Hilbert digest AND all four
+#	  Hilbert integers on the same run (h=117/202/403/1301 and
+#	  h=130/208/409/1316 against pins of 118/209/402/1313). That is structural
+#	  rather than a lucky choice of mutation: the counts are a deterministic
+#	  function of the group boxes, which the digest hashes, of the 60 fixed
+#	  origins, and of the skip logic. So for a changed curve the integers are a
+#	  strictly weaker copy of a check the suite already makes upstream.
+#	  Re-pinning arm 2 and arm 8 together after a deliberate curve change is
+#	  right, but the digest is the arm that did the work.
+#	- A CHANGED READER, AT AN UNCHANGED LAYOUT, is what only the integers
+#	  catch. It is their own domain and it is why they are here. Refusing to
+#	  skip odd-numbered row groups in src/columnar_reader.c left BOTH digests
+#	  exactly at their pins and arms 1 and 3-7 green, and moved all eight
+#	  integers (z=4144/4196/4317/4848, h=4083/4133/4228/4678).
+#	- A CHANGED ROW MULTISET is NAMED by arm 1 and by nothing else. Loading the
+#	  Hilbert arm from a differently seeded 200,000-row source over the same
+#	  square moved the Hilbert digest, all four Hilbert integers (220/330/567/
+#	  1603) and all four margins -- but not one of those arms says WHY, and a
+#	  reader looking at moved integers would go hunting in the curve. Arm 1 is
+#	  what says the two arms no longer hold the same rows. Its SECOND check is
+#	  the one that survives the case where both loads went equally wrong:
+#	  loading both arms with OFFSET 1 keeps "the identical row multiset" green
+#	  and reddens "it is the source's multiset" and "both arms hold every
+#	  source row" (399998 against 400000), while the measurement below refuses
+#	  and the integers say nothing at all. So none of the three instruments is
+#	  redundant to the others, and a reader who drops arm 1 or the digest pins
+#	  as "already covered by the pins" is not covered.
+#	- THE GROSS CASE -- the transpose gutted, so cluster_hilbert() silently
+#	  lays Z-order -- is caught by arm 2 alone. The integers never execute:
+#	  arm 8 refuses the measurement and prints sixteen UNRUN lines. A wall of
+#	  UNMET_PRECONDITION here means the curve collapsed, not that the suite
+#	  broke.
+#
+# The pins are the measurement, not a target -- if one moves, the correct
+# response is to find out what moved it and then, if the new layout is better,
+# re-pin with the new numbers beside the reason.
+#
+# WHY h < z IS NOT ENOUGH, AND WHAT THE MARGIN FLOOR IS FOR
+#
+# Alongside the pins, and separately, h < z is asserted AT EVERY BOX SIZE, and
+# so is the MARGIN. An earlier version of this header told the reader that "the
+# pins moved but h < z still holds" means the layout merely changed. THAT RULE
+# WAS FALSE and it was reddened. The reader mutation above moves all eight
+# integers, keeps h < z PASSING at every box, and takes z/h from 2.0424 to
+# 1.0149 at box 2000: Hilbert won by 61 groups out of 4,144 and the suite
+# printed PASS. A maintainer following the old rule would have re-pinned and
+# accepted a change that took the feature's benefit from 2.04x to 1.01x.
+#
+# So h < z says only that Hilbert was not BEATEN. The per-box floor beside it
+# says Hilbert still wins by the margin these numbers were measured at. Read
+# the three arms together:
+#
+#	pins move, margin holds   the layout changed; find what moved it, re-pin.
+#	margin fails              most of the benefit is gone, whatever h < z says.
+#	h < z fails               HILBERT STOPPED WINNING, the worst of the three.
 #
 # WHAT THIS SUITE DOES NOT CLAIM
 #
@@ -377,7 +431,15 @@ check_text "control: two tables on the same curve have the identical partition" 
 	"$(differs "$CZ1" "$CZ2")" "IDENTICAL"
 # And it is the same partition the measured Z-order arm has, so the control is
 # a control ON THIS FIXTURE rather than on an unrelated one.
-check_text "control: and that partition is the measured Z-order arm's" "$CZ1" "$DZ"
+#
+# THROUGH differs(), LIKE EVERY OTHER DIGEST COMPARISON IN THIS FILE. Comparing
+# $CZ1 with $DZ directly was the one exception, and the exception was a hole:
+# check_text refuses an EMPTY expectation, but NO_PARTITION is not empty, so two
+# FAILED digest reads compared equal and this arm printed PASS. Measured: with
+# partition_digest() pointed at a storage_id that does not exist, every other
+# digest arm reddened with UNMEASURED[a=NO_PARTITION] and this one was green.
+check_text "control: and that partition is the measured Z-order arm's" \
+	"$(differs "$CZ1" "$DZ")" "IDENTICAL"
 
 # =============================================================================
 # ARM 4  CONTROL: A DENSE DYADIC GRID -> THE TWO CURVES AGREE
@@ -475,17 +537,38 @@ done
 # header describes: with no difference in layout there is nothing for a ratio to
 # be about, and printing one anyway is how the pilot's first version produced
 # numbers for the dense grid.
+#
+# AND THE REFUSAL IS WHAT ANSWERS THE GROSS CASE. With the Hilbert transpose
+# gutted, so that cluster_hilbert() lays Z-order, arm 2 reddens twice and every
+# check below refuses: sixteen UNRUN lines and "39 passed + 2 failed + 16
+# unrunnable = 57", the run exiting 1 because a failure outranks an incomplete.
+# A reader who sees that wall of UNMET_PRECONDITION is looking at a collapsed
+# curve, not at a broken suite, and the two failures naming it are arm 2's.
 CURVE_DIFFERS="$(differs "$DZ" "$DH")"
 
-# The pins. Measured on main f2af080, PG 18.4, and identical on two consecutive
-# runs of the fixture above. box:zorder:hilbert.
-PINS="2000:241:118 5000:351:209 12000:588:402 30000:1624:1313"
+# The pins, and the margin floor beside each one. Measured on main f2af080,
+# PG 18.4, identical on two consecutive runs of the fixture above, and
+# reproduced from a clean tree on 2026-09-09. box:zorder:hilbert:floor.
+#
+# THE FLOOR IS NOT THE THRESHOLD THIS FILE'S HEADER REJECTS. The exact integers
+# are still the primary detector; the floor is deliberately slack -- about 88%
+# of the measured ratio -- so that it names a COLLAPSE of the benefit rather
+# than tracking a layout that moved. It is here because h < z on its own is
+# satisfied by a win of one group in four thousand, which is what a reader-only
+# regression produces. Measured z/h at these pins: 2.0424, 1.6794, 1.4627,
+# 1.2369.
+#
+# The slack was chosen against both mutation families and both are recorded so
+# the next person can re-derive it. The reader regression takes z/h to 1.0149,
+# 1.0152, 1.0211 and 1.0363, which is below every floor. The two valid curve
+# re-orientations keep it at 1.8538 to 2.0598, 1.6875 to 1.7376, 1.4376 to
+# 1.4590 and 1.2340 to 1.2483, which is above every floor -- so a layout that
+# genuinely moved reddens the PINS and leaves this arm green, and the two arms
+# say different things about the same run.
+PINS="2000:241:118:1.80 5000:351:209:1.48 12000:588:402:1.28 30000:1624:1313:1.10"
 
 for pin in $PINS; do
-	box="${pin%%:*}"
-	rest="${pin#*:}"
-	want_z="${rest%%:*}"
-	want_h="${rest##*:}"
+	IFS=: read -r box want_z want_h floor <<<"$pin"
 
 	if [ "$CURVE_DIFFERS" != different ]; then
 		check_unrunnable "box $box: groups read, Z-order" UNMET_PRECONDITION \
@@ -493,6 +576,9 @@ for pin in $PINS; do
 		check_unrunnable "box $box: groups read, Hilbert" UNMET_PRECONDITION \
 			"the two partitions are not different ($CURVE_DIFFERS), so a ratio between them is not about the curve"
 		check_unrunnable "box $box: Hilbert reads fewer groups than Z-order" UNMET_PRECONDITION \
+			"the two partitions are not different ($CURVE_DIFFERS)"
+		check_unrunnable "box $box: and it wins by the margin measured, z/h at least $floor" \
+			UNMET_PRECONDITION \
 			"the two partitions are not different ($CURVE_DIFFERS)"
 		continue
 	fi
@@ -517,10 +603,29 @@ for pin in $PINS; do
 		"$(awk -v a="$sh" -v b="$sz" 'BEGIN { print (a + 0 < b + 0) ? "fewer" : "NOT FEWER" }')" \
 		"fewer"
 
-	# The ratio is PRINTED, from the two numbers just measured, and asserted
-	# nowhere. A ratio is the readable form of the result; it is not the pin,
-	# because a ratio can be held constant by both arms getting worse together.
-	echo "-- box $box: z=$sz h=$sh  z/h=$(awk -v a="$sz" -v b="$sh" 'BEGIN { printf "%.4f", (b + 0 == 0) ? 0 : a / b }')"
+	# AND IT STILL WINS BY THE MARGIN IT WAS MEASURED AT.
+	#
+	# h < z above is satisfied by a win of ONE group, so on its own it cannot
+	# tell "the layout changed" from "the benefit is gone" -- which is what this
+	# file's header used to tell a reader it could. Refusing to skip
+	# odd-numbered row groups in the reader keeps h < z green at every box, moves
+	# all eight pins, and takes z/h from 2.0424 to 1.0149. This arm is what
+	# reddens there, and it is the removal proof for the h < z arm's meaning.
+	#
+	# The ratio is computed ONCE, here, and both this arm and the line printed
+	# below use that one value, so the number asserted and the number reported
+	# cannot drift. A zero Hilbert total yields 0 and fails the floor rather than
+	# dividing by zero.
+	ratio="$(awk -v a="$sz" -v b="$sh" 'BEGIN { printf "%.4f", (b + 0 == 0) ? 0 : a / b }')"
+	check_text "box $box: and it wins by the margin measured, z/h at least $floor" \
+		"$(awk -v r="$ratio" -v f="$floor" \
+			'BEGIN { print (r + 0 >= f + 0) ? "at or above the floor" : "BELOW THE FLOOR (z/h=" r ")" }')" \
+		"at or above the floor"
+
+	# The ratio is PRINTED as well, and asserted nowhere beyond the floor above.
+	# A ratio is the readable form of the result; it is not the pin, because a
+	# ratio can be held constant by both arms getting worse together.
+	echo "-- box $box: z=$sz h=$sh  z/h=$ratio"
 done
 
 pgc_summary

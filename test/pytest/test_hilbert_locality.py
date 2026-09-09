@@ -10,12 +10,13 @@ fixture and no vacuity plugin, and pytest will fail at collection. It is
 committed here so that the port exists and can be reviewed beside the bash
 suite; it becomes runnable when #897 lands, and not before.
 
-It was RUN, before being committed, against #897's harness assembled beside it
-in a scratch tree (PostgreSQL 18.4, prefix /usr/local/pg18_loc889): 16 passed,
-18.20s including the extension build and 5.13s on a warm one. The numbers below
-are that run's, and they are the bash suite's numbers.
+It was RUN against #897 head 5f3dedb, which merges cleanly with this branch,
+in a scratch worktree on PostgreSQL 18.4: 18 passed, 3.20s on a warm tree. The eight pins below came out
+identical to the bash suite's, from a different harness and a different way of
+reading the counters -- 241/118, 351/209, 588/402, 1624/1313, and z/h of
+2.0424, 1.6794, 1.4627, 1.2369.
 
-    pytest --pg-config .../bin/pg_config --pgc-expect-tests 16 \
+    pytest --pg-config .../bin/pg_config --pgc-expect-tests 18 \
            test_hilbert_locality.py
 
 AND THE BLOCKING DEPENDENCY IS WIDER THAN test/pytest/. #897 also adds
@@ -31,16 +32,25 @@ So "blocked on #897" means the whole of #897, not only the directory.
 ONE THING THIS FILE CANNOT DO THAT ITS BASH TWIN DOES, AND IT IS MEASURED
 
 The bash suite REFUSES to report a ratio when the two partitions are not
-different: the twelve measurement arms print UNRUN, pgc_summary prints
-"12 unrunnable" and the suite exits 67, INCOMPLETE. Here the same refusal goes
+different: the sixteen measurement arms print UNRUN and pgc_summary counts
+them as a third state, "16 unrunnable"; with nothing else red the suite exits
+67, INCOMPLETE. Here the same refusal goes
 through `expect.cannot_run("UNMET_PRECONDITION", ...)`, and the layer records
-the third state but nothing reports it. Measured, with the fixture mutated to
-lay BOTH arms out with cluster(): "1 failed, 15 passed" -- the four
-test_groups_read_over_sixty_placements cases PASSED while asserting nothing
-about groups read. Only test_the_two_partitions_differ reddened, and it reddened
-for its own reason. The suite is still red overall, so nothing ships silently;
-but a reader counting greens counts four that never asked their question. See
-the report accompanying this file.
+the third state but nothing reports it. The mechanism is one line:
+`cannot_run` sets `self.unrunnable` and calls `self._counted()`, and
+`pytest_runtest_call` asks only whether `rec.count == 0` -- so DECLARING A TEST
+UNRUNNABLE MAKES IT PASS. Measured against that head, with the fixture
+mutated to lay BOTH arms out with cluster(): "1 failed, 17 passed", and all
+four test_groups_read_over_sixty_placements cases were among the greens while
+asserting nothing about groups read. Only test_the_two_partitions_differ
+reddened, and it reddened for its own reason.
+
+The suite is still red overall, so nothing ships silently; but a reader
+counting greens counts four that never asked their question, and DO NOT READ
+THIS FILE AS CARRYING THE BASH SUITE'S REFUSAL until the layer converts an
+unrunnable record into a non-pass outcome and a non-zero session exit -- the
+pytest equivalent of PGC_EXIT_INCOMPLETE=67. That is a change to #897, not to
+this file.
 
 WHAT THIS IS A PORT OF, AND WHAT IT IS FOR
 
@@ -48,10 +58,38 @@ test/hilbert_locality.sh builds one fixture, lays it out twice -- once with
 pgcolumnar.cluster() (Z-order) and once with pgcolumnar.cluster_hilbert() --
 and counts the engine's own "Columnar Chunk Groups Read" over 60 deterministic
 window placements at each of four window sizes. Read that file first: its
-header carries the reasoning, the three defects the shape exists to avoid, and
-the list of things the measurement does NOT claim. Every property asserted here
-is asserted there, under a name that matches, so the two can be compared
-mechanically.
+header carries the reasoning, the three defects the shape exists to avoid, the
+account of which arm catches which regression, and the list of things the
+measurement does NOT claim.
+
+HOW FAITHFUL THE PORT IS, MEASURED RATHER THAN CLAIMED
+
+Every assertion here carries the bash check's name string verbatim, prefixes
+included, so `test/pytest/compare_to_bash.py` can diff the two by property. RUN
+ON THIS PAIR IT STILL EXITS 1: 30 bash checks, 30 distinct names on this side,
+13 reported missing. None of the 13 is a property this file fails to assert,
+and both reasons are worth knowing before trusting the comparator:
+
+  1. ELEVEN OF THE THIRTEEN INTERPOLATE A SHELL VARIABLE. The comparator reads
+     SOURCE literals, so bash's "box $box: ..." can never equal this file's
+     f-string "box {box}: ...", and crun's one literal, "premise: $1 ran
+     without raising", stands for six runtime names. The names the two
+     harnesses PRINT are identical; the source literals cannot be.
+  2. THE OTHER TWO ARE THE COMPARATOR'S OWN EXTRACTOR. It is a regular
+     expression that takes the FIRST string literal in an expect() call and
+     stops at the first closing parenthesis. For expect.text(got, WANT, NAME)
+     the first literal is the expected TEXT, so the comparator reports
+     "different" and "IDENTICAL" as assertion names and calls the two arms
+     behind them missing. The same shape makes it report "Columnar Usable Skip
+     Predicates" and "Columnar Chunk Groups Total" as names.
+
+Taking the bash prefixes verbatim took the missing count from 27 to 23, and
+hoisting nested calls out of the expect() arguments -- so the extractor has a
+clear shot at the name -- took it from 23 to 13. Closing the rest is a change
+to compare_to_bash.py -- parse with `ast`, take the LAST string-literal
+argument of each expect() call, and compare interpolated names after expansion
+-- and that file belongs to #897. Until it lands, "the two can be compared
+mechanically" is an aspiration, not a fact about this pair.
 
 WHAT THIS PORT DOES NOT CLAIM
 
@@ -112,19 +150,32 @@ PLACEMENTS = 60
 STRIDE_X = 997
 STRIDE_Y = 7919
 
-# The pins: box -> (Z-order total, Hilbert total) over the 60 placements.
-# Measured on main f2af080, PG 18.4, and reproduced bit-for-bit by the bash
-# suite and by this one.
+# The pins: box -> (Z-order total, Hilbert total, margin floor) over the 60
+# placements. Measured on main f2af080, PG 18.4, and reproduced bit-for-bit by
+# the bash suite and by this one.
 #
 # EXACT INTEGERS AND NOT A THRESHOLD. A threshold is the thing someone lowers
 # when it reddens; it survives a regression that costs half the benefit, and it
-# survives it quietly. Any change to the layout, the curve, the group sizing or
-# the skip logic moves one of these eight numbers and names itself.
+# survives it quietly. An exact pin cannot be lowered without saying so.
+#
+# WHAT THE EIGHT INTEGERS ACTUALLY CATCH, MEASURED. The bash suite's header
+# carries the full account and it is the one to read; in short, a CHANGED CURVE
+# is caught by the digest pins above, which move on every run the integers move
+# on and sit upstream of them, and the integers' own domain is a CHANGED READER
+# at an unchanged layout -- refusing to skip odd-numbered row groups left both
+# digests exactly at their pins and moved all eight integers. So do not read
+# these eight as the arm that guards the curve.
+#
+# THE MARGIN FLOOR BESIDE EACH PIN IS NOT THE THRESHOLD REJECTED ABOVE. It is
+# about 88% of the measured ratio, so it names a COLLAPSE of the benefit rather
+# than a layout that moved. It is here because "Hilbert reads fewer groups" is
+# satisfied by a win of one group in four thousand: the reader regression above
+# keeps that arm GREEN at every box while z/h falls from 2.0424 to 1.0149.
 PINS = {
-    2000: (241, 118),
-    5000: (351, 209),
-    12000: (588, 402),
-    30000: (1624, 1313),
+    2000: (241, 118, "1.80"),
+    5000: (351, 209, "1.48"),
+    12000: (588, 402, "1.28"),
+    30000: (1624, 1313, "1.10"),
 }
 
 # The partition digests the pins were measured over.
@@ -171,8 +222,21 @@ SELECT substr(md5(string_agg(g, ',' ORDER BY g)), 1, 12) FROM (
 # Order-blind, exactly like pgc_set_hash in test/lib.sh, and that is right here:
 # the arms are supposed to differ in ORDER and in nothing else, so an
 # order-sensitive oracle would report a difference for the property under test.
+#
+# AN EMPTY RELATION YIELDS A QUERY_ERROR SENTINEL, NOT THE STRING 'EMPTY'.
+# pgc_set_hash returns EMPTY and the bash suite lists EMPTY as unmeasured in
+# pgc_measured(). The layer does not: `expect.hash` refuses a value that starts
+# with QUERY_ERROR, and its `_empty()` is `v is None or len(v) == 0`, which the
+# five-character string EMPTY is not. Measured on two genuinely empty columnar
+# relations, hashed by the oracle in its old form: the arm PASSED, comparing
+# EMPTY with EMPTY. In its form below the same pair is REFUSED -- "the left side
+# is a failed query". So two empty relations would have satisfied the first
+# premise of this file and now cannot. Shaping
+# the sentinel like the one the layer already refuses puts one guard over both
+# cases instead of asking the layer for a second one.
 SET_HASH_SQL = """
-SELECT coalesce(md5(string_agg(t, chr(10) ORDER BY t)), 'EMPTY')
+SELECT coalesce(md5(string_agg(t, chr(10) ORDER BY t)),
+                'QUERY_ERROR.empty-relation')
 FROM (SELECT r::text AS t FROM {table} r) s
 """
 
@@ -233,6 +297,30 @@ def _counter(plan, key):
         if key in node:
             return node[key]
     return None
+
+
+# The six layout verbs, and how each one ended. WRITTEN BY THE `locality`
+# FIXTURE, READ BY test_every_layout_verb_ran_without_raising.
+#
+# THE PORT OF crun(). A cluster verb that RAISED would leave its table simply
+# unclustered -- and an unclustered table has a partition, a group count and a
+# plan, so it reddens the pins below as though the CURVE had changed. The bash
+# suite runs every verb through crun(), which names the verb and its SQLSTATE.
+# Letting the exception out of the fixture instead would abort the module with
+# an error that names no property, so the outcome is recorded here and asserted
+# by name, exactly as bash does it.
+_VERB_STATES = {}
+
+
+def _verb(conn, what, sql):
+    """Run one layout verb and record how it ended, under the bash suite's name."""
+    import psycopg
+
+    try:
+        conn.execute(sql)
+        _VERB_STATES[what] = "noerror"
+    except psycopg.Error as exc:
+        _VERB_STATES[what] = exc.sqlstate or "UNKNOWN"
 
 
 def _window(table, ox, oy, box):
@@ -322,10 +410,14 @@ def locality(pgc_cluster):
         # hz is Z-order, hh is Hilbert. cz1 and cz2 are the control: the same
         # verb twice, so an "the partitions differ" arm cannot be satisfied by
         # an instrument that reports any two tables as different.
-        conn.execute("SELECT pgcolumnar.cluster('hz', 'a', 'b')")
-        conn.execute("SELECT pgcolumnar.cluster_hilbert('hh', 'a', 'b')")
-        conn.execute("SELECT pgcolumnar.cluster('cz1', 'a', 'b')")
-        conn.execute("SELECT pgcolumnar.cluster('cz2', 'a', 'b')")
+        _verb(conn, "cluster() on the Z-order arm",
+              "SELECT pgcolumnar.cluster('hz', 'a', 'b')")
+        _verb(conn, "cluster_hilbert() on the Hilbert arm",
+              "SELECT pgcolumnar.cluster_hilbert('hh', 'a', 'b')")
+        _verb(conn, "cluster() on control table cz1",
+              "SELECT pgcolumnar.cluster('cz1', 'a', 'b')")
+        _verb(conn, "cluster() on control table cz2",
+              "SELECT pgcolumnar.cluster('cz2', 'a', 'b')")
 
         # The dense dyadic grid the design predicted the two curves would agree
         # on: 256 x 256 cells, 1024 rows to a group, 64 full groups.
@@ -338,8 +430,10 @@ def locality(pgc_cluster):
             conn.execute("SELECT pgcolumnar.set_options(%s, stripe_row_limit => %s)",
                          (table, DENSE_STRIPE_ROWS))
             conn.execute(f"INSERT INTO {table} SELECT * FROM dsrc")
-        conn.execute("SELECT pgcolumnar.cluster('dz', 'a', 'b')")
-        conn.execute("SELECT pgcolumnar.cluster_hilbert('dh', 'a', 'b')")
+        _verb(conn, "cluster() on the dense control",
+              "SELECT pgcolumnar.cluster('dz', 'a', 'b')")
+        _verb(conn, "cluster_hilbert() on the dense control",
+              "SELECT pgcolumnar.cluster_hilbert('dh', 'a', 'b')")
 
         yield conn
     finally:
@@ -360,25 +454,64 @@ def digests(locality):
 # =============================================================================
 
 
+def test_every_layout_verb_ran_without_raising(locality, expect):
+    """bash: the six `crun` premises, 'premise: WHAT ran without raising'.
+
+    A CALL THAT RAISED LEAVES A TABLE MERELY UNCLUSTERED, and an unclustered
+    table has a partition, a group count and a plan -- so it reddens the pins
+    below as though the CURVE had changed. Six named arms, one per verb, so the
+    output says which verb failed and with what SQLSTATE rather than leaving a
+    reader to infer it from a moved integer.
+    """
+    for what in ("cluster() on the Z-order arm",
+                 "cluster_hilbert() on the Hilbert arm",
+                 "cluster() on control table cz1",
+                 "cluster() on control table cz2",
+                 "cluster() on the dense control",
+                 "cluster_hilbert() on the dense control"):
+        expect.text(_VERB_STATES.get(what, "NOT RUN"), "noerror",
+                    f"premise: {what} ran without raising")
+
+
+def test_the_source_holds_the_rows_both_arms_will_load(locality, expect):
+    """bash: 'premise: the source holds the rows both arms will load'.
+
+    EXACT, NOT A FLOOR. Both arms load from this one heap table, so a source
+    that is short is a fixture that is short on both arms at once -- which is
+    the shape the arms' own comparison cannot see.
+    """
+    src_rows = _scalar(locality, "SELECT count(*) FROM src")
+    expect.num(src_rows, ROWS,
+               "premise: the source holds the rows both arms will load")
+
+
 def test_both_arms_hold_the_identical_row_multiset(locality, expect):
     """bash: 'premise: the two arms hold the identical row multiset' and the
-    two arms that follow it.
+    three arms that follow it.
 
     Without this every number below is a fact about two different tables.
     """
     hz = _scalar(locality, SET_HASH_SQL.format(table="hz"))
     hh = _scalar(locality, SET_HASH_SQL.format(table="hh"))
     src = _scalar(locality, SET_HASH_SQL.format(table="src"))
-    expect.hash(hh, hz, "the two arms hold the identical row multiset")
+    expect.hash(hh, hz, "premise: the two arms hold the identical row multiset")
     # And that multiset is the source's. Comparing the arms only to each other
     # passes if both loads went equally wrong.
-    expect.hash(hz, src, "and it is the source's multiset, so neither load dropped rows")
-    # A hash of nothing equals a hash of nothing. 'EMPTY' is what the oracle
-    # returns for a genuinely empty relation, and it is not what these are.
-    expect.at_least(_scalar(locality, "SELECT count(*) FROM hz"), ROWS,
-                    "and it is a hash of rows: the Z-order arm holds them")
-    expect.at_least(_scalar(locality, "SELECT count(*) FROM hh"), ROWS,
-                    "and it is a hash of rows: the Hilbert arm holds them")
+    expect.hash(hz, src,
+                "premise: and it is the source's multiset, so neither load dropped rows")
+    # A hash of nothing equals a hash of nothing. The oracle returns a
+    # QUERY_ERROR sentinel for an empty relation and `expect.hash` refuses it
+    # outright -- but a refusal is not a NAMED arm, and the bash suite has one,
+    # so the same property is asserted here by name as well.
+    hz_is_a_measurement = 0 if str(hz).startswith("QUERY_ERROR") else 1
+    expect.num(hz_is_a_measurement, 1,
+               "premise: and it is a hash of rows, not of an empty or failed read")
+    # EXACT, NOT TWO FLOORS. `at_least(count, ROWS)` on each arm is satisfied by
+    # an arm that was loaded TWICE, which is a fixture defect that would move
+    # every number below it. The bash suite pins the sum; so does this.
+    total = _scalar(locality,
+                    "SELECT (SELECT count(*) FROM hz) + (SELECT count(*) FROM hh)")
+    expect.num(total, ROWS * 2, "premise: both arms hold every source row")
 
 
 def test_the_fixture_is_two_dimensional(locality, expect):
@@ -388,12 +521,19 @@ def test_the_fixture_is_two_dimensional(locality, expect):
     both curves the identity in that dimension and the comparison meaningless,
     and it would do so silently.
     """
+    spans = {}
     for column in ("a", "b"):
-        expect.num(
-            _scalar(locality,
-                    f"SELECT (min({column}) < {SPAN // 100} "
-                    f"AND max({column}) > {SPAN - SPAN // 100})::int FROM src"),
-            1, f"column {column} spans the square")
+        spans[column] = _scalar(
+            locality,
+            f"SELECT (min({column}) < {SPAN // 100} "
+            f"AND max({column}) > {SPAN - SPAN // 100})::int FROM src")
+    # UNROLLED, NOT LOOPED, because the two bash checks have two different
+    # names and a loop can only produce one. The names are the bash suite's,
+    # so compare_to_bash.py can match them.
+    expect.num(
+        spans["a"], 1,
+        "premise: column a spans the square, so this is a two-dimensional fixture")
+    expect.num(spans["b"], 1, "premise: column b spans the square too")
 
 
 def test_both_arms_have_the_group_count_measured(locality, expect):
@@ -410,9 +550,11 @@ def test_both_arms_have_the_group_count_measured(locality, expect):
             "SELECT count(*) FROM pgcolumnar.row_group "
             "WHERE storage_id = pgcolumnar.get_storage_id(%s)",
             (table,))
-    expect.num(counts["hz"], GROUPS, "hz has the group count measured")
-    expect.num(counts["hh"], counts["hz"],
-               "hh has the same group count, so a group is the same unit on both arms")
+    expect.num(counts["hz"], GROUPS,
+               "premise: hz has the group count this measurement was taken at")
+    expect.num(
+        counts["hh"], counts["hz"],
+        "premise: hh has the same group count, so a group is the same unit on both arms")
 
 
 # =============================================================================
@@ -432,8 +574,9 @@ def test_the_two_partitions_differ(digests, expect):
     change in the reader.
     """
     dz, dh = digests
-    expect.text(_verdict(dz, dh), "different",
-                "the Z-order and Hilbert partitions differ")
+    verdict = _verdict(dz, dh)
+    expect.text(verdict, "different",
+                "premise: the Z-order and Hilbert partitions differ")
     expect.text(dz, DIGEST_ZORDER,
                 "the Z-order partition is the one these numbers were measured over")
     expect.text(dh, DIGEST_HILBERT,
@@ -458,8 +601,16 @@ def test_two_tables_on_the_same_curve_are_one_partition(locality, digests, expec
     dz, _ = digests
     cz1 = _digest(locality, "cz1")
     cz2 = _digest(locality, "cz2")
-    expect.hash(cz1, cz2, "two tables on the same curve have the identical partition")
-    expect.hash(cz1, dz, "and that partition is the measured Z-order arm's")
+    expect.hash(cz1, cz2,
+                "control: two tables on the same curve have the identical partition")
+    # THROUGH THE VERDICT, like its sibling and like every digest comparison in
+    # the bash suite. `expect.hash` refuses a QUERY_ERROR sentinel, so the hole
+    # the bash arm had -- two failed reads comparing equal -- is closed there by
+    # the layer; the verdict is used anyway so that the two arms of this control
+    # are read the same way.
+    control_verdict = _verdict(cz1, dz)
+    expect.text(control_verdict, "IDENTICAL",
+                "control: and that partition is the measured Z-order arm's")
 
 
 # =============================================================================
@@ -478,19 +629,25 @@ def test_dense_dyadic_grid_is_one_partition(locality, expect):
     "Hilbert always changes the layout", and so a reader can see that arm 2's
     "different" is a measurement rather than a foregone conclusion.
     """
+    duplicated_cells = _scalar(
+        locality,
+        "SELECT count(*) FROM (SELECT a, b FROM dsrc "
+        "GROUP BY a, b HAVING count(*) <> 1) x")
+    dense_groups = _scalar(
+        locality,
+        "SELECT count(*) FROM pgcolumnar.row_group "
+        "WHERE storage_id = pgcolumnar.get_storage_id('dz')")
+    ddz = _digest(locality, "dz")
+    ddh = _digest(locality, "dh")
     expect.num(
-        _scalar(locality,
-                "SELECT count(*) FROM (SELECT a, b FROM dsrc "
-                "GROUP BY a, b HAVING count(*) <> 1) x"),
-        0, "the dense grid is dense -- every cell present exactly once")
+        duplicated_cells, 0,
+        "control premise: the dense grid is dense -- every cell present exactly once")
     expect.num(
-        _scalar(locality,
-                "SELECT count(*) FROM pgcolumnar.row_group "
-                "WHERE storage_id = pgcolumnar.get_storage_id('dz')"),
-        DENSE_SIDE * DENSE_SIDE // DENSE_STRIPE_ROWS,
-        "the dense grid has the dyadic group count")
-    expect.hash(_digest(locality, "dz"), _digest(locality, "dh"),
-                "on a dense dyadic grid the two curves cut the identical partition")
+        dense_groups, DENSE_SIDE * DENSE_SIDE // DENSE_STRIPE_ROWS,
+        "control premise: the dense grid has the dyadic group count")
+    expect.hash(
+        ddz, ddh,
+        "control: on a dense dyadic grid the two curves cut the identical partition")
 
 
 # =============================================================================
@@ -506,13 +663,27 @@ def test_both_arms_plan_as_a_columnar_scan(locality, expect):
     that predicate says yes for a plan with no columnar scan in it.
     "Columnar Projected Columns" is emitted only by the scan's explain
     callback.
+
+    AND THE HELPER UNDER THIS ARM IS NOT ITSELF PINNED. #897's
+    test_guards_pinned.py pins num, text, at_least, plan_node, outcomes,
+    cannot_run and hash, and has no plan_marker case. Measured on #897 head
+    5f3dedb merged into this branch: replacing plan_marker's present-arm raise
+    with `pass` leaves test_hilbert_locality.py, test_connection.py,
+    test_guards_pinned.py and test_layer.py all green, 50 passed. So the arms
+    below rest on a helper that has no removal proof of its own; pin it in
+    #897 before reading them as strong.
     """
     box = 2000
     ox, oy = _origins(box)[0]
-    for table in ("hz", "hh"):
-        expect.plan_marker(_plan(locality, _window(table, ox, oy, box)),
-                           "Columnar Projected Columns",
-                           name=f"the {table} arm plans as a columnar scan")
+    pz = _plan(locality, _window("hz", ox, oy, box))
+    ph = _plan(locality, _window("hh", ox, oy, box))
+    # UNROLLED, AND THE NAMES ARE PLAIN LITERALS. A loop can carry only one
+    # name, and an f-string is invisible to compare_to_bash.py's extractor, so
+    # both arms would drop out of the port's name list.
+    expect.plan_marker(pz, "Columnar Projected Columns",
+                       name="premise: the Z-order arm plans as a columnar scan")
+    expect.plan_marker(ph, "Columnar Projected Columns",
+                       name="premise: the Hilbert arm plans as a columnar scan")
 
 
 def test_parallelism_is_off_so_a_counter_is_a_fact_about_the_layout(locality, expect):
@@ -555,14 +726,14 @@ def test_the_predicates_are_usable_and_the_denominators_match(locality, expect, 
     ph = _plan(locality, _window("hh", ox, oy, box))
 
     expect.num(_counter(pz, "Columnar Usable Skip Predicates"), 4,
-               f"box {box}, the Z-order arm can skip on all four predicates")
+               f"premise: box {box}, the Z-order arm can skip on all four predicates")
     expect.num(_counter(ph, "Columnar Usable Skip Predicates"), 4,
-               f"box {box}, the Hilbert arm can skip on all four predicates")
+               f"premise: box {box}, the Hilbert arm can skip on all four predicates")
     expect.num(_counter(ph, "Columnar Chunk Groups Total"),
                _counter(pz, "Columnar Chunk Groups Total"),
-               f"box {box}, both arms have the same number of groups to read")
+               f"premise: box {box}, both arms have the same number of groups to read")
     expect.num(_counter(pz, "Columnar Chunk Groups Total"), GROUPS,
-               f"box {box}, that denominator is the whole relation")
+               f"premise: box {box}, that denominator is the whole relation")
 
 
 # =============================================================================
@@ -588,7 +759,7 @@ def test_groups_read_over_sixty_placements(locality, digests, expect, box):
             f"between them is not about the curve")
         return
 
-    want_z, want_h = PINS[box]
+    want_z, want_h, floor = PINS[box]
     measured_z, total_z = _groups_read(locality, "hz", box)
     measured_h, total_h = _groups_read(locality, "hh", box)
 
@@ -604,9 +775,7 @@ def test_groups_read_over_sixty_placements(locality, digests, expect, box):
     expect.num(total_h, want_h,
                f"box {box}: groups read over {PLACEMENTS} placements, Hilbert")
 
-    # And, separately from the pins: the curve still wins here. This arm stays
-    # meaningful when the pins are re-taken, and it is what tells a reader
-    # "the layout moved" apart from "Hilbert stopped winning".
+    # And, separately from the pins: the curve still wins here.
     #
     # A DIFFERENCE, BECAUSE THE LAYER HAS NO STRICT INEQUALITY. `at_least` is
     # the only bound it offers and it refuses a floor of zero, so "h < z" is
@@ -615,7 +784,22 @@ def test_groups_read_over_sixty_placements(locality, digests, expect, box):
     expect.at_least(total_z - total_h, 1,
                     f"box {box}: Hilbert reads fewer groups than Z-order")
 
-    # The ratio is PRINTED, from the two numbers just measured, and asserted
-    # nowhere: a ratio can be held constant by both arms getting worse together.
-    print(f"-- box {box}: z={total_z} h={total_h} "
-          f"z/h={total_z / total_h:.4f}")
+    # AND IT STILL WINS BY THE MARGIN IT WAS MEASURED AT.
+    #
+    # "z - h is at least 1" is satisfied by a win of ONE group in four
+    # thousand, so on its own it cannot tell "the layout changed" from "the
+    # benefit is gone". Refusing to skip odd-numbered row groups in the reader
+    # moves all eight pins, keeps the arm above GREEN at every box, and takes
+    # z/h from 2.0424 to 1.0149. This arm is what reddens there. The ratio is
+    # computed once and both this arm and the line printed below use that one
+    # value, so the number asserted and the number reported cannot drift.
+    ratio = total_z / total_h if total_h else 0.0
+    expect.text(
+        "at or above the floor" if ratio >= float(floor)
+        else f"BELOW THE FLOOR (z/h={ratio:.4f})",
+        "at or above the floor",
+        f"box {box}: and it wins by the margin measured, z/h at least {floor}")
+
+    # The ratio is PRINTED as well, and asserted nowhere beyond the floor above:
+    # a ratio can be held constant by both arms getting worse together.
+    print(f"-- box {box}: z={total_z} h={total_h} z/h={ratio:.4f}")
