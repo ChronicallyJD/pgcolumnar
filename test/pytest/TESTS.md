@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**78 tests in 6 files.** Sixty-three of them test the harness rather than the
+**79 tests in 7 files.** Sixty-three of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -32,8 +32,9 @@ behaviour, the source of that number is named.
 - [6. test_docs_cover_the_corpus.py: this document, checked](#6-test_docs_cover_the_corpuspy-this-document-checked)
 - [7. test_connection.py: the cluster and the direct connection](#7-test_connectionpy-the-cluster-and-the-direct-connection)
 - [8. test_native_projection.py: the ported suite](#8-test_native_projectionpy-the-ported-suite)
-- [9. Adding a test](#9-adding-a-test)
-- [10. Traps this corpus records](#10-traps-this-corpus-records)
+- [9. test_saop_element_pushdown.py: scattered set pruning](#9-test_saop_element_pushdownpy-scattered-set-pruning)
+- [10. Adding a test](#10-adding-a-test)
+- [11. Traps this corpus records](#11-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -588,7 +589,23 @@ The mutation makes `PgColumnarProjectionFanoutRow` return without writing. Each 
 builds and installs once, and both harnesses print the `.so` md5 they measured, so
 an arm where the two differ is void rather than reported.
 
-## 9. Adding a test
+## 9. test_saop_element_pushdown.py: scattered set pruning
+
+### `test_scattered_saop_prunes_each_element`
+
+Ports the #752 additions to `test/native_saop_pushdown.sh`. A monotonic 40,000-row
+fixture has twenty row groups. The scattered set `{100,20100,38100}` spans the
+table, so its old `[min,max]` hull removes zero groups while per-element pruning
+removes seventeen. The contiguous `{100,101,102}` set is the negative control:
+its hull and its elements both remove nineteen groups. A 129-element list proves
+the bounded fallback still emits two hull keys and returns every expected row.
+
+The shell and pytest forms were both run red before implementation (`0`, wanted
+`17`), green afterward, then red again with the per-element threshold mutated to
+zero. The fixture row count and columnar plan marker are premises, and both query
+answers are checked independently of the pruning counters.
+
+## 10. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -615,7 +632,7 @@ an arm where the two differ is void rather than reported.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 10. Traps this corpus records
+## 11. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.

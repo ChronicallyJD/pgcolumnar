@@ -62,16 +62,40 @@ groups_removed() {
 # groups were in fact removed (work done). The three lines are distinct
 # counters precisely so intent cannot impersonate work (#477/#479).
 saop_plan="$(psql_c 'EXPLAIN (ANALYZE, TIMING off, SUMMARY off) SELECT count(*) FROM t WHERE ts IN (39100, 39200);')"
-check "an IN-list pushes two filters (intent)" \
-	"$(sed -n 's/.*Columnar Pushed-Down Filters: \([0-9]*\).*/\1/p' <<<"$saop_plan" | head -1)" "2"
-check "both IN-list keys are usable skip predicates" \
-	"$(sed -n 's/.*Columnar Usable Skip Predicates: \([0-9]*\).*/\1/p' <<<"$saop_plan" | head -1)" "2"
+check "an IN-list pushes one set filter (intent)" \
+	"$(sed -n 's/.*Columnar Pushed-Down Filters: \([0-9]*\).*/\1/p' <<<"$saop_plan" | head -1)" "1"
+check "the IN-list set filter is a usable skip predicate" \
+	"$(sed -n 's/.*Columnar Usable Skip Predicates: \([0-9]*\).*/\1/p' <<<"$saop_plan" | head -1)" "1"
 check "an IN-list confined to the last group prunes (19 of 20 removed)" \
 	"$(sed -n 's/.*Chunk Groups Removed by Filter: \([0-9]*\).*/\1/p' <<<"$saop_plan" | head -1)" "19"
 
 check "IN-list count matches the OR-literal equivalent" \
 	"$(q 'SELECT count(*) FROM t WHERE ts IN (39100, 39200);')" \
 	"$(q 'SELECT count(*) FROM t WHERE ts = 39100 OR ts = 39200;')"
+
+# A scattered set is the removal proof for per-element pruning. Its hull spans
+# nearly the whole table, so the old [min,max] reduction removes no group; testing
+# each value against the group range removes every group except the three that
+# can hold one listed value. A contiguous set is the negative control: its hull
+# and its elements imply the same one surviving group.
+check "a scattered IN-list prunes by element, not only by its hull (17 removed)" \
+	"$(groups_removed 'SELECT count(*) FROM t WHERE ts IN (100, 20100, 38100);')" "17"
+check "scattered per-element pruning keeps the exact answer" \
+	"$(q 'SELECT count(*) FROM t WHERE ts IN (100, 20100, 38100);')" "3"
+check "a contiguous IN-list agrees with its hull (19 removed)" \
+	"$(groups_removed 'SELECT count(*) FROM t WHERE ts IN (100, 101, 102);')" "19"
+check "contiguous per-element pruning keeps the exact answer" \
+	"$(q 'SELECT count(*) FROM t WHERE ts IN (100, 101, 102);')" "3"
+
+# Bound the O(elements * rows) exact-refinement path. Above 128 non-NULL
+# elements the builder deliberately keeps the old two-key hull.
+large_list="$(seq -s, 1 129)"
+large_plan="$(psql_c "EXPLAIN (ANALYZE, TIMING off, SUMMARY off)
+	SELECT count(*) FROM t WHERE ts IN ($large_list);")"
+check "a large IN-list falls back to two bounded hull filters" \
+	"$(sed -n 's/.*Columnar Pushed-Down Filters: \([0-9]*\).*/\1/p' <<<"$large_plan" | head -1)" "2"
+check "the large-list fallback keeps the exact answer" \
+	"$(q "SELECT count(*) FROM t WHERE ts IN ($large_list);")" "129"
 
 check "a NULL element is ignored for the range, not a bailout (19 removed)" \
 	"$(groups_removed 'SELECT count(*) FROM t WHERE ts = ANY (ARRAY[39100, NULL]::int[]);')" "19"
@@ -128,11 +152,11 @@ check "single-value IN-list count is exact (0 rows)" \
 
 # --- conservativeness arms (must hold before AND after the fix) ---
 
-# A list spanning the whole range prunes nothing but must count exactly: the
-# range is conservative, membership is the executor's recheck.
-check "a range-spanning IN-list is conservative (0 removed, exact count)" \
+# A list spanning the whole range still prunes the groups BETWEEN its elements:
+# this is the distinction the old hull could not express.
+check "a range-spanning IN-list prunes between its elements (18 removed, exact count)" \
 	"$(groups_removed 'SELECT count(*) FROM t WHERE ts IN (100, 39900);')/$(q 'SELECT count(*) FROM t WHERE ts IN (100, 39900);')" \
-	"0/2"
+	"18/2"
 
 # The NOT IN list is confined to ONE group on purpose: a builder that wrongly
 # derived the positive [19000, 19500] range from the negated clause would skip
@@ -248,7 +272,7 @@ check "a correlated PARAM_EXEC array is not mis-pruned (results stay correct)" \
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src"
 
 check "premise: the predicate builder has exactly one sk_flags reject guard" \
-	"$(grep -c 'key->sk_flags &' "$SRC/columnar_reader.c")" "1"
+	"$(grep -c 'key->sk_flags & (SK_ISNULL' "$SRC/columnar_reader.c")" "1"
 
 # From the `if (key->sk_flags & (` line through the closing `))`, comments
 # excluded by construction: the range starts at the `if`, so prose above it
@@ -262,7 +286,7 @@ check "premise: the reject expression was extracted, not blank" \
 # Membership, not adjacency. The flag list is a SET; asserting the order of it
 # would redden on a harmless reflow and would assert more than the code means.
 for _f in SK_ISNULL SK_ROW_HEADER SK_ROW_MEMBER SK_ROW_END SK_SEARCHNULL \
-		  SK_SEARCHNOTNULL SK_ORDER_BY SK_SEARCHARRAY; do
+		  SK_SEARCHNOTNULL SK_ORDER_BY; do
 	check "the predicate builder's reject expression contains $_f" \
 		"$(case "$guard" in *"$_f"*) echo yes ;; *) echo "absent from <$guard>" ;; esac)" "yes"
 done

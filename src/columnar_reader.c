@@ -51,6 +51,9 @@ typedef struct SkipPredicate
 	Datum		compareValue;	/* the constant */
 	FmgrInfo	cmpFn;			/* column type's default btree comparison */
 	Oid			collation;
+	bool		searchArray;	/* compare against any value in arrayValues */
+	Datum	   *arrayValues;	/* non-NULL elements, in read context */
+	int			arrayValueCount;
 
 	/* bloom-filter probe for equality (I7, gap 25): set for a hashable equality
 	 * predicate on a safe collation, matching how the filter was built */
@@ -651,25 +654,17 @@ pgcolumnar_make_predicates(SkipPredicate *out, int nkeys, ScanKey keys,
 		/*
 		 * Only plain "column op const" comparison keys are usable.
 		 *
-		 * SK_SEARCHARRAY is in this list although nothing in this extension
-		 * currently sets it, and the reason is the point. A key carrying that
-		 * flag holds an ARRAY in sk_argument, not a scalar. Without this arm the
-		 * key falls through, compareValue is set to the array's Datum, and every
-		 * zone-map comparison below runs the column's scalar btree function
-		 * against a pointer to an array header. That is not a wrong answer that
-		 * a test would catch; it is a comparison of unrelated things whose
-		 * result is whatever the memory happens to say.
-		 *
-		 * It is guarded BEFORE anything can produce the shape rather than
-		 * beside it. #752 measures a per-element path for `= ANY` worth 13 to 16
-		 * chunk groups of 27, and the obvious way to build it is to stop
-		 * collapsing the array in pgcolumnar_saop_range_scankey and mark the key
-		 * SK_SEARCHARRAY. Whoever does that should have to add handling here
-		 * deliberately, not discover that this function accepted it silently.
+		 * SK_SEARCHARRAY is accepted only by the dedicated equality arm below.
+		 * Its sk_argument is an array, not a scalar; allowing it to fall through
+		 * would pass an array header to the column's scalar comparison function.
 		 */
 		if (key->sk_flags & (SK_ISNULL | SK_ROW_HEADER | SK_ROW_MEMBER |
 							 SK_ROW_END | SK_SEARCHNULL | SK_SEARCHNOTNULL |
-							 SK_ORDER_BY | SK_SEARCHARRAY))
+							 SK_ORDER_BY))
+			continue;
+		if ((key->sk_flags & SK_SEARCHARRAY) &&
+			(key->sk_flags != SK_SEARCHARRAY ||
+			 key->sk_strategy != BTEqualStrategyNumber))
 			continue;
 		if (key->sk_attno < 1 || key->sk_attno > natts)
 			continue;
@@ -768,6 +763,34 @@ pgcolumnar_make_predicates(SkipPredicate *out, int nkeys, ScanKey keys,
 		out[n].strategy = key->sk_strategy;
 		out[n].compareValue = key->sk_argument;
 		out[n].collation = att->attcollation;
+		out[n].searchArray = (key->sk_flags & SK_SEARCHARRAY) != 0;
+
+		if (out[n].searchArray)
+		{
+			MemoryContext old = MemoryContextSwitchTo(cx);
+			ArrayType  *arr = DatumGetArrayTypePCopy(key->sk_argument);
+			Datum	   *elems;
+			bool	   *nulls;
+			int			nelems;
+			int			j;
+			int			kept = 0;
+			int16		elmlen;
+			bool		elmbyval;
+			char		elmalign;
+
+			get_typlenbyvalalign(ARR_ELEMTYPE(arr), &elmlen, &elmbyval,
+								&elmalign);
+			deconstruct_array(arr, ARR_ELEMTYPE(arr), elmlen, elmbyval,
+							  elmalign, &elems, &nulls, &nelems);
+			for (j = 0; j < nelems; j++)
+				if (!nulls[j])
+					elems[kept++] = elems[j];
+			out[n].arrayValues = elems;
+			out[n].arrayValueCount = kept;
+			MemoryContextSwitchTo(old);
+			if (kept == 0)
+				continue;
+		}
 
 		/*
 		 * For an equality predicate on a hashable column with a safe collation,
@@ -1156,8 +1179,21 @@ native_is_qual_column(PgColumnarReadState *rs, int col)
 static bool
 native_value_satisfies(SkipPredicate *pred, Datum val)
 {
-	int32		c = DatumGetInt32(FunctionCall2Coll(&pred->cmpFn, pred->collation,
-													val, pred->compareValue));
+	int32		c;
+
+	if (pred->searchArray)
+	{
+		int			i;
+
+		for (i = 0; i < pred->arrayValueCount; i++)
+			if (DatumGetInt32(FunctionCall2Coll(&pred->cmpFn, pred->collation,
+												val, pred->arrayValues[i])) == 0)
+				return true;
+		return false;
+	}
+
+	c = DatumGetInt32(FunctionCall2Coll(&pred->cmpFn, pred->collation,
+										val, pred->compareValue));
 
 	switch (pred->strategy)
 	{
@@ -1336,6 +1372,22 @@ native_zone_excludes(SkipPredicate *pred, Form_pg_attribute att,
 	cur = (char *) z->maximum;
 	maxv = PgColumnarDecodeValue(att, &cur, z->maximum + z->maximumLen, cx);
 
+	if (pred->searchArray)
+	{
+		int			i;
+
+		for (i = 0; i < pred->arrayValueCount; i++)
+		{
+			c1 = DatumGetInt32(FunctionCall2Coll(&pred->cmpFn, pred->collation,
+												minv, pred->arrayValues[i]));
+			c2 = DatumGetInt32(FunctionCall2Coll(&pred->cmpFn, pred->collation,
+												maxv, pred->arrayValues[i]));
+			if (c1 <= 0 && c2 >= 0)
+				return false;
+		}
+		return true;
+	}
+
 	switch (pred->strategy)
 	{
 		case BTLessStrategyNumber:	/* col < const : skip if min >= const */
@@ -1427,11 +1479,9 @@ pgcolumnar_merge_delete_vectors(List *maskList, uint32 want,
  *		A transpose rather than a sort. It is O(1) per exclusion, it needs no
  *		statistics the reader does not have, and it converges in one step for the
  *		shape that matters: one selective predicate behind an unselective one.
- *		The paper's caveat -- order only when a highly selective predicate is
- *		present, or the ordering costs more than it saves -- falls out of the
- *		mechanism rather than needing a threshold: a predicate that never
- *		excludes never moves, so a query with no selective predicate keeps the
- *		order it started with and pays nothing.
+ *		Set predicates have non-uniform cost: N comparisons rather than one.
+ *		They are therefore never promoted ahead of a scalar predicate. Among
+ *		predicates of the same kind, exclusion count remains the useful signal.
  *
  *		This cannot change an answer. The predicates are a conjunction, and a
  *		conjunction is order-independent; the loop returns "cannot match" on the
@@ -1449,6 +1499,10 @@ pgcolumnar_predicate_excluded(PgColumnarReadState *rs, int oi)
 		return;
 
 	ahead = rs->predOrder[oi - 1];
+	/* A set costs N comparisons; never promote it ahead of a scalar predicate. */
+	if (rs->predicates[here].searchArray &&
+		!rs->predicates[ahead].searchArray)
+		return;
 	if (rs->predicates[ahead].excludes < rs->predicates[here].excludes)
 	{
 		rs->predOrder[oi - 1] = here;
@@ -1549,11 +1603,26 @@ pgcolumnar_native_group_can_match(PgColumnarReadState *rs, uint64 groupNumber)
 
 			if (b != NULL && b->filter != NULL)
 			{
-				uint32		h = DatumGetUInt32(
-					FunctionCall1Coll(&pred->hashFn, pred->hashCollation,
-									  pred->compareValue));
+				bool		mayMatch = false;
+				int			i;
+				int			nvalues = pred->searchArray ?
+					pred->arrayValueCount : 1;
 
-				if (!PgColumnarBloomProbe(b->filter, b->filterLen, h))
+				for (i = 0; i < nvalues; i++)
+				{
+					Datum		probe = pred->searchArray ?
+						pred->arrayValues[i] : pred->compareValue;
+					uint32		h = DatumGetUInt32(
+						FunctionCall1Coll(&pred->hashFn,
+										  pred->hashCollation, probe));
+
+					if (PgColumnarBloomProbe(b->filter, b->filterLen, h))
+					{
+						mayMatch = true;
+						break;
+					}
+				}
+				if (!mayMatch)
 				{
 					pgcolumnar_predicate_excluded(rs, oi);
 					return false;
