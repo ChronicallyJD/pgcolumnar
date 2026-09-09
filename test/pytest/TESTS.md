@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**96 tests in 6 files.** Eighty-one of them test the harness rather than the
+**113 tests in 8 files.** Ninety-eight of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -290,6 +290,15 @@ restored                       38c951eb7dda   byte-exact
 **Each mutation reddens exactly one test, and it is that test's own.** That is
 the property worth having: it proves the three are distinguishable rather than
 subsumed, which "something went red" cannot.
+| `test_ordered_rows_both_empty_names_its_own_refusal` | the sequence oracle's both-empty refusal, pinned to ITS message |
+| `test_ordering_observable_both_empty_names_its_own_refusal` | the premise check's both-empty refusal, pinned to ITS message |
+| `test_refusal_itself_refuses_an_empty_pattern_list` | the new helper must not become the defect it removes |
+
+The two ordered-oracle rows are the subsumption case in its purest form. Both
+guards refuse a both-empty comparison, and so does `rows()` underneath them, so an
+arm asserting only "the inner run failed" passes with any one of the three deleted.
+Each is pinned to its own message, which is the only way the three stay
+distinguishable.
 
 Three of these carry reasoning that is easy to lose.
 

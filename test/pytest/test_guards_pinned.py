@@ -261,3 +261,34 @@ def test_plan_marker_refuses_an_absence_claim_over_an_empty_plan(pytester, expec
             expect.plan_marker([], "Columnar Projected Columns", absent=True)
         '''), "plan_marker refuses an absence claim over an empty plan",
                    "plan has no nodes")
+
+
+# The ordered oracle's own guards. These live here rather than in the base
+# branch's copy of this file because the guards they pin do not exist until the
+# ordered oracle does.
+#
+# BOTH ARE UNREACHABLE BY SUBSUMPTION, which is why they need the message and
+# not just the outcome. Neuter either one and a NEIGHBOURING refusal fires on
+# the same input, so the inner run still fails and an arm asserting only
+# `failed=1` still passes. A census over the full stack found exactly these two
+# unheld after the rest of the layer was pinned.
+
+
+def test_ordered_rows_both_empty_names_its_own_refusal(pytester, expect):
+    """Neutered, the UNOBSERVABLE guard fires on `[], []` instead: every element
+    of an empty sequence is trivially the same, so that guard also matches."""
+    expect.refusal(_inner(pytester, '''
+        def test_two_empty(expect):
+            expect.ordered_rows([], [], "two empty sequences")
+        '''), "ordered_rows names its own both-empty refusal",
+                   "both sequences are empty")
+
+
+def test_ordering_observable_both_empty_names_its_own_refusal(pytester, expect):
+    """Neutered, the `forward == reverse` AssertionError fires instead, because
+    two empty readings are equal."""
+    expect.refusal(_inner(pytester, '''
+        def test_empty_directions(expect):
+            expect.ordering_observable([], [], "no rows either way")
+        '''), "ordering_observable names its own both-empty refusal",
+                   "both directions are empty")
