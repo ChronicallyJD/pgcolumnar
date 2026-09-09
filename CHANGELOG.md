@@ -14,6 +14,25 @@ installed, `1.0-alpha`, and `1.0-alpha2`), so a single
 notes in this file describe `default_version` as pinned at an earlier version, each
 true until the next version shipped.
 
+## [Unreleased]
+
+### Fixed
+
+- `ALTER TABLE ... RENAME COLUMN` now carries the new name into
+  `pgcolumnar.projection_declaration`, for the named relation and for every
+  inheritance descendant (#888).
+
+  The materialized projection stores attnums, so it already followed a rename
+  without any catalog change. The declaration deliberately stores NAMES, because
+  a restore assigns new attnums -- so leaving the old name behind broke
+  `pgcolumnar.rebuild_projections()` after a dump and restore, even though the
+  live projection had kept working right up to the backup. The failure was
+  therefore invisible until the moment it mattered.
+
+  The descendant half is held by an arm that was proved able to fail: changing
+  the walk to use the named relation instead of each descendant takes
+  `test/projection_rename_restore.sh` from 8 passed to 6 passed and 2 failed.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
