@@ -96,6 +96,54 @@ true until the next version shipped.
   which made the statement rule silently conditional on the class being positional while
   the documentation stated it unconditionally.
 
+- The harness guards run in the gate, without a database, and which files that is
+  gets DECIDED rather than listed (#432).
+
+  `conftest.py` imported psycopg at module scope, and conftest is imported before
+  every run, so a database driver was a hard requirement of COLLECTING the whole
+  pytest corpus -- including every test that never opens a connection. Deferring
+  that one import into the two fixtures that connect lets the guard-testing half
+  run where the gate runs: `.github/workflows/ci.yml` gains a `pytest-guards` job
+  with no database, no build, an interpreter and two pinned packages. The job
+  derives its file list from `NO_CLUSTER` in `test/pytest/test_harness_deps.py`
+  and its pins from `requirements-test.txt`, so neither is a second copy, and it
+  asserts psycopg is ABSENT before running -- otherwise the tests would pass for
+  the ordinary reason and prove nothing about the coupling.
+
+  `NO_CLUSTER` is now decided, not declaimed. The only arm over it asked whether
+  the files it named EXIST, which is one direction of a membership claim, and the
+  missing direction is the one that loses coverage: a database-free test file that
+  nobody adds to the list is simply absent from the job, every arm stays green and
+  nothing says so. It had already happened twice -- `test_build_refusal.py` and
+  `test_layer.py` both need no database and neither was listed. The property is
+  now computed from the corpus by an ast walk and required to equal the list in
+  both directions, so the job runs every database-free file rather than the four
+  somebody remembered.
+
+  An ast walk rather than a line regex, because three shapes here defeat a grep: a
+  file may name the driver in a docstring, discuss a cluster fixture in prose, or
+  build another test as a string for `pytester`. And needing a database is not
+  importing the driver -- a test reaches a cluster through a FIXTURE and may import
+  nothing -- so a file is cluster-bound if it imports the driver at module scope,
+  if any test or fixture in it requests a fixture that reaches a cluster, or if it
+  drives a cluster-bound file as a subprocess. The connecting fixtures are read off
+  `conftest.py` rather than named in the classifier.
+
+  Every rule was proved by removal: eight mutations, each asserted to have applied
+  and restored byte-exact, each reddening a named arm. Two of them survived the
+  first pass and found real gaps -- a closure over each file's own fixture graph
+  that changed no classification, removed as dead, and a prose filter with no
+  killing arm, which now has one. The classification of all twelve corpus files was
+  exercised against reality: each of the six called database-free passes with
+  `import psycopg` shimmed to raise and no usable `pg_config`, and each of the six
+  called cluster-bound fails, for the driver or for `pg_config` and nothing else.
+
+  Because the corpus is not in `SUITES` and the job runs only the database-free
+  files, none of those arms runs in the gate, so
+  `test/selftest/350-the-pytest-corpus-must-be.sh` runs the membership decision
+  through the module's command line, with its own fixture corpus to fail against.
+  A guard that does not run is a comment.
+
 - Exact zone-map boundary coverage now lives in matching shell and pytest tests
   (#831).
 
@@ -396,6 +444,33 @@ true until the next version shipped.
 
   Planting any one of the six sites back in its old form takes the rule red and
   names the file and the line.
+
+- TESTS.md's contents list no longer carries a link that goes nowhere, and the
+  corpus gate now checks every one of them.
+
+  The entry added for `test_harness_deps.py` stripped the underscores out of the
+  file name -- `#14-testharnessdepspy-...` against a heading GitHub renders as
+  `#14-test_harness_depspy-...` -- so the link silently resolved to nothing. The
+  eleven entries above it keep the underscores, so the document already stated the
+  convention. Neither existing arm could see it: both sweep for NAMES, and a broken
+  anchor is still a string containing the name it points at. Selftest 350 now
+  derives each heading's anchor by GitHub's rule and requires every in-document
+  link to reach one. Measured over the three documents in that directory it reports
+  nothing, and over the document as it shipped it reported exactly the one entry.
+
+- No sentence in the pytest harness states how many tests the corpus holds (#908).
+
+  Eight places said "61 of 142" or "152 tests": `test_harness_deps.py` twice,
+  `conftest.py`, `TESTS.md` three times, the `pytest-guards` job's comment in
+  `ci.yml`, and selftest 350's own comment. The corpus held 154 on the day they
+  were written, so the job's comment was already wrong, and a concurrent branch
+  adds a thirteenth test file, which would have made every one of them wrong
+  again. These are the hand-maintained derived values #908 spent a day removing
+  from TESTS.md's totals line, reintroduced as prose, where that line's guard
+  cannot see them: it matches only the bold fixed-form line. The numbers are gone.
+  The job prints how many files it ran and pytest prints how many tests passed, the
+  membership arm prints the partition, and an arm over the job and its comment
+  block refuses a written count there.
 
 - `ALTER TABLE ... RENAME COLUMN` now carries the new name into
   `pgcolumnar.projection_declaration`, for the named relation and for every

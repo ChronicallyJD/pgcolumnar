@@ -5,6 +5,22 @@ argument in pytest.ini, not imported here, so that a test file cannot opt out of
 
 `pytester` is enabled because the layer's own tests run pytest inside pytest: a
 guard is proven to REFUSE rather than assumed to.
+
+PSYCOPG IS IMPORTED INSIDE THE FIXTURES THAT USE IT, NOT HERE, AND THAT IS
+LOAD-BEARING RATHER THAN TIDINESS. conftest is imported before every run, so a
+module-scope `import psycopg` made a DATABASE DRIVER a hard requirement of the
+whole corpus -- including every test that never opens a connection. With the
+import at module scope NO test runs without the driver, and the failure is a
+conftest ImportError before collection rather than a failed test.
+
+No count is written here. Which files need no database is decided in
+test_harness_deps.py, from the corpus, and the gate's job prints what it ran:
+a number in this docstring would be a hand-maintained derived value (#908).
+
+That is the difference between "this harness needs Postgres" and "the tests that
+talk to Postgres need Postgres", and it is what lets the guard-testing half of
+this corpus run somewhere that has no database at all -- which is where the gate
+is (README.md, "This is not in the gate yet").
 """
 
 import os
@@ -12,7 +28,6 @@ import re
 import pathlib
 import shutil
 
-import psycopg
 import pytest
 
 from pgc_cluster import _pg_config, build_once, make_cluster
@@ -72,6 +87,7 @@ def pgc_cluster(request, worker_id):
     # with the build after the start, the .so is NEWER than the postmaster and
     # this refuses.
     cluster.require_server_loaded_this_binary()
+    import psycopg          # deferred: see the module docstring
     try:
         with psycopg.connect(cluster.dsn(), autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS pgcolumnar")
@@ -93,6 +109,8 @@ def pgc_conn(pgc_cluster, request):
     leaves the next connection looking at an absent table, which is measured in the
     design document as a way to make a test assert nothing.
     """
+    import psycopg          # deferred: see the module docstring
+
     schema = "pgc_test_" + "".join(
         ch if ch.isalnum() else "_" for ch in request.node.name
     )[:48]

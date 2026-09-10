@@ -206,7 +206,9 @@ _dcv_absent() {	# _dcv_absent DIR DOC -> "[]" or "[n: a b c]"
 		# It is not latent. It reddened #923's `suites (PG 17)` on a name that
 		# exists, while PG 18 passed, and reproduces at this corpus size only
 		# under load: 170 names, 400 trials on a busy machine, 6 false absences
-		# piped and 0 on a here-string.
+		# piped and 0 on a here-string. An independent run of the same shape in
+		# isolation gave 10 in 40, so the rate is load- and size-dependent rather
+		# than fixed -- the two measurements bracket it.
 		[ "$(grep -cxF "$name" <<<"$ondisk" || true)" != 0 ] && continue
 		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $name"
 	done < <(grep -oE '`test_[A-Za-z0-9_]*(\.py)?`' "$doc" 2>/dev/null \
@@ -277,6 +279,140 @@ check "control: distinct names in the same corpus report no duplicate" \
 	"$(_dcv_dupes "$_dcv_dir" | tr '\n' ' ' | sed 's/ $//')" ""
 
 unset -f _dcv_dupes
+
+
+# ---- and every table-of-contents link must RESOLVE ---------------------------
+#
+# WHY THIS EXISTS. TESTS.md's contents list gained an entry whose anchor stripped
+# the underscores out of the file name -- "#14-testharnessdepspy-..." against a
+# heading GitHub renders as "#14-test_harness_depspy-..." -- so the link silently
+# went nowhere. Eleven entries above it keep the underscores, so the document
+# already stated the convention and the new entry simply disagreed with it.
+#
+# NEITHER EXISTING ARM COULD SEE IT. Both sweep for NAMES; an anchor is not a
+# name, and a broken link is still a string containing the file name it points at.
+# A reader finds out by clicking.
+#
+# THE RULE IS GITHUB'S, and it is mechanical: lowercase the heading text, drop
+# every character that is not a letter, digit, space, hyphen or underscore, then
+# turn spaces into hyphens. So the dot in ".py" and the colon after it disappear
+# and the underscores stay. Over the three documents in this directory the sweep
+# reports nothing, and over the document as it shipped it reported exactly the one
+# entry -- which is the whole false-positive budget, measured rather than assumed.
+#
+# ONE DIRECTION ON PURPOSE: every link must reach a heading. The reverse, every
+# heading must be linked, is a different property, and "## Contents" is itself a
+# heading that no entry links to -- so the reverse needs an exemption list, which
+# is the hand-maintained value this file keeps removing.
+
+_toc_anchor() {	# _toc_anchor TEXT -> the anchor GitHub derives from it
+	printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's/[^a-z0-9 _-]//g' -e 's/ /-/g'
+}
+
+_toc_unresolved() {	# _toc_unresolved DOC -> "[]" or "[n: a b c]"
+	local doc="$1" anchor n=0 bad="" anchors
+	# Every anchor the document's own headings produce, one per line.
+	# Through _toc_anchor, so GitHub's rule has ONE definition here. The stream
+	# form was a second copy of the same sed program, and two copies drift.
+	anchors="$(while IFS= read -r _h; do [ -n "$_h" ] && _toc_anchor "$_h" && echo; done \
+		< <(grep -E '^#{2,} ' "$doc" 2>/dev/null | sed -e 's/^#* //'))"
+	while IFS= read -r anchor; do
+		[ -n "$anchor" ] || continue
+		# grep -cxF on a here-string, for the reason given in _dcv_absent above.
+		[ "$(grep -cxF "$anchor" <<<"$anchors" || true)" != 0 ] && continue
+		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $anchor"
+	done < <(grep -oE '\]\(#[A-Za-z0-9_-]+\)' "$doc" 2>/dev/null \
+	         | sed -e 's/^](#//' -e 's/)$//' | sort -u)
+	[ "$n" -eq 0 ] && { printf '[]'; return; }
+	printf '[%d:%s]' "$n" "$bad"
+}
+
+# PREMISE: the sweep found links at all. A document whose links it cannot parse
+# reports "nothing broken", which is what a correct document reports too.
+check "premise: the sweep reads the contents list's links" \
+	"$([ "$(grep -coE '\]\(#[A-Za-z0-9_-]+\)' "$_dcv_doc")" -ge 15 ] \
+		&& echo enough || echo too-few)" "enough"
+
+# AND THE SWEEP MUST HAVE SWEPT. Without nullglob an unmatched glob stays literal,
+# the [ -f ] skips it, and the loop below runs NO checks while the part still
+# reports every check it did run as passing. A clean sweep needs a coverage premise.
+_toc_n=0
+for _toc_f in "$_dcv_dir"/*.md; do
+	[ -f "$_toc_f" ] || continue
+	_toc_n=$((_toc_n + 1))
+	check "every in-document link in ${_toc_f##*/} reaches a heading" \
+		"$(_toc_unresolved "$_toc_f")" "[]"
+done
+check "premise: the link sweep saw the directory's documents" \
+	"$([ "$_toc_n" -ge 3 ] && echo enough || echo "$_toc_n")" "enough"
+unset _toc_f _toc_n
+
+# ---- and it must be able to FAIL, on a fixture rather than on the tree -------
+
+printf '## 14. test_harness_deps.py: the harness\n- [14. x](#14-test_harness_depspy-the-harness)\n' \
+	> "$_dcv_fix/ANCHOR_GOOD.md"
+check "control: an anchor that keeps the underscores resolves" \
+	"$(_toc_unresolved "$_dcv_fix/ANCHOR_GOOD.md")" "[]"
+
+# The exact shape that shipped: the underscores stripped out of the file name.
+printf '## 14. test_harness_deps.py: the harness\n- [14. x](#14-testharnessdepspy-the-harness)\n' \
+	> "$_dcv_fix/ANCHOR_BAD.md"
+check "an anchor that strips the underscores is named, not passed over" \
+	"$(_toc_unresolved "$_dcv_fix/ANCHOR_BAD.md")" \
+	"[1: 14-testharnessdepspy-the-harness]"
+
+# And the derivation itself, on the heading this defect was found in: the dot and
+# the colon go, the underscores stay.
+check "the anchor rule drops punctuation and keeps underscores" \
+	"$(_toc_anchor '14. test_harness_deps.py: the harness must self-test')" \
+	"14-test_harness_depspy-the-harness-must-self-test"
+
+unset -f _toc_anchor _toc_unresolved
+
+
+# ---- the harness must self-test without a database, and the gate must run it --
+#
+# THE MEMBERSHIP DECISION AND THE CONFTEST IMPORT ARE NOT CHECKED HERE, and that is
+# jd's rule rather than an omission: the shell harness and the pytest corpus are
+# PARALLEL IN FUNCTIONALITY and must not call, import or reference each other. An
+# earlier version of this part read test/pytest/conftest.py and INVOKED
+# test_harness_deps.py with `python3 ... --disagree`, which is the coupling, not a
+# second measurement: a shell arm driving the python decider agrees with it by
+# construction and can never report it wrong.
+#
+# Both properties are asserted in the corpus, where they are native:
+#   conftest imports no driver at module scope
+#       test_harness_deps.py::test_conftest_imports_no_database_driver_at_module_scope
+#   the declaration is exactly the database-free half, both directions
+#       test_harness_deps.py::test_the_declaration_is_exactly_the_database_free_half
+#   the partition accounts for every file, and the three report cases
+#       test_harness_deps.py and test_harness_deps_classifier.py
+#
+# What stays here is the CI WORKFLOW, which belongs to neither harness.
+
+_hd_ci="$PGC_SRCDIR/.github/workflows/ci.yml"
+
+
+check "premise: the CI workflow is where this part thinks it is" \
+	"$([ -f "$_hd_ci" ] && echo yes || echo no)" "yes"
+
+check "the gate runs the harness guards" \
+	"$([ "$(grep -c 'pytest-guards:' "$_hd_ci")" -ge 1 ] && echo yes || echo no)" "yes"
+
+# DERIVED, NOT REPEATED. A second copy of the file list is the defect this repo
+# spent a day removing from TESTS.md.
+check "and it derives the file list rather than repeating it" \
+	"$([ "$(grep -c 'from test_harness_deps import NO_CLUSTER' "$_hd_ci")" -ge 1 ] \
+		&& echo yes || echo no)" "yes"
+
+# Presence, not a count: the comment block above the job names this file too,
+# and an exact count would be an assertion about the prose as much as the code.
+check "and derives the pins from requirements-test.txt" \
+	"$([ "$(grep -c 'requirements-test.txt' "$_hd_ci")" -ge 1 ] && echo yes || echo no)" "yes"
+
+# ---- and the DECLARATION must be decided, not declaimed ----------------------
+#
+unset _hd_ci
 
 unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix _dcv_ht
 unset -f _dcv_missing _dcv_count
