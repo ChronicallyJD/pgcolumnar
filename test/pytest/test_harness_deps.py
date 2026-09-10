@@ -86,8 +86,6 @@ NO_CLUSTER = [
     # driver-dependent, 9 passed in a venv with no driver. Note for whoever pays
     # down the CONTEXT.md harness-independence debt -- this is one of the files on
     # that list, so the job now runs a file the rule says should not have this
-    # shape. Declaring it is still right; the fix belongs to the debt, not here.
-    "test_check_results_are_machine_readable.py",
 ]
 
 
