@@ -435,10 +435,25 @@ check "premise: the joiner joined continuations, so the sweep is not still line-
 # continues" could not be told from "no line opens a heredoc". That is the
 # inputs == sum(buckets) rule this directory applies everywhere else, missing from the
 # two arms I added.
-_epipe_hd_open="$(grep -chE "(^|[^<])<<-?['\"]?[A-Za-z_]" "${_epipe_globs[@]}" 2>/dev/null \
-	| awk '{ s += $1 } END { print s + 0 }')"
-_epipe_hd_cont="$(grep -nE "(^|[^<])<<-?['\"]?[A-Za-z_]" "${_epipe_globs[@]}" 2>/dev/null \
-	| grep -cE '([^|]\||\\)[[:space:]]*$' || true)"
+# ONE DEFINITION PER DETECTOR, because each one is about to be run twice: over the
+# corpus, where the answer is the premise, and over a fixture that DOES contain the
+# shape, where the answer proves the detector still detects.
+#
+# A DENOMINATOR IS NOT THAT PROOF. Measured by @linuxhikerpm: neutering the
+# CONTINUING pattern alone left this part at 44/44 green. The denominator arm below
+# it could not catch that, because the denominator counts OPENERS -- a different
+# detector, which was still working. `inputs == sum(buckets)` proves the input list
+# is non-empty; it says nothing about whether the classifier that splits it still
+# fires. Only a positive fixture does that, and my first version of these two arms
+# had the denominator and not the fixture.
+_epipe_hd_openers() {	# _epipe_hd_openers FILE... -> file:line: of heredoc openers
+	grep -nE "(^|[^<])<<-?['\"]?[A-Za-z_]" "$@" 2>/dev/null
+}
+_epipe_hd_continuing() {	# ...of those, the ones that ALSO continue
+	_epipe_hd_openers "$@" | grep -E '([^|]\||\\)[[:space:]]*$'
+}
+_epipe_hd_open="$(_epipe_hd_openers "${_epipe_globs[@]}" | grep -c . || true)"
+_epipe_hd_cont="$(_epipe_hd_continuing "${_epipe_globs[@]}" | grep -c . || true)"
 echo "  epipe sweep: heredoc openers=$_epipe_hd_open, of which continuing=$_epipe_hd_cont"
 check "premise: the opener detector found heredocs to classify" \
 	"$([ "${_epipe_hd_open:-0}" -ge 50 ] && echo yes || echo "no ($_epipe_hd_open)")" "yes"
@@ -454,19 +469,27 @@ check "premise: no line opens a heredoc AND continues, which is what lets the jo
 # and its argument swallowed that check's arguments in selftest 420, the part died
 # before pgc_summary, and `bash -n` was happy about all of it. The shape is a
 # defect on its own, so the arm earns its keep whichever way it goes red.
-_epipe_bs_gap="$(awk '
-	FNR == 1 { prev = 0 }
-	{
-		if (prev && ($0 ~ /^[ \t]*$/ || $0 ~ /^[ \t]*#/)) print FILENAME ":" FNR
-		t = $0; sub(/[ \t]+$/, "", t)
-		prev = (t ~ /\\$/ && t !~ /^[ \t]*#/)
-	}' "${_epipe_globs[@]}" 2>/dev/null | grep -c . || true)"
-_epipe_bs_n="$(awk '
-	{
-		t = $0; sub(/[ \t]+$/, "", t)
-		if (t ~ /\\$/ && t !~ /^[ \t]*#/) n++
-	}
-	END { print n + 0 }' "${_epipe_globs[@]}" 2>/dev/null)"
+# Same shape as the pair above, and same reason: the gap detector is armed by a
+# condition of its own (`prev`), and arming it wrongly reports zero gaps from a
+# corpus full of continuations. A fixture that HAS a gap is what tells those apart.
+_epipe_bs_conts() {	# _epipe_bs_conts FILE... -> file:line: of backslash continuations
+	awk '
+		{
+			t = $0; sub(/[ \t]+$/, "", t)
+			if (t ~ /\\$/ && t !~ /^[ \t]*#/) print FILENAME ":" FNR
+		}' "$@" 2>/dev/null
+}
+_epipe_bs_gaps() {	# ...of those, the ones a blank or a comment follows
+	awk '
+		FNR == 1 { prev = 0 }
+		{
+			if (prev && ($0 ~ /^[ \t]*$/ || $0 ~ /^[ \t]*#/)) print FILENAME ":" FNR
+			t = $0; sub(/[ \t]+$/, "", t)
+			prev = (t ~ /\\$/ && t !~ /^[ \t]*#/)
+		}' "$@" 2>/dev/null
+}
+_epipe_bs_gap="$(_epipe_bs_gaps "${_epipe_globs[@]}" | grep -c . || true)"
+_epipe_bs_n="$(_epipe_bs_conts "${_epipe_globs[@]}" | grep -c . || true)"
 echo "  epipe sweep: backslash continuations=$_epipe_bs_n, of which followed by a gap=$_epipe_bs_gap"
 check "premise: the continuation detector found continuations to classify" \
 	"$([ "${_epipe_bs_n:-0}" -ge 500 ] && echo yes || echo "no ($_epipe_bs_n)")" "yes"
@@ -512,6 +535,91 @@ _epipe_unterm="$PGC_WORKDIR/epipe_unterminated.sh"
 } > "$_epipe_unterm"
 check "an opener with no terminator exempts nothing" \
 	"$(_epipe_heredoc_lines "$_epipe_unterm" | grep -c . || true)" "0"
+
+# ---- the detectors, driven by files that DO contain what they look for -------
+#
+# Every arm above this point asks a detector whether the corpus contains a shape,
+# and the corpus does not. A detector that has stopped detecting answers exactly
+# the same way. @linuxhikerpm neutered the continuing-opener pattern and the gap
+# detector's arming one at a time and this part stayed at 44/44 both times, so the
+# premises were reading "the corpus is clean" off a dead instrument.
+#
+# EVERY FIXTURE BELOW IS ASSEMBLED, never written out, for the reason the probe is:
+# these globs include this file, so a literal opener here would be a site the
+# sweep then has to exempt -- and exempting the part that tests the exemption is
+# how the hole @jdatcmd found got in.
+
+# A line that opens a heredoc AND continues. Both forms, because the joiner treats
+# `|` and `\` through the same code path and only `|` is bash's own continuation.
+_epipe_hdcont="$PGC_WORKDIR/epipe_hd_continuing.sh"
+{
+	printf 'cat <<%sAAA%s %s\n' "'" "'" '|'
+	printf '\tbody of the first heredoc\n'
+	printf 'AAA\n'
+	printf 'cat <<%sBBB%s \\\n' "'" "'"
+	printf '\tbody of the second heredoc\n'
+	printf 'BBB\n'
+} > "$_epipe_hdcont"
+check "premise: the fixture really has two heredoc openers for the detector to see" \
+	"$(_epipe_hd_openers "$_epipe_hdcont" | grep -c . || true)" "2"
+check "the continuing-opener detector finds an opener that ends in a pipe, and one that ends in a backslash" \
+	"$(_epipe_hd_continuing "$_epipe_hdcont" | grep -c . || true)" "2"
+
+# A backslash continuation followed by a comment, and one followed by a blank.
+# Both are the shape that makes the joiner's blank-and-comment skipping wrong for
+# `\`, which is the only reason the corpus premise is asserted at all.
+_epipe_bsgap="$PGC_WORKDIR/epipe_bs_gap.sh"
+{
+	printf '%s\n' 'echo first \'
+	printf '%s\n' '# a comment directly after a continuation, which bash folds in'
+	printf '%s\n' 'echo second \'
+	printf '\n'
+	printf '%s\n' 'echo third'
+} > "$_epipe_bsgap"
+check "premise: the fixture really has two backslash continuations to classify" \
+	"$(_epipe_bs_conts "$_epipe_bsgap" | grep -c . || true)" "2"
+check "the gap detector finds a continuation followed by a comment, and one followed by a blank" \
+	"$(_epipe_bs_gaps "$_epipe_bsgap" | grep -c . || true)" "2"
+
+# ---- each condition of the heredoc rule, made load-bearing on its own ---------
+#
+# THE COMMENT CONDITION NEEDS A TERMINATED TAG. `$_epipe_cmthd` above names a tag
+# that no later line closes, so the TERMINATOR condition refuses it first and
+# dropping the comment condition alone changes nothing -- which @linuxhikerpm
+# measured as 44/44. Here the comment names a tag that IS closed below, so the
+# comment condition is the only thing standing between the planted violation and
+# an exemption.
+_epipe_cmthd_term="$PGC_WORKDIR/epipe_comment_terminated.sh"
+{
+	printf '# the idiom is cat <<%sEOF%s, closed by the tag on its own line below\n' "'" "'"
+	printf 'x="value"\n'
+	printf 'echo "$x" %s grep -%s PLANTED && echo yes || echo no\n' '|' q
+	printf 'EOF\n'
+} > "$_epipe_cmthd_term"
+check "a comment naming a TERMINATED tag still opens no heredoc, so the lines below it are seen" \
+	"$(_epipe_heredoc_lines "$_epipe_cmthd_term" | grep -c . || true)" "0"
+check "premise: and the violation between that comment and its tag is what the pattern would flag" \
+	"$(grep -cE "$_epipe_pat" "$_epipe_cmthd_term")" "1"
+
+# THE TERMINATOR CONDITION IS ALREADY LOAD-BEARING, and this arm is a second shape
+# of the same property rather than a repair. I expected the opposite and measured
+# it: `if (j <= n)` -> `if (1)` reds `$_epipe_unterm` as well as this fixture. That
+# is because `$_epipe_unterm`'s candidate sits after a MID-LINE `#`, so the line
+# does not start with one and the comment condition never refuses it -- the missing
+# terminator is the only thing that does. The two fixtures differ in where the
+# candidate lives: a trailing comment there, a string assignment here, which is the
+# shape a sweep over real code actually meets.
+_epipe_unterm_code="$PGC_WORKDIR/epipe_unterminated_code.sh"
+{
+	printf 'x="<<%sNOPE%s is named here and nothing closes it"\n' "'" "'"
+	printf 'echo "$x" %s grep -%s PLANTED && echo yes || echo no\n' '|' q
+} > "$_epipe_unterm_code"
+check "premise: the candidate is on a line of code, not a comment" \
+	"$(_epipe_hd_openers "$_epipe_unterm_code" | grep -c . || true)" "1"
+check "an opener on a line of CODE with no terminator exempts nothing either" \
+	"$(_epipe_heredoc_lines "$_epipe_unterm_code" | grep -c . || true)" "0"
+check "premise: and the line below it is what the pattern would flag" \
+	"$(grep -cE "$_epipe_pat" "$_epipe_unterm_code")" "1"
 
 # ---- the two split shapes, as fixtures --------------------------------------
 #
