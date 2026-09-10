@@ -781,6 +781,7 @@ written.
 | `test_the_worker_owns_its_own_cluster` | the port is the one derived from THIS worker's id |
 | `test_the_cluster_refuses_a_foreign_server` | the identity check can return False |
 | `test_the_connection_the_tests_use_is_watched` | writes through `pgc_conn` reach the zero-row guard, on both the connection and a handed-out cursor |
+| `test_the_acknowledgement_is_by_cursor_against_the_real_driver` | the write is stamped on the object the caller holds, which a stub cannot prove |
 
 Two of these deserve their reasoning stated.
 
@@ -1685,6 +1686,42 @@ Splitting them is not tidiness. #917's pytest twin tested the reconciler's body 
 left the runner's CALL to it uncovered: removing the call kept the pytest half at
 9 passed while the shell half went red by one. Proving a function and proving its
 call site are two proofs, and the second is the one that goes missing.
+
+### What the command tag cannot see
+
+Measured by @jdatcmd on PG 15.18 and PG 17.10, twelve statement shapes each through
+psycopg 3.3.5: `statusmessage` is never absent and its wording is byte-identical
+across both majors, which is the premise this guard rests on.
+
+Four shapes **write rows and report a tag that is not a write**, so this guard does
+not see them: a data-modifying CTE and a `SELECT` of an inserting function both report
+`SELECT`, a `DO` block reports `DO`, and a `CALL` reports `CALL`. **Zero occur in the
+corpus** — the writes today are 15 `INSERT`, 14 `COPY`, 2 `DELETE` and 1 `UPDATE` — so
+this is a residual to state rather than a gap to close. Writing an arm for a shape
+nothing uses would be an instrument with nothing exercising it.
+
+### The stamp is a call site too
+
+The acknowledgement is carried on the cursor the caller holds. The first version
+stamped the **raw** psycopg cursor, which cannot take a new attribute at all, so the
+stamp was swallowed by its own `except` on every real write and `wrote()` fell back to
+matching by `(tag, count)` — which made the absolute ordinal name the wrong statement
+in exactly the case the ordinal was added for. The two fixes rest on each other.
+
+Measured, against PostgreSQL through the real driver:
+
+```
+connection.cursor()        stampable=False   (Cursor: AttributeError)
+conn.execute() return      stampable=False   (Cursor: AttributeError)
+ServerCursor               stampable=False   (ServerCursor: AttributeError)
+the arms' _Cur stub        stampable=True
+```
+
+**The driver-free arms could not see it**, and that is the lesson rather than the bug:
+they proved the identity mechanism on an object that differs from the real one in
+exactly the respect under test. The arm that catches it is cluster-bound, because a
+real cursor is the only thing that can show it — which is the same sentence as the
+wiring arm's, one level down. Found by @jdatcmd.
 
 ### Two holes found by attacking this guard, after it was green
 

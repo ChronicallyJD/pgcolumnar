@@ -164,12 +164,21 @@ def note_write(nodeid, cur):
     seen = _WRITES.setdefault(nodeid, [])
     w = _Write(tag, count, len(seen) + 1)
     seen.append(w)
-    # STAMPED ON THE CURSOR THAT RAN IT, so an acknowledgement is about a statement
+    # STAMPED ON THE OBJECT THAT RAN IT, so an acknowledgement is about a statement
     # rather than about a pair of numbers. Two writes can carry the same tag and the
     # same count -- one accidental, one deliberate -- and matching on those
-    # acknowledged whichever came first, which marked the accidental one as named and
-    # reported the deliberate one instead. A psycopg cursor may refuse a new
-    # attribute, so this is defensive and `wrote` still falls back to matching.
+    # acknowledged whichever came first, marking the accidental one as named and
+    # reporting the deliberate one instead.
+    #
+    # THIS STAMP REACHES A STUB AND NOT A REAL CURSOR, measured rather than assumed: a
+    # `psycopg.Cursor`, a `ServerCursor` and the cursor `conn.execute` returns all
+    # raise AttributeError here, so on every real write this `except` swallowed it and
+    # `wrote` fell back to matching by value -- which made the absolute ordinal name
+    # the wrong statement in exactly the case it was added for. The caller-facing
+    # object is stamped by `_WatchedCursor` instead, and that is the stamp `wrote`
+    # finds. This one serves the layer's own arms, which pass a stub.
+    # Found by @jdatcmd, whose point was that the stub is stampable and the real
+    # cursor is not, so the arms could not see it.
     try:
         cur._pgc_write = w
     except (AttributeError, TypeError):
@@ -775,17 +784,25 @@ class _WatchedCursor:
     def __init__(self, cur, nodeid):
         self._cur = cur
         self._nodeid = nodeid
+        # SET IN __init__ so it is always an INSTANCE attribute. Without it the first
+        # lookup falls through to `__getattr__`, which forwards to the raw cursor and
+        # raises -- readable through `getattr(..., None)`, but it would make the
+        # absence of a stamp indistinguishable from a cursor that has not run yet.
+        self._pgc_write = None
 
     def execute(self, *args, **kwargs):
         result = self._cur.execute(*args, **kwargs)
-        note_write(self._nodeid, self._cur)
+        # THE PROXY IS WHAT GETS STAMPED, because the proxy is what the caller holds
+        # and a real psycopg cursor cannot take the attribute at all. `__getattr__`
+        # never intercepts this, because the instance really has it.
+        self._pgc_write = note_write(self._nodeid, self._cur)
         # psycopg returns the cursor itself, so hand back the WATCHED one: a caller
         # writing `for row in cur.execute(...)` must not escape the proxy.
         return self if result is self._cur else result
 
     def executemany(self, *args, **kwargs):
         result = self._cur.executemany(*args, **kwargs)
-        note_write(self._nodeid, self._cur)
+        self._pgc_write = note_write(self._nodeid, self._cur)
         return result
 
     def __getattr__(self, attr):
@@ -811,8 +828,11 @@ class _WatchedConnection:
 
     def execute(self, *args, **kwargs):
         cur = self._conn.execute(*args, **kwargs)
-        note_write(self._nodeid, cur)
-        return _WatchedCursor(cur, self._nodeid)
+        watched = _WatchedCursor(cur, self._nodeid)
+        # Stamped on the proxy handed back, for the reason _WatchedCursor.execute
+        # gives: this is the object the test holds and passes to `wrote`.
+        watched._pgc_write = note_write(self._nodeid, cur)
+        return watched
 
     def cursor(self, *args, **kwargs):
         return _WatchedCursor(self._conn.cursor(*args, **kwargs), self._nodeid)
