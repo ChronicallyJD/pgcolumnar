@@ -352,8 +352,12 @@ check "premise: the budget was restored byte-exact" \
 
 # ---- and the RUNNER must pass --against, or none of the above is wired -------
 
+# The ref is a variable, chosen above the call and pinned by the three arms at
+# the end of this part. What matters here is that the call site passes one at all:
+# without --against the monotone block never runs, which is how the tool was right
+# and the wiring was not.
 check "the runner passes --against to the gate" \
-	"$(grep -A5 'pgc_ledger.py" gate' "$_rv" | grep -c -- '--against HEAD')" "1"
+	"$(grep -A5 'pgc_ledger.py" gate' "$_rv" | grep -c -- '--against')" "1"
 
 # ---- and WHICH ref the runner compares against is a decision, not a default --
 #
