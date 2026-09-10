@@ -18,6 +18,55 @@ true until the next version shipped.
 
 ### Added
 
+- A write that wrote no rows no longer passes as a fixture that built something
+  (#432).
+
+  `INSERT ... SELECT ... WHERE false` writes nothing and raises nothing. psycopg
+  reports `INSERT 0 0` with a `rowcount` of 0, and nobody in the pytest corpus read
+  either field -- so the fixture a test meant to build did not exist, and every
+  assertion below it compared two empty things. That is `insert-wrote-no-rows` in
+  `test/pytest/VACUITY_MODES.md`, which now lists it as refused rather than as a gap.
+
+  THE COMMAND TAG DECIDES, NOT THE ROW COUNT. `SELECT 0` and `INSERT 0 0` both carry
+  `rowcount == 0`, so a guard keyed on the count alone would refuse every test whose
+  last statement was a SELECT over an empty result. `statusmessage` is the server's
+  own tag, so this guard never parses SQL. Measured on PG 18 against a pgcolumnar
+  table: DDL reports `CREATE TABLE`, `SET` or `TRUNCATE TABLE` with `rowcount` -1, an
+  `INSERT ... WHERE false` reports `INSERT 0 0` with 0, and `UPDATE 0` and `DELETE 0`
+  likewise.
+
+  A deliberate zero stays writable. A DELETE that must match nothing is a real
+  negative control, and `expect.wrote(cur, 0, name)` says so: it compares the count
+  and marks the write as named. An unnamed zero fails the test, and naming a count
+  does not excuse a wrong one. The refusal runs in the CALL phase rather than a
+  teardown fixture, because #931 measured that a teardown guard reports the test it
+  guards as PASSED and fails separately.
+
+  TWO PROPERTIES, TWO FILES, PROVEN SEPARATELY. The classifier and the refusal live
+  in `test/pytest/test_writes_wrote_rows.py`, which needs no database: a stub cursor
+  carrying the two measured fields exercises them exactly. Whether the connection the
+  tests actually use is watched is a different claim that no driver-free arm can make,
+  and `test_the_connection_the_tests_use_is_watched` makes it through a real
+  `INSERT ... WHERE false`, on both `conn.execute` and a cursor the connection handed
+  out -- 24 sites and 42 sites in the corpus respectively, so a proxy watching only
+  the connection would leave most of it unwatched.
+
+  The split is load-bearing, measured rather than asserted. Unwiring the connection
+  proxy in `conftest.py` and changing nothing else leaves the driver-free file at 10
+  passed and reds the wiring arm alone. That is #917's defect in miniature -- its
+  pytest twin tested a function's body and left the runner's CALL to it uncovered, so
+  removing the call kept that half green -- and it is why these arms are in two files.
+
+  Prove-by-removal, five mutations, each applied by exact string match and the file
+  asserted to still parse: no refusal -> 2 arms red; the command tag ignored -> 2 red
+  and the wiring arm red; every statement treated as a write -> 4 red; the connection
+  not wrapped -> 0 driver-free red and the wiring arm red; the acknowledgement not
+  recorded -> 1 red. Control: 10 passed driver-free, 9 passed with a cluster.
+
+  Full corpus with a cluster: 246 passed, and none of the 12 write sites already in
+  the corpus reddened -- the false-positive budget this guard needed before it could
+  ship.
+
 - A broad `pytest.raises` must name a SQLSTATE, and the block must hold one
   statement (#432).
 

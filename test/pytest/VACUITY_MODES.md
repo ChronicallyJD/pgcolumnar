@@ -47,8 +47,8 @@ recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 27 |
-| named in section 3, not refused | 45 |
+| named in section 2, refused today | 28 |
+| named in section 3, not refused | 44 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -65,7 +65,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-27 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+28 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -88,6 +88,7 @@ test in `test_layer.py` that fails without it.
 | a skip during fixture setup fails the run | `session-fixture-skip-greens-the-whole-suite` |
 | a broad `pytest.raises` must pin a SQLSTATE, found by AST | `raises-too-broad` |
 | every comparison refuses a value carrying the `QUERY_ERROR` prefix, on either side | `error-swallowed-to-empty` |
+| a write whose command tag reports 0 rows fails the test unless the zero is named | `insert-wrote-no-rows` |
 
 Three of those were added after checking this layer against the inventory rather
 than reasoning about it, and all three had passed silently before:
@@ -120,7 +121,7 @@ guard whose subject is false greens has no business emitting a false red.
 
 ## 3. What it does not refuse
 
-55 modes by the run's count, **45 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
+55 modes by the run's count, **44 of them named below**, **48 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -219,8 +220,19 @@ binds the exception and the body pins its SQLSTATE. See section 2.
 
 ### 3.5 The fixture built the wrong situation
 
-- `insert-wrote-no-rows` — `INSERT ... SELECT ... WHERE false` writes nothing and
-  raises nothing; `rowcount` is 0 and nobody reads it.
+**`insert-wrote-no-rows` is now closed.** `INSERT ... SELECT ... WHERE false` writes
+  nothing and raises nothing, and before this nobody read either field. Every write the
+  test connection runs is now recorded from the server's own command tag, and a test
+  that ran one reporting 0 rows fails unless it named the zero with
+  `expect.wrote(cur, 0, ...)` — which is how a DELETE that must match nothing stays
+  writable. See section 2 and TESTS.md section 22.
+
+  THE TAG DECIDES, NOT THE COUNT, and that is the whole design. `SELECT 0` and
+  `INSERT 0 0` both carry `rowcount == 0`, so a guard keyed on the count would refuse
+  every test whose last statement was a SELECT over an empty result. Measured on PG 18
+  against a pgcolumnar table: DDL reports `CREATE TABLE`/`SET`/`TRUNCATE TABLE` with
+  `rowcount` `-1`, an `INSERT ... WHERE false` reports `INSERT 0 0` with 0, and
+  `UPDATE 0` and `DELETE 0` likewise. This guard therefore never parses SQL.
 - `mutation-arm-unobservable` — **narrowed, not closed.** The assertion now exists and
   the old spelling of it is unavailable. `expect.differ(a, b, name)` refuses two arms
   that agree and names the value they shared; `expect.num(int(after != before), 1, ...)`
@@ -329,7 +341,16 @@ Each entry names the red test to write first.
 
 1. `test_expect_query_error_sentinel_is_unique_per_failure` — make something produce
    `QUERY_ERROR.<seq>`; the constant exists and nothing writes it.
-2. `test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.
+2. ~~`test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.~~
+   **Done**, and in two files rather than one, because it is two properties. The
+   refusal and the tag-versus-count classification live in
+   `test_writes_wrote_rows.py`, which needs no database: a stub cursor carrying the
+   two measured fields exercises them exactly. Whether the connection the tests
+   actually use is watched at all is a different claim, and no driver-free arm can
+   make it — `test_the_connection_the_tests_use_is_watched` in `test_connection.py`
+   does, through a real `INSERT ... WHERE false`. Splitting them was not tidiness:
+   #917's pytest twin tested a function's body and left its CALL SITE uncovered, so
+   deleting the call kept that half green while the shell half went red.
 3. ~~`test_layer_requires_ab_arms_to_differ` — closes `mutation-arm-unobservable`.~~
    **Done, and it NARROWS rather than closes** — 3.5 says what remains. The assertion
    exists, refuses a failed arm on either side, and the hand-rolled spelling is refused
@@ -355,6 +376,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 27 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 28 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.
