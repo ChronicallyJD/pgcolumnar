@@ -191,8 +191,20 @@ def _fixture_name(fn):
     return fn.name
 
 
+def _usefixtures_in(node):
+    """Fixture names a single `usefixtures(...)` call names, or [] if it is not one."""
+    if not isinstance(node, ast.Call):
+        return []
+    f = node.func
+    if (isinstance(f, ast.Attribute) and f.attr == "usefixtures") or \
+       (isinstance(f, ast.Name) and f.id == "usefixtures"):
+        return [a.value for a in node.args
+                if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+    return []
+
+
 def _usefixtures(fn):
-    """Fixture names pulled in by `@pytest.mark.usefixtures(...)`.
+    """Fixture names pulled in by `@pytest.mark.usefixtures(...)` on this def.
 
     A dependency with NO PARAMETER, so a walk over the signature cannot see it.
     This is the form a test uses precisely when it wants the fixture's effect and
@@ -200,13 +212,27 @@ def _usefixtures(fn):
     """
     out = []
     for dec in fn.decorator_list:
-        if not isinstance(dec, ast.Call):
+        out += _usefixtures_in(dec)
+    return out
+
+
+def _module_usefixtures(tree):
+    """Fixture names a module-level `pytestmark` pulls in for EVERY test in the file.
+
+    `pytestmark = pytest.mark.usefixtures("pgc_conn")`, and the list form. pytest
+    applies it to every test in the module, so it is a dependency of all of them and
+    of none of their signatures. Reported by @jdatcmd, who built it alongside the
+    class form and measured both classified database-free.
+    """
+    out = []
+    for n in tree.body:
+        if not isinstance(n, ast.Assign):
             continue
-        f = dec.func
-        if (isinstance(f, ast.Attribute) and f.attr == "usefixtures") or \
-           (isinstance(f, ast.Name) and f.id == "usefixtures"):
-            out += [a.value for a in dec.args
-                    if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+        if not any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in n.targets):
+            continue
+        vals = n.value.elts if isinstance(n.value, (ast.List, ast.Tuple)) else [n.value]
+        for v in vals:
+            out += _usefixtures_in(v)
     return out
 
 
@@ -228,7 +254,14 @@ def _params(fn):
 
 
 def _collectable(tree):
-    """(qualifier, def) for every def pytest can collect or resolve.
+    """(qualifier, def, inherited) for every def pytest can collect or resolve.
+
+    `inherited` is the fixture names an enclosing CLASS or the MODULE pulls in with
+    `usefixtures`. pytest applies a class decorator to every method and a module-level
+    `pytestmark` to every test, so those are dependencies of defs whose own decorator
+    list and signature say nothing. Without them the class form was classified
+    database-free -- which is the form the class-method descent below exists to serve,
+    so the two belonged in one change and only one of them was there.
 
     MODULE LEVEL AND CLASS BODIES. pytest collects `test_*` methods of a class and
     resolves their fixtures identically, so a walk over `tree.body` alone
@@ -237,13 +270,16 @@ def _collectable(tree):
     guesses the collection convention is one convention change from being wrong,
     and counting a non-collected method is conservative in the safe direction.
     """
-    def walk(node, prefix):
+    def walk(node, prefix, inherited):
         for n in node.body:
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                yield prefix, n
+                yield prefix, n, list(inherited)
             elif isinstance(n, ast.ClassDef):
-                yield from walk(n, prefix + n.name + ".")
-    return list(walk(tree, ""))
+                cls_marks = []
+                for dec in n.decorator_list:
+                    cls_marks += _usefixtures_in(dec)
+                yield from walk(n, prefix + n.name + ".", list(inherited) + cls_marks)
+    return list(walk(tree, "", _module_usefixtures(tree)))
 
 
 def _defs(tree):
@@ -261,14 +297,14 @@ def _defs(tree):
     bare-name key would collapse into one -- silently dropping a def from the walk.
     """
     out = {}
-    for prefix, n in _collectable(tree):
+    for prefix, n, inherited in _collectable(tree):
         if _is_fixture(n):
             kind, key = "fixture", _fixture_name(n)
         elif n.name.startswith("test_"):
             kind, key = "test", prefix + n.name
         else:
             kind, key = "helper", prefix + n.name
-        out[key] = (kind, _params(n) + _usefixtures(n), _own_body(n))
+        out[key] = (kind, _params(n) + _usefixtures(n) + inherited, _own_body(n))
     return out
 
 
@@ -719,11 +755,30 @@ def test_the_job_installs_no_database_driver(expect):
     job = ci.read_text()
     job = job[job.index("pytest-guards:"):]
     job = job[:job.index("\n  build:")] if "\n  build:" in job else job
-    installs_driver = "psycopg" in job and "pip install" in job and "pip show psycopg" not in job
-    expect.text(repr(installs_driver), "False",
-                "the job installs no database driver")
-    expect.at_least(job.count("pip show psycopg"), 1,
-                    "and it asserts the driver is absent rather than assuming it")
+    # WHAT THIS USED TO ASK, AND WHY IT COULD NOT FAIL. The first assertion was
+    #
+    #     installs_driver = "psycopg" in job and "pip install" in job \
+    #                       and "pip show psycopg" not in job
+    #
+    # and the second required `pip show psycopg` to be present. So whenever the second
+    # passed, the third conjunct of the first was False and `installs_driver` was pinned
+    # to False whatever the install line installed. @jdatcmd changed the job to
+    # `pip install --quiet $PINS psycopg[binary]==3.3.5` and BOTH assertions still
+    # passed. Two assertions guaranteeing each other's vacuity.
+    #
+    # The form below can fail: it looks at the install LINES and asks whether any of
+    # them names the driver, and the premise after it is the control -- it appends such
+    # a line to a copy and requires the same expression to see it.
+    driver_installs = [l for l in job.splitlines()
+                       if "pip install" in l and DRIVER in l]
+    expect.num(len(driver_installs), 0,
+               "no pip install line in the job names the database driver")
+    planted = job + "\n          pip install --quiet $PINS " + DRIVER + "[binary]==3.3.5\n"
+    expect.at_least(len([l for l in planted.splitlines()
+                         if "pip install" in l and DRIVER in l]), 1,
+                    "premise: and that test sees such a line when one is there")
+    expect.at_least(job.count("pip show " + DRIVER), 1,
+                    "and the job asserts the driver is absent rather than assuming it")
 
 
 if __name__ == "__main__":

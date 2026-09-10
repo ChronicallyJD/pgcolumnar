@@ -1304,6 +1304,10 @@ over tests nothing ran.
 | `test_a_dynamic_request_is_treated_as_cluster_bound` | unresolvable means conservative, not free |
 | `test_an_aliased_cluster_root_is_found_under_the_name_tests_request` | the root is read under its requestable name |
 | `test_a_plain_test_and_a_helpers_parameter_stay_database_free` | the cost side: a rule that calls everything bound would empty the gate |
+| `test_usefixtures_on_a_class_reaches_its_methods` | pytest applies a class decorator to every method, which is the form class-method descent exists to serve |
+| `test_a_module_level_pytestmark_reaches_every_test` | `pytestmark = pytest.mark.usefixtures(...)` is a dependency of every test in the file and of no signature |
+| `test_a_pytestmark_written_as_a_list_reaches_every_test_too` | the list form is what a file uses once it has two marks |
+| `test_an_unrelated_class_decorator_does_not_bind_anything` | the cost side: only `usefixtures` is a dependency, or every parametrised class would be cluster-bound |
 
 ## 17. Adding a test
 

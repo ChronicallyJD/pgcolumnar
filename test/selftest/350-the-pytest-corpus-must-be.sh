@@ -372,39 +372,26 @@ unset -f _toc_anchor _toc_unresolved
 
 # ---- the harness must self-test without a database, and the gate must run it --
 #
-# conftest.py imported psycopg AT MODULE SCOPE, and conftest is imported before
-# every run, so a DATABASE DRIVER was a hard requirement of the whole corpus --
-# including every test that never opens a connection. With psycopg absent the run
-# did not fail a test, it failed to COLLECT.
+# THE MEMBERSHIP DECISION AND THE CONFTEST IMPORT ARE NOT CHECKED HERE, and that is
+# jd's rule rather than an omission: the shell harness and the pytest corpus are
+# PARALLEL IN FUNCTIONALITY and must not call, import or reference each other. An
+# earlier version of this part read test/pytest/conftest.py and INVOKED
+# test_harness_deps.py with `python3 ... --disagree`, which is the coupling, not a
+# second measurement: a shell arm driving the python decider agrees with it by
+# construction and can never report it wrong.
 #
-# That coupling was half of why README.md says the corpus is "not in the gate
-# yet": pgc_skip treats a missing dependency as a failure rather than a skip, so
-# registering the corpus in SUITES would redden every job. That argument is about
-# the CLUSTER tests, and until the import moved there was no way to separate them.
+# Both properties are asserted in the corpus, where they are native:
+#   conftest imports no driver at module scope
+#       test_harness_deps.py::test_conftest_imports_no_database_driver_at_module_scope
+#   the declaration is exactly the database-free half, both directions
+#       test_harness_deps.py::test_the_declaration_is_exactly_the_database_free_half
+#   the partition accounts for every file, and the three report cases
+#       test_harness_deps.py and test_harness_deps_classifier.py
 #
-# The behavioural proof lives in test/pytest/test_harness_deps.py, which shims
-# `import psycopg` to raise and requires the no-cluster files to pass anyway.
-# THIS half is static and it is the half that runs in the matrix.
+# What stays here is the CI WORKFLOW, which belongs to neither harness.
 
-_hd_conf="$PGC_TESTDIR/pytest/conftest.py"
 _hd_ci="$PGC_SRCDIR/.github/workflows/ci.yml"
 
-check "premise: the pytest conftest is where this part thinks it is" \
-	"$([ -f "$_hd_conf" ] && echo yes || echo no)" "yes"
-
-check "conftest imports no database driver at module scope" \
-	"$(grep -cE '^(import psycopg|from psycopg)' "$_hd_conf")" "0"
-
-# PREMISE: the pattern can see such an import at all, or "0" is what a broken
-# grep says too.
-printf 'import os\nimport psycopg\n' > "$PGC_WORKDIR/hd-fixture.py"
-check "premise: the pattern recognises a module-scope driver import" \
-	"$(grep -cE '^(import psycopg|from psycopg)' "$PGC_WORKDIR/hd-fixture.py")" "1"
-
-# And it must still be imported SOMEWHERE, or the fixtures cannot connect and the
-# arm above is satisfied by a harness that talks to no database at all.
-check "and the driver is still imported inside the fixtures that connect" \
-	"$([ "$(grep -cE '^\s+import psycopg' "$_hd_conf")" -ge 1 ] && echo yes || echo no)" "yes"
 
 check "premise: the CI workflow is where this part thinks it is" \
 	"$([ -f "$_hd_ci" ] && echo yes || echo no)" "yes"
@@ -425,68 +412,7 @@ check "and derives the pins from requirements-test.txt" \
 
 # ---- and the DECLARATION must be decided, not declaimed ----------------------
 #
-# WHAT WAS WRONG. `NO_CLUSTER` in test_harness_deps.py says which files need no
-# database, and the job runs exactly those. The only arm over it asked whether the
-# files it names EXIST. That is one direction, and the missing direction is the one
-# that loses coverage: a database-free file nobody adds to the list is absent from
-# the job, every arm stays green, and NOTHING says so. It had already happened
-# twice -- test_build_refusal.py and test_layer.py both need no database and
-# neither was listed.
-#
-# The module decides the property from the corpus with an ast walk and requires set
-# equality with the list. WHY HERE: nothing in the gate runs pytest over that file.
-# The corpus is not in SUITES, and the pytest-guards job runs the database-free
-# files, which test_harness_deps.py is not -- its control arm needs a real cluster.
-# So the module exposes the decision on its command line and this part runs it.
-# Same move as the documentation sweep above: the corpus carries a twin, this copy
-# has the teeth.
-_hd_decide="$PGC_TESTDIR/pytest/test_harness_deps.py"
-
-check "premise: the membership decider is where this part thinks it is" \
-	"$([ -f "$_hd_decide" ] && echo yes || echo no)" "yes"
-
-check "every database-free file in the corpus is declared in NO_CLUSTER" \
-	"$(python3 "$_hd_decide" --disagree "$PGC_TESTDIR/pytest" 2>&1)" "[]"
-
-# PREMISE: the decider SPLIT the corpus. One that parsed nothing reports an empty
-# database-free set, which agrees with an empty list and looks like success; one
-# that called everything database-free would pass a one-directional check.
-_hd_part="$(python3 "$_hd_decide" --partition "$PGC_TESTDIR/pytest" 2>&1)"
-check "premise: the decider partitions the corpus into two non-empty halves" \
-	"$(printf '%s' "$_hd_part" | grep -cE 'free: test_[^|]+ \| bound: test_')" "1"
-
-echo "      CORPUS: $_hd_part"
-
-# ---- and that arm must be able to FAIL, on a fixture rather than on the tree --
-#
-# Everything above passes on a healthy tree, which is what a decider returning a
-# constant also does. The fixture is a two-file corpus with a conftest shaped like
-# the real one: one fixture imports the driver, one depends on it.
-_hd_fix="$PGC_WORKDIR/nocluster"; rm -rf "$_hd_fix"; mkdir -p "$_hd_fix"
-{
-	printf 'import pytest\n'
-	printf 'from pgc_cluster import make_cluster\n\n'
-	printf '@pytest.fixture\ndef pgc_conn():\n    import psycopg\n    yield make_cluster()\n'
-} > "$_hd_fix/conftest.py"
-printf 'def test_it(expect):\n    pass\n' > "$_hd_fix/test_free.py"
-printf 'def test_it(pgc_conn, expect):\n    pass\n' > "$_hd_fix/test_bound.py"
-
-check "the fixture corpus splits the way the property says" \
-	"$(python3 "$_hd_decide" --partition "$_hd_fix")" \
-	"free: test_free.py | bound: test_bound.py"
-
-check "a database-free file declared nowhere is named, not passed over" \
-	"$(python3 "$_hd_decide" --disagree "$_hd_fix" test_bound.py)" \
-	"[2: needs-a-cluster:test_bound.py undeclared:test_free.py]"
-
-check "control: the same corpus with the right declaration is clean" \
-	"$(python3 "$_hd_decide" --disagree "$_hd_fix" test_free.py)" "[]"
-
-check "a declared file that no longer exists is named" \
-	"$(python3 "$_hd_decide" --disagree "$_hd_fix" test_free.py test_renamed.py)" \
-	"[1: absent:test_renamed.py]"
-
-unset _hd_conf _hd_ci _hd_decide _hd_part _hd_fix
+unset _hd_ci
 
 unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix _dcv_ht
 unset -f _dcv_missing _dcv_count

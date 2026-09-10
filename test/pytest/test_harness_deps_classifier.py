@@ -273,3 +273,66 @@ def test_a_plain_test_and_a_helpers_parameter_stay_database_free(tmp_path, expec
                                    "    def test_a(self):\n"
                                    "        assert True\n"),
                 "free", "and `self` is not a fixture request")
+
+# ---------------------------------------------------------------------------
+# `usefixtures` ON A CLASS AND AT MODULE LEVEL
+#
+# The first version read `usefixtures` on a FUNCTION only. @jdatcmd found the other two
+# places pytest reads it, and the class one is pointed: class-method descent exists to
+# serve exactly that shape, so the two belonged in one change and only one was there.
+# Measured against that version, four files through `partition()`:
+#
+#     @pytest.mark.usefixtures on a def      bound   (the only form it saw)
+#     @pytest.mark.usefixtures on a class    free    <- wrong
+#     pytestmark = pytest.mark.usefixtures   free    <- wrong
+#     pytestmark = [ ... ]                   free    <- wrong
+#
+# pytest applies a class decorator to every method and a module-level `pytestmark` to
+# every test, so each is a dependency of defs whose own decorator list and signature say
+# nothing about it.
+
+
+def test_usefixtures_on_a_class_reaches_its_methods(tmp_path, expect):
+    """The form class-method descent exists to serve."""
+    expect.text(_verdict(tmp_path, "import pytest\n"
+                                   "@pytest.mark.usefixtures('pgc_conn')\n"
+                                   "class TestThing:\n"
+                                   "    def test_a(self):\n"
+                                   "        assert True\n"),
+                "bound", "a class-level usefixtures binds its methods")
+
+
+def test_a_module_level_pytestmark_reaches_every_test(tmp_path, expect):
+    """`pytestmark` is how a file says "all of these need it" with no decorator in sight."""
+    expect.text(_verdict(tmp_path, "import pytest\n"
+                                   "pytestmark = pytest.mark.usefixtures('pgc_conn')\n"
+                                   "def test_a():\n"
+                                   "    assert True\n"),
+                "bound", "a module-level pytestmark binds every test in the file")
+
+
+def test_a_pytestmark_written_as_a_list_reaches_every_test_too(tmp_path, expect):
+    """The list form is the common one once a file has two marks, and reading only the
+    bare form would have covered the arm above while missing the shape people write."""
+    expect.text(_verdict(tmp_path, "import pytest\n"
+                                   "pytestmark = [pytest.mark.usefixtures('pgc_conn')]\n"
+                                   "def test_a():\n"
+                                   "    assert True\n"),
+                "bound", "a pytestmark list binds every test in the file")
+
+
+def test_an_unrelated_class_decorator_does_not_bind_anything(tmp_path, expect):
+    """The cost side, and the one a widened reader gets wrong: only `usefixtures` is a
+    dependency. A rule that treated any class decorator as one would call every
+    parametrised class cluster-bound and empty the gate."""
+    expect.text(_verdict(tmp_path, "import pytest\n"
+                                   "@pytest.mark.slow\n"
+                                   "class TestThing:\n"
+                                   "    def test_a(self):\n"
+                                   "        assert True\n"),
+                "free", "an unrelated mark on a class is not a fixture request")
+    expect.text(_verdict(tmp_path, "import pytest\n"
+                                   "pytestmark = pytest.mark.slow\n"
+                                   "def test_a():\n"
+                                   "    assert True\n"),
+                "free", "nor is an unrelated module-level pytestmark")
