@@ -623,3 +623,70 @@ check "and a failed population reconciliation fails the major" \
 # is the whole reason it is a file and not a number in the environment.
 check "the debt file is in the tree" \
 	"$([ -f "$PGC_TESTDIR/suites_without_accounting.txt" ] && echo yes || echo no)" "yes"
+
+# ---- one report, one answer to "how many accounted" (#928) ---------------------
+#
+# A single PG 17 matrix report printed two different answers three lines apart:
+#
+#   population reconciliation: registered=251 | accounted=237, ... | sum=251
+#   of those, 235 accounted for their checks and 7 did not
+#
+# 237 and 235, both describing suites that accounted for their checks, differing by
+# exactly 2. The population line counted with the WIDE reader and the breakdown line
+# derived from the NARROW one, so the figure phrased as a problem -- the second --
+# overstated the debt. The breakdown exists to stop an overcount, and deriving it from
+# the narrower reader reintroduced a smaller version of the same overcount in the line
+# added to close it.
+#
+# THE GAP IS A DIFFERENT MECHANISM, NOT A DEBT. The wide reader also accepts a suite
+# that prints its own `checks run:` line. Measured on this tree: of the twelve
+# registered suites that never call `pgc_summary`, exactly two emit a tally of their own
+# -- `bench_guards` and `docs_style` -- and the other ten keep none. The two are the 2.
+#
+# THE NAMES ARE PRINTED BY THE RUN, not counted here: a third suite adopting its own
+# mechanism appears without anyone editing a number.
+
+check "premise: the runner defines the own-mechanism difference this part evals" \
+	"$(grep -c '^pgc_own_mechanism_suites()' "$_rv")" "1"
+eval "$(sed -n '/^pgc_own_mechanism_suites()/,/^}/p' "$_rv")"
+eval "$(sed -n '/^pgc_log_shows_any_accounting()/,/^}/p' "$_rv")"
+check "premise: it is callable" "$(type -t pgc_own_mechanism_suites)" "function"
+check "premise: and so is the wide reader it is paired with" \
+	"$(type -t pgc_log_shows_any_accounting)" "function"
+
+# THE TWO READERS MUST DISAGREE ON EXACTLY ONE SHAPE, which is the whole premise. A log
+# carrying only `checks run:` is accounted by the wide reader and not by the narrow one.
+_o28="$PGC_WORKDIR/acc928"; mkdir -p "$_o28"
+printf 'accounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n' > "$_o28/libsh.log"
+printf 'checks run: 9\nowntally.sh: PASSED\n' > "$_o28/own.log"
+printf 'some output\nPASSED\n' > "$_o28/neither.log"
+check "premise: a lib.sh accounting line is seen by the narrow reader" \
+	"$(pgc_log_shows_accounting "$_o28/libsh.log")" "yes"
+check "premise: a private tally is NOT seen by the narrow reader" \
+	"$(pgc_log_shows_accounting "$_o28/own.log")" "no"
+check "premise: but IS seen by the wide one, which is where the 2 came from" \
+	"$(pgc_log_shows_any_accounting "$_o28/own.log")" "yes"
+check "premise: and a log with neither is seen by neither" \
+	"$(pgc_log_shows_any_accounting "$_o28/neither.log")$(pgc_log_shows_accounting "$_o28/neither.log")" "nono"
+
+# The difference names the private-tally suite and nothing else.
+printf 'alpha\ngamma\n' > "$_o28/narrow"
+printf 'alpha\nbeta\ngamma\n' > "$_o28/wide"
+check "the own-mechanism difference names the suite the readers disagree about" \
+	"$(pgc_own_mechanism_suites "$_o28/narrow" "$_o28/wide" | tr '\n' ' ')" "beta "
+check "and names nothing when the two readers agree" \
+	"$(pgc_own_mechanism_suites "$_o28/wide" "$_o28/wide" | grep -c . || true)" "0"
+# UNSORTED INPUT, because the real files are appended in SUITES order and `comm` on
+# unsorted input answers wrongly without saying so.
+printf 'gamma\nalpha\n' > "$_o28/narrow_unsorted"
+printf 'gamma\nbeta\nalpha\n' > "$_o28/wide_unsorted"
+check "and sorts its inputs, because the runner appends them in SUITES order" \
+	"$(pgc_own_mechanism_suites "$_o28/narrow_unsorted" "$_o28/wide_unsorted" | tr '\n' ' ')" "beta "
+
+# And the headline must come from the SAME file the population line counts.
+check "the breakdown headline counts the wide set, not the narrow one" \
+	"$(grep -c 'of those, \$_acc_any accounted for their checks' "$_rv")" "1"
+check "and the population reconciliation counts that same file" \
+	"$(grep -c '_acc_any="\$(grep -c \. "\$_acc_accounted"' "$_rv")" "1"
+check "premise: and the narrow count is still printed, as the lib.sh half" \
+	"$(grep -c 'via lib.sh.s accounting; by their own mechanism' "$_rv")" "1"

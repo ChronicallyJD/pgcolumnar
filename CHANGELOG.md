@@ -701,6 +701,37 @@ true until the next version shipped.
   deleted fourth; the end state is one.
   which never started.
 
+- One matrix report no longer gives two answers to "how many suites accounted for their
+  checks" (#928).
+
+  A full PG 17 report printed both, three lines apart:
+
+      population reconciliation: registered=251 | accounted=237, ... | sum=251
+      of those, 235 accounted for their checks and 7 did not
+
+  237 and 235, both describing suites that accounted for their checks, differing by
+  exactly 2. The population line counted with the WIDE reader,
+  `pgc_log_shows_any_accounting`; the breakdown line derived from the NARROW one,
+  `pgc_log_shows_accounting`. The figure a reader acts on is the second, because it is the
+  one phrased as a problem, and it overstated the debt by 2.
+
+  That matters more than a mismatch: the breakdown line exists to stop an overcount, and
+  deriving it from the narrower reader reintroduced a smaller version of the same
+  overcount in the line added to close it.
+
+  THE GAP IS A DIFFERENT MECHANISM, NOT A DEBT. The wide reader also accepts a suite that
+  prints its own `checks run:` line. Measured on this tree: of the twelve registered
+  suites that never call `pgc_summary`, exactly two -- `bench_guards` and `docs_style` --
+  emit a tally of their own, and the other ten keep none. Those two are the 2.
+
+  The headline now comes from the same file the population line counts, and the two
+  mechanisms are broken out beneath it with the own-mechanism suites NAMED rather than
+  counted, so a third adopting its own tally appears without anyone editing a number.
+
+  The comment above the line said "Ten registered suites exit 0 having never called
+  pgc_summary", which conflated the two populations: twelve never call it, and ten of
+  those keep no tally. Both halves were true of something; neither was true of what it
+  said.
 
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).

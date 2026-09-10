@@ -1014,6 +1014,21 @@ pgc_reconcile_records() {	# pgc_reconcile_records LOGFILE -> 0 ok, 1 mismatch
 	return 0
 }
 
+# Which suites accounted by a mechanism of their own rather than by lib.sh's.
+#
+# A FUNCTION so an arm can drive it, for the reason `pgc_reconcile_records` is one: a
+# set difference computed inline can only be tested by re-implementing it, and a test
+# that re-implements its subject agrees with it by construction.
+#
+# The NARROW file holds the suites whose log carries lib.sh's `accounting:` line; the
+# WIDE file holds those accounted by any mechanism, which also accepts a suite printing
+# its own `checks run:`. The difference is therefore the suites with a private tally --
+# a different mechanism, not a debt, and the thing that made one report give two answers
+# to the same question (#928).
+pgc_own_mechanism_suites() {	# pgc_own_mechanism_suites NARROWFILE WIDEFILE -> names
+	comm -13 <(sort "$1") <(sort "$2")
+}
+
 pgc_log_shows_any_accounting() {	# pgc_log_shows_any_accounting LOGFILE -> yes|no
 	# Did this suite count its checks AT RUNTIME, by any mechanism the log shows?
 	#
@@ -1427,14 +1442,38 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	fi
 
 	# How many of the suites counted as having RUN actually accounted for their
-	# checks (#916). Ten registered suites exit 0 having never called pgc_summary;
-	# counting them among the suites that ran is the overcount #447 added this
-	# line to stop, one level further down, and printing the total without this
-	# breakdown leaves it exactly where it was. Raised by OffgridwithJD, who was
-	# right that the drift detector alone does not close it.
+	# checks (#916). Counting a suite that never accounted among the suites that ran
+	# is the overcount #447 added this line to stop, one level further down, and
+	# printing the total without this breakdown leaves it exactly where it was.
+	# Raised by OffgridwithJD, who was right that the drift detector alone does not
+	# close it.
+	#
+	# ONE READER FOR THE HEADLINE, because two readers gave one report two answers.
+	# This line derived from `_acc_observed`, built with the NARROW reader, while the
+	# population reconciliation three lines above counts `_acc_accounted`, built with
+	# the WIDE one -- so a single PG 17 matrix report said `accounted=237` and then
+	# `of those, 235 accounted for their checks and 7 did not`, three lines apart,
+	# differing by exactly 2 (#928). The figure a reader acts on is the second,
+	# because it is the one phrased as a problem, and it overstated the debt.
+	#
+	# THE GAP IS A DIFFERENT MECHANISM, NOT A DEBT. The wide reader also accepts a
+	# suite that prints its own `checks run:` line. Measured on this tree: twelve
+	# registered suites never call `pgc_summary`, and of those exactly two --
+	# `bench_guards` and `docs_style` -- emit a tally of their own, which is the 2.
+	# The other ten keep no tally at all and are the real debt.
+	#
+	# THE NAMES ARE PRINTED, NOT COUNTED, so nothing here can go stale: the two are
+	# named by the run rather than by this comment, and a third adopting its own
+	# mechanism appears without anyone editing a number. That is the rule this
+	# directory learned from nine collisions on one written count in a day.
 	_acc_ran="$(grep -c . "$_acc_observed" 2>/dev/null || true)"
+	_acc_any="$(grep -c . "$_acc_accounted" 2>/dev/null || true)"
+	_acc_own="$(pgc_own_mechanism_suites "$_acc_observed" "$_acc_accounted" | tr '\n' ' ')"
 	echo "  suites that ran: $suites_ran of ${#SUITES[@]} (skipped: $suites_skipped, incomplete: $suites_incomplete)"
-	echo "  of those, $_acc_ran accounted for their checks and $((suites_ran - _acc_ran)) did not"
+	echo "  of those, $_acc_any accounted for their checks and $((suites_ran - _acc_any)) did not"
+	if [ -n "${_acc_own// /}" ]; then
+		echo "    $_acc_ran via lib.sh's accounting; by their own mechanism:${_acc_own% }"
+	fi
 	if [ "$suites_skipped" != 0 ]; then
 		echo "  skipped:${skipped_names}"
 	fi
