@@ -579,9 +579,12 @@ idx_count() {  # force an index scan
 	   SELECT count(*) FROM ix_tgt WHERE id BETWEEN 100 AND 199;" | tail -1
 }
 idx_plan_is_index_scan() {
-	q "$IDX_SETUP
-	   EXPLAIN (COSTS OFF) SELECT count(*) FROM ix_tgt WHERE id BETWEEN 100 AND 199;" \
-		| grep -qi 'Index.*Scan' && echo yes || echo no
+	# grep -c on a captured value, not a pipe into grep -q; see lib.sh's
+	# pgc_is_columnar_scan for the mechanism and the measurement.
+	local _plan
+	_plan="$(q "$IDX_SETUP
+	   EXPLAIN (COSTS OFF) SELECT count(*) FROM ix_tgt WHERE id BETWEEN 100 AND 199;")"
+	[ "$(grep -ci 'Index.*Scan' <<<"$_plan" || true)" != 0 ] && echo yes || echo no
 }
 seq_count() {  # force a sequential scan
 	q "SET enable_indexscan = off; SET enable_bitmapscan = off;

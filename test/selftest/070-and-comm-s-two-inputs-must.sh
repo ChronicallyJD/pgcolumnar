@@ -19,7 +19,11 @@ check "premise: some suite still uses comm, or the check below is vacuous" \
 _cm_unpinned=""
 for _f in $_cm_files; do
 	# every `| sort` in a file that uses comm must carry LC_ALL=C
-	if grep -qE '\|[[:space:]]*sort' "$_f" && grep -E '\|[[:space:]]*sort' "$_f" | grep -qv 'LC_ALL=C'; then
+	# The second test is grep -c on a captured value, not a pipe into grep -qv;
+	# see selftest 080. The first reads a FILE and is not a pipeline at all.
+	_cm_sorts="$(grep -E '\|[[:space:]]*sort' "$_f" || true)"
+	if [ "$(grep -cE '\|[[:space:]]*sort' "$_f" || true)" != 0 ] \
+		&& [ "$(grep -cv 'LC_ALL=C' <<<"$_cm_sorts" || true)" != 0 ]; then
 		_cm_unpinned="$_cm_unpinned $(basename "$_f")"
 	fi
 done

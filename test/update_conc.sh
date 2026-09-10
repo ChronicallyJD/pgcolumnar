@@ -77,7 +77,11 @@ LOGFILE="$WORKDIR/server.log"
 
 port_is_free() {
 	if command -v ss >/dev/null 2>&1; then
-		! ss -Htln "sport = :$1" 2>/dev/null | grep -q ":$1"
+		# grep -c on a captured value, not a pipe into grep -q. A spurious
+		# EPIPE here answers "nothing is listening" for a port that IS taken,
+		# and the suite then starts a cluster on an occupied port.
+		_pif="$(ss -Htln "sport = :$1" 2>/dev/null || true)"
+		[ "$(grep -c ":$1" <<<"$_pif" || true)" = 0 ]
 	else
 		! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 	fi

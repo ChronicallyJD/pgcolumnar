@@ -28,7 +28,9 @@ echo "== building Citus $TAG against $("$PG_CONFIG" --version) ($PG_CONFIG)"
 
 # Benchmark arms must run on a non-assert PostgreSQL. An assert build's numbers
 # are invalid, so refuse one the way the rest of the bench tooling does.
-if "$PG_CONFIG" --configure | grep -q -- '--enable-cassert'; then
+# grep -c, not grep -q; see test/lib.sh's pgc_is_columnar_scan.
+_cfg="$("$PG_CONFIG" --configure 2>/dev/null || true)"
+if [ "$(grep -c -- '--enable-cassert' <<<"$_cfg" || true)" != 0 ]; then
 	echo "REFUSING: $PG_CONFIG is an assert build; benchmark numbers from it are invalid" >&2
 	exit 1
 fi

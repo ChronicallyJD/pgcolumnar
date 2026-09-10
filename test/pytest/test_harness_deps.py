@@ -68,6 +68,9 @@ NO_CLUSTER = [
     "test_layer.py",
     "test_ordered.py",
     "test_runshape.py",
+    # Landed on main in #922 after this list was written, and the arm above caught
+    # it: the property says it needs no database, so the declaration must say so too.
+    "test_suite_accounting.py",
 ]
 
 
