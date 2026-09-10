@@ -18,6 +18,84 @@ true until the next version shipped.
 
 ### Added
 
+- A broad `pytest.raises` must name a SQLSTATE, and the block must hold one
+  statement (#432).
+
+  `pytest.raises(psycopg.Error)` claims that one of 254 SQLSTATEs arrived, across 42
+  SQLSTATE classes, counted against psycopg 3.3.5. It does not claim even that much.
+  Measured on this tree before the guard landed, this reported `1 passed`, exit 0:
+
+      with pytest.raises(psycopg.Error):
+          conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+          conn.execute("SELECT pgc_definitely_no_such_function()")
+      expect.num(1, 1, "the server rejected the call")
+
+  What satisfied it was `OperationalError` with `sqlstate` None: the connect failed,
+  nothing reached a server, and the statement under test never executed.
+
+  `pgc_vacuity.py` now refuses two shapes at collection time, found by walking the
+  `ast` rather than matching lines, so an offending file does not collect at all. A
+  `raises` over `Error`, `DatabaseError`, `Exception` or `BaseException` must bind the
+  exception and pin its SQLSTATE, and any `raises` block must hold exactly one
+  top-level statement. `expect.sqlstate(exc.value, "42883", name)` is the honest form
+  the refusal points at; it compares a typed field, refuses a two-character SQLSTATE
+  class as the prefix claim it is, and refuses an empty set of codes so the tuple
+  escape hatch cannot become the hole.
+
+  The family list is bound inside the scan rather than at module level. Every
+  `conftest.py` under `test/pytest/` is imported before collection, so a module-level
+  tuple is writable from the corpus the rule polices -- `import pgc_vacuity` then
+  `pgc_vacuity.<the tuple> = ()` -- after which the scan reports zero offences for
+  ever and the suite is green with the guard off and nothing saying so. An arm writes
+  three spellings of the name onto the module and requires the refusal to still
+  arrive.
+
+  This CLOSES `raises-too-broad`, which moves to `VACUITY_MODES.md` section 2, and
+  only NARROWS `raises-catches-setup`, which stays in section 3.4. The statement rule
+  counts TOP-LEVEL statements, so two shapes still walk past it, each being one
+  statement that performs the setup inside the block: a call to a helper, and a
+  compound statement such as a `for` holding the setup and the statement under test.
+  Both are measured at `1 passed`, exit 0, zero offences, and both have an arm
+  asserting the scan reports nothing on them, so the residual is a measurement rather
+  than a sentence. A recursive statement count would catch them and would also refuse
+  a legitimate single-statement loop; what would close the mode is a claim about which
+  statement raised.
+
+  Parsed rather than grepped, because the suite writes the forbidden shape inside a
+  `pytester.makepyfile` string in every arm. Over `test/pytest/*.py` the `ast` finds
+  5 `pytest.raises` call sites and reports 0 offences, while a `pytest.raises(` line
+  regex matches 35 lines, 30 of them inside a string literal or a comment. Swapping
+  `ast.parse` for that regex makes the layer refuse its own test suite with 22
+  invented offences and exit 4, which is mutation 11 of 11 in the removal proof.
+
+  THE ARMS LIVE IN ONE HARNESS. `test/pytest/test_raises_sqlstate.py` carries all of
+  them, through `pytester` and through the scan directly. An earlier version of this
+  change also shipped a shell mirror, `test/selftest/440-a-raises-must-name-a-sqlstate.sh`,
+  which checked the scan by GREPPING ITS SOURCE: 44 of its 55 checks were `grep -c`
+  against the function's text and it invoked `python3` zero times. Reviewing it,
+  @linuxhikerpm measured three faithful neuterings -- `False and` prefixed, nothing
+  renamed, every pinned substring left in place -- and all three left that part at 55
+  passed while the scan went blind. A text pin catches a rewrite or a deletion; it
+  cannot catch `False and`, which is how a guard actually dies.
+
+  The mirror is gone, and the second reason is the one that settles it: the shell
+  harness and the pytest corpus are parallel in functionality and do not drive each
+  other. A shell part whose whole subject is another harness's source text is a
+  dependency rather than a parallel guard -- it asserts against an implementation
+  instead of against the product. So the neutering proof is now two arms that copy the
+  layer, disable one condition faithfully, and require the copy to go blind while still
+  containing the text a grep arm would have pinned.
+
+  THREE DEFECTS @linuxhikerpm FOUND IN THE GUARD ITSELF, each reproduced before it was
+  fixed. A bare `exc.value.sqlstate`, and a `code = exc.value.sqlstate` never read, both
+  satisfied the pin while asserting nothing -- the rule counted any attribute named
+  `sqlstate` anywhere in the body. It now requires the read to reach a CALL, following
+  one hop of assignment so the honest `code = ...` / `expect.text(code, ...)` form is not
+  refused. And `pytest.raises(expected_exception=...)` escaped BOTH rules, because the
+  class was read from `call.args[0]` and the item was skipped before it was recorded,
+  which made the statement rule silently conditional on the class being positional while
+  the documentation stated it unconditionally.
+
 - Exact zone-map boundary coverage now lives in matching shell and pytest tests
   (#831).
 
@@ -159,6 +237,30 @@ true until the next version shipped.
   callback reddens here instead of double-recording.
 
 ### Fixed
+
+- The vacuity guard's PLACEMENT is now a checked property, because a guard in a
+  teardown cannot fail the test it guards (#432).
+
+  Measured, the same `AssertionError` raised from two places: from a
+  `pytest_runtest_call` wrapper the run reports `1 failed`; from a fixture teardown it
+  reports `1 passed, 1 error`. pytest has already recorded the call phase as passed, so
+  a teardown refusal arrives as a separate error on the same node-id and the test's own
+  outcome stays `passed`. Anything counting passes -- `--pgc-expect-tests`, a CI
+  summary, a human reading "N passed" -- sees a pass.
+
+  This layer's guard was already in the call-phase wrapper, so nothing was broken. What
+  was missing is that nothing said so: moving it into the `expect` fixture's teardown
+  was a plausible-looking refactor that would have turned every vacuous test from
+  `failed` into `passed` with an error beside it. Two arms in `test_runshape.py` pin the
+  placement, and the second is the control -- without it the first passes whatever phase
+  the guard is in, because "a vacuous test fails" is equally true of a correct guard and
+  of no guard at all next to an unrelated failure. Proved by moving the guard into the
+  teardown: the first arm reddens.
+
+  `guard-as-teardown-fixture-still-reports-passed` is NARROWED rather than closed, and
+  `VACUITY_MODES.md` 3.7 says which half. The half closed is this layer's own guard
+  placement. The half still open is the general shape: a guard anyone adds later in a
+  teardown still cannot fail its test, and nothing refuses that.
 
 - `ALTER TABLE ... RENAME COLUMN` now carries the new name into
   `pgcolumnar.projection_declaration`, for the named relation and for every
