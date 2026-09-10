@@ -64,6 +64,7 @@ behaviour, the source of that number is named.
 - [16. What this corpus does NOT yet refuse](#16-what-this-corpus-does-not-yet-refuse)
 - [17. Traps this corpus records](#17-traps-this-corpus-records)
 - [18. test_raises_sqlstate.py: which error, and which statement](#18-test_raises_sqlstatepy-which-error-and-which-statement)
+- [19. test_failed_query_sentinel.py: a failed query is not a comparison](#19-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
 
 ## 1. How to read a test in here
 
@@ -733,6 +734,7 @@ many times.
 | `test_the_readme_and_the_inventory_agree_on_what_is_refused` | README.md quotes the inventory's number, so the two cannot drift apart again |
 | `test_the_inventory_accounts_for_every_mode_the_run_found` | the admitted gap row is the run's total minus what is written down |
 | `test_the_prose_totals_match_the_counted_modes` | every sentence stating what the layer refuses today carries the counted number, not just the table |
+| `test_the_two_halves_of_the_refused_sentence_sum_to_the_named_total` | TESTS.md states the split twice in one sentence, and BOTH halves are checked against the inventory's own count — the gated half alone let 26 + 47 = 73 past a named total of 72 |
 | `test_an_undocumented_file_is_caught_with_the_tests_inside_it` | how 29 tests went missing at once |
 | `test_a_document_with_no_totals_line_states_none` | absent totals report `None`, which must not read as "they match" |
 | `test_a_stated_total_that_disagrees_with_disk_is_visible` | the count arm's own red |
@@ -1209,8 +1211,8 @@ story from #473 and #476.
 ## 16. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 26
-of them.** The other 46, of which 45 were demonstrated, are listed there with the
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 27
+of them.** The other 45, of which 44 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
 Read it before adding a test. Two gaps are most likely to affect a new test now.
@@ -1386,3 +1388,62 @@ one condition faithfully, and require the copy to go blind.
 | `test_disabling_the_sqlstate_rule_makes_the_scan_blind` | the neutering proof: a copy of the layer with `False and` prefixed, nothing renamed, goes blind while still containing the pinned text |
 | `test_disabling_the_statement_rule_makes_the_scan_blind` | the same for the second condition, so neither rule rests on the other's arm |
 | `test_the_mode_this_layer_only_narrows_is_still_listed_as_open` | `raises-catches-setup` must stay in section 3 of the mode inventory |
+## 19. test_failed_query_sentinel.py: a failed query is not a comparison
+
+`error-swallowed-to-empty`: two queries raise, a helper turns each into the same
+value, and they compare equal. The test is green and has asserted nothing about
+either query.
+
+`lib.sh` closed this by PRODUCING the sentinel with a sequence number per failure,
+`res="QUERY_ERROR.$seq"`, so two failures can never compare equal. The port had the
+constant `QUERY_ERROR = "QUERY_ERROR"`, a comment claiming it was "unique per
+occurrence" — which is false of a constant — and a refusal in exactly one assertion.
+
+Measured before this file existed, with a sentinel on both sides:
+
+| assertion | before | after |
+| --- | --- | --- |
+| `expect.hash` | refused | refused |
+| `expect.text` | **passed** | refused |
+| `expect.rows` | **passed** | refused |
+| `expect.row_set` | **passed** | refused |
+| `expect.ordered_rows` | **passed** | refused |
+| `expect.num`, `at_least`, `rowcount` | refused, by their type guards | unchanged |
+
+So four of the five comparisons accepted two failed queries as agreement.
+
+**The mechanism is the refusal; `query_error()` is the second line.** A non-unique
+sentinel is safe against the layer, because no comparison accepts one at all. It is
+not safe against a helper that compares by hand, which is why the producer exists and
+why new code should use it. The SQL-side sentinel in `test_hilbert_locality.py`
+cannot use it — it is produced by `coalesce(...)` inside the query — and does not need
+to, for the same reason.
+
+| test | what it asserts | how it could fail |
+| --- | --- | --- |
+| `test_the_comparison_surface_is_what_this_file_thinks_it_is` | the derivation finds the layer's `(got, want)` assertions | a renamed or removed assertion makes the arm below vacuous |
+| `test_the_shape_table_covers_every_comparison_the_layer_offers` | every derived comparison has a declared valid pair | an assertion added to the layer is silently outside the arm below |
+| `test_every_comparison_refuses_a_failed_query_on_either_side` | each comparison refuses a sentinel on the left and on the right | a comparison that compares instead of refusing; the arm distinguishes "refused" from "failed" |
+| `test_row_set_refuses_before_it_maps_rather_than_after` | `row_set` refuses a sentinel that arrived as a cell | `row_set` reprs its rows before delegating, so a refusal only in `rows` cannot see it |
+| `test_the_producer_is_unique_per_occurrence` | fifty calls are fifty distinct values, all carrying the prefix | a producer that returns a constant, which is what the comment used to claim |
+| `test_the_constant_alone_is_not_unique_which_is_why_the_producer_exists` | the control: the bare constant equals itself | compared in plain Python, because the layer now refuses to compare two sentinels |
+| `test_the_refusal_cannot_be_switched_off_from_the_corpus_it_polices` | sentinels minted WHILE ARMED are still refused after the global is rewritten | every conftest is imported before collection, so a module global is writable by the corpus the rule polices |
+| `test_a_hardcoded_sentinel_survives_the_same_rewrite` | a sentinel no producer minted — the corpus writes three, one from inside SQL — is still refused after a rewrite | a matcher reading a rewritable global would stop seeing them |
+| `test_the_ordering_premise_refuses_a_failed_reading` | `ordering_observable` refuses a failed reading on either side | with the old shared constant two failed readings were identical and it went RED; unique sentinels differ, so it passed and greenlit every ordered assertion resting on it |
+| `test_a_legitimate_comparison_is_untouched` | equal text, rows, sets and numbers still pass | a refusal that also refuses real data is not a refusal |
+
+**Each refusal is proved load-bearing.** Removing the one call from each assertion,
+one at a time, with `__pycache__` cleared between runs:
+
+| refusal removed from | the arm names | arms reddened |
+| --- | --- | --- |
+| `row_set` | `row_set COMPARED a failed query` | 2 (also the delegation arm) |
+| `ordered_rows` | `ordered_rows COMPARED a failed query` | 1 |
+| `rows` | `rows COMPARED a failed query` | 1 |
+| `hash` | `hash COMPARED a failed query` | 1 |
+| `text` | `text COMPARED a failed query` | 2 (also the hatch arm, which is phrased over `text`) |
+
+The cache matters: the five deleted lines are byte-identical, so three of the five
+mutations leave the file the same size and Python reuses the stale bytecode. Without
+`rm -rf __pycache__` between runs, mutations 3, 4 and 5 report the same failure and
+the table reads as though two refusals did not bite.
