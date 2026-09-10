@@ -150,14 +150,106 @@ _epipe_hd="$(_epipe_heredoc_lines "${_epipe_globs[@]}" 2>/dev/null || true)"
 # rather than crossing a threshold, which refuted a clean pipe-capacity
 # hypothesis. Reasoning about "small enough" is how #473, #476 and selftest 350
 # each survived, so the rule sweeps instead.
+# THE PATTERN IS DEFINED ONCE. Four places used to carry a copy of this regex --
+# the sweep and three probe arms -- and a copy is how a probe comes to test a
+# pattern the sweep no longer uses. The arms below read this variable, so they go
+# red when the sweep's own pattern drifts rather than passing against the old one.
+#
 # The leading [^|] excludes the `||` OPERATOR. Widening from the echo/printf
 # form lost that exclusion for free: `[ "$rc" = 124 ] || grep -q PAT <<<"$out"`
 # is a fallback branch reading a here-string -- no writer process, so no EPIPE --
 # and the first version of the widened pattern flagged both fuzz suites for it.
-_epipe_hits="$(grep -nE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' \
-	"${_epipe_globs[@]}" 2>/dev/null \
-	| grep -v '/harness_selftest.sh:' \
-	| grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+_epipe_pat='[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q'
+
+# A PIPELINE CAN BE SPLIT ACROSS LINES, AND A LINE-ORIENTED SWEEP IS BLIND TO IT.
+# Two shapes, both one pipeline to bash, neither visible to a grep that reads one
+# line at a time:
+#
+#     q "$SQL" |                            the reader is on the NEXT line, so
+#     grep -q 'Vectorized' && echo yes      the producer's line holds no reader
+#
+#     sed 's/x//' "$1" \
+#     | grep -qE 'pgc_summary'              the reader's line BEGINS with the
+#                                           operator, and at column 1 there is
+#                                           no [^|] in front of it
+#
+# The first shape is invisible to a physical-line pattern, and six live sites were
+# written that way: three in vector_agg_rescan_memory.sh, one each in
+# unique_conc.sh, native_groupagg_batch.sh and bench/run_clickbench.sh.
+#
+# THE SECOND SHAPE IS NARROWER THAN IT LOOKS, and the measurement is recorded
+# because the obvious reading is wrong. An INDENTED `| grep -q` continuation was
+# never hidden: the leading whitespace satisfies [^|], so the physical pattern
+# matches it on its own line, which is why selftest 390's deliberate twin needed
+# the heredoc exemption rather than the joiner. Only an UNINDENTED one escapes,
+# and the corpus holds none -- zero lines begin with `|` at column 1. Joining
+# covers it anyway: the cost is nothing once the joiner exists, and "nobody writes
+# it unindented" is a habit rather than a rule. unique_conc.sh is the one
+# to read. The comment directly above it explains this exact trap, the output is
+# already captured into a variable for that reason, and the next line pipes that
+# variable into an early-exit reader anyway. Documenting a trap is not avoiding
+# it, and a rule that cannot see the shape is how the note and the defect came to
+# live two lines apart.
+#
+# So the sweep joins the continuation and applies the SAME pattern to the joined
+# text. Three decisions in the joiner, each measured rather than reasoned about:
+#
+# PAIRWISE, one content line ahead, not a full logical-line assembly. `a |` /
+# `b |` / `grep -q` needs no three-line join: the (b, grep) pair matches on its
+# own and reports at b, which is the producer whose write takes the EPIPE and so
+# is where the fix goes.
+#
+# BLANK AND COMMENT LINES ARE SKIPPED, because bash skips them after a `|`.
+# Measured: `echo hi |` / blank / `# one` / blank / `grep -q hi` runs the reader
+# and reports the match. A joiner that stopped at the first blank line would be
+# blind to exactly the shape someone creates by annotating a long pipeline.
+#
+# A COMMENT IS NEVER A PRODUCER. Measured both ways: a comment line ending in `\`
+# does not continue into the next line, and a comment line ending in `|` does not
+# make the next line its reader. This matters here more than anywhere -- the file
+# is full of comments that spell the forbidden shape out, and not one of them can
+# become half of a hit.
+_epipe_joined_lines() {
+	awk '
+		function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+		function content(s) { return s !~ /^[ \t]*$/ && s !~ /^[ \t]*#/ }
+		# Reset per FILE, for the reason the heredoc scanner does: awk globals
+		# outlive the input boundary, so a file whose last line ends in a pipe
+		# would otherwise be joined to the first line of the file after it.
+		FNR == 1 { pend = 0 }
+		{
+			# A pending producer skips blanks and comments and stays pending,
+			# which is what bash does after a `|`.
+			if (pend && !content($0)) next
+			if (pend) {
+				printf "%s:%d:%s %s\n", FILENAME, pline, ptext, trim($0)
+				pend = 0
+			}
+			# ...and the line that closed one may open the next.
+			if (!content($0)) next
+			t = $0; sub(/[ \t]+$/, "", t)
+			if (t ~ /\|$/ && t !~ /\|\|$/) { ptext = t; pline = FNR; pend = 1 }
+			else if (t ~ /\\$/) { sub(/\\$/, "", t); ptext = t; pline = FNR; pend = 1 }
+		}
+	' "$@"
+}
+_epipe_logical="$(_epipe_joined_lines "${_epipe_globs[@]}" 2>/dev/null || true)"
+
+# ONE pattern, TWO streams: the physical lines as grep -n reports them, and the
+# logical lines the joiner builds. Keyed on file:line, so a site that matches in
+# both streams is one site rather than two.
+_epipe_hits="$(
+	{
+		# -H, not -n alone: grep omits the filename when it reads ONE file, and
+		# the heredoc exemption below keys on file:line. A corpus that ever
+		# narrowed to a single file would hand the exemption keys it cannot
+		# match, and the sweep would silently stop exempting anything.
+		grep -nHE "$_epipe_pat" "${_epipe_globs[@]}" 2>/dev/null
+		printf '%s\n' "$_epipe_logical" | grep -E "$_epipe_pat"
+	} | grep . \
+	  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
+	  | awk -F: '!seen[$1 ":" $2]++' || true)"
+
 # Drop hits whose file:line is inside a quoted heredoc.
 if [ -n "$_epipe_hd" ] && [ -n "$_epipe_hits" ]; then
 	_epipe_hits="$(printf '%s\n' "$_epipe_hits" | while IFS= read -r _eh; do
@@ -179,6 +271,21 @@ check "no suite pipes a captured string into an early-exit reader" \
 # a premise that recomputes its condition tests the world, not the code.
 _epipe_files="$(grep -lE 'grep' "${_epipe_globs[@]}" 2>/dev/null || true)"
 _epipe_scanned="$(printf '%s' "$_epipe_files" | grep -c . || true)"
+# THE FILENAME EXCLUSION IS GONE, because it excluded nothing and this rule's own
+# argument is that a filename list is the thing it exists to avoid. `grep -v
+# '"'"'/harness_selftest.sh:'"'"'` entered with the rule itself (23c96c7, 2026-08-07), when
+# harness_selftest.sh was the monolith and held 25 occurrences of `grep` inside its
+# own explanation of the forbidden shape. #554 split that file into the parts in
+# this directory three days later, and it has held none since: 60 lines, zero.
+#
+# What remains is the DERIVED exemption -- a line inside a quoted heredoc is text,
+# whatever file it sits in -- which is the form the comment above already argues
+# for. The arm below keeps the removal honest. Put a reader back into
+# harness_selftest.sh and the sweep will flag it, which it should: that file runs
+# its pipelines like any other.
+check "premise: the file the old filename exclusion named holds no reader to exclude" \
+	"$(grep -c 'grep' "$TESTDIR/harness_selftest.sh" || true)" "0"
+
 check "and the scan examined the suites rather than finding nothing to read" \
 	"$([ "${_epipe_scanned:-0}" -ge 20 ] && echo yes || echo "no (scanned $_epipe_scanned)")" "yes"
 
@@ -249,7 +356,7 @@ _epipe_shape='x() { printf "%s" "$1" | grep -%s PATTERN; }'
 } > "$_epipe_probe"
 _epipe_probe_hd="$(_epipe_heredoc_lines "$_epipe_probe" 2>/dev/null || true)"
 check "the sweep's pattern sees both lines of the probe" \
-	"$(grep -cE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$_epipe_probe")" "2"
+	"$(grep -cE "$_epipe_pat" "$_epipe_probe")" "2"
 check "and the heredoc exemption covers the one inside the heredoc, not the other" \
 	"$(printf '%s' "$_epipe_probe_hd" | grep -c ':3:' || true)" "1"
 check "and does not cover the live one above it" \
@@ -260,7 +367,7 @@ check "and does not cover the live one above it" \
 _epipe_wide="$PGC_WORKDIR/epipe_wide.sh"
 printf 'ldd /bin/sh | grep -%s libc && echo yes || echo no\n' q > "$_epipe_wide"
 check "the sweep catches a producer that is neither echo nor printf" \
-	"$(grep -cE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$_epipe_wide")" "1"
+	"$(grep -cE "$_epipe_pat" "$_epipe_wide")" "1"
 check "premise: and the old echo/printf pattern did NOT catch it" \
 	"$(grep -cE '(echo|printf)[^|]*\|[[:space:]]*grep -[a-zA-Z]*q' "$_epipe_wide")" "0"
 
@@ -271,7 +378,202 @@ check "premise: and the old echo/printf pattern did NOT catch it" \
 _epipe_oror="$PGC_WORKDIR/epipe_oror.sh"
 printf '[ "$rc" = 124 ] || grep -%s PAT <<<"$out"\n' q > "$_epipe_oror"
 check "the sweep does not mistake the || operator for a pipe" \
-	"$(grep -cE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$_epipe_oror")" "0"
+	"$(grep -cE "$_epipe_pat" "$_epipe_oror")" "0"
 check "premise: and the line really does hold the reader it must not flag" \
 	"$(grep -c 'grep -q PAT' "$_epipe_oror")" "1"
 
+# ---- the joiner itself, asserted ---------------------------------------------
+#
+# A sweep whose joiner joins nothing is the line-oriented sweep with extra prose,
+# and it reports zero hits exactly as a clean one does. Measured at 5,559 logical
+# lines built from two or more physical lines. A FLOOR, not a ceiling: the number
+# grows with every continuation anyone writes, and a hand-written ceiling is what
+# went red at 2,502 heredoc lines in a corpus that was entirely healthy.
+_epipe_joins="$(printf '%s' "$_epipe_logical" | grep -c . || true)"
+echo "  epipe sweep: logical lines joined from two or more physical lines=$_epipe_joins"
+check "premise: the joiner joined continuations, so the sweep is not still line-oriented" \
+	"$([ "${_epipe_joins:-0}" -ge 500 ] && echo yes || echo "no ($_epipe_joins)")" "yes"
+
+# THE JOINER IS NOT HEREDOC-AWARE, and it does not need to be while no line that
+# opens a heredoc also continues. `cat <<'"'"'X'"'"' |` puts the body on the next line, so
+# the join would pair the producer with a line of TEXT instead of with its reader
+# -- a false negative, which is the direction this whole rule exists to prevent.
+#
+# Measured: zero of the 179 heredoc-opening lines in the corpus end in a bare `|`
+# or a `\`. So this arm is the premise INSTEAD OF the machinery. If it goes red,
+# the joiner needs to skip to the terminator; writing that now would be an
+# instrument with nothing exercising it, which is how twelve suites came to
+# maintain a check counter that nothing read.
+_epipe_hd_cont="$(grep -nE "(^|[^<])<<-?['\"]?[A-Za-z_]" "${_epipe_globs[@]}" 2>/dev/null \
+	| grep -cE '([^|]\||\\)[[:space:]]*$' || true)"
+check "premise: no line opens a heredoc AND continues, which is what lets the joiner ignore bodies" \
+	"$_epipe_hd_cont" "0"
+
+# A `\` CONTINUATION JOINS THE NEXT PHYSICAL LINE, with no skipping: bash removes
+# the backslash-newline before it tokenizes, so a comment on the following line
+# comments out the rest of the command and a blank line ends it. The joiner skips
+# blanks and comments for BOTH forms, which is bash for `|` and is NOT bash for
+# `\`, and that difference can only produce a wrong answer where such a line
+# exists. None does, and it is not luck: a comment placed between `check "..." \`
+# and its argument swallowed that check's arguments in selftest 420, the part died
+# before pgc_summary, and `bash -n` was happy about all of it. The shape is a
+# defect on its own, so the arm earns its keep whichever way it goes red.
+_epipe_bs_gap="$(awk '
+	FNR == 1 { prev = 0 }
+	{
+		if (prev && ($0 ~ /^[ \t]*$/ || $0 ~ /^[ \t]*#/)) print FILENAME ":" FNR
+		t = $0; sub(/[ \t]+$/, "", t)
+		prev = (t ~ /\\$/ && t !~ /^[ \t]*#/)
+	}' "${_epipe_globs[@]}" 2>/dev/null | grep -c . || true)"
+check "premise: no backslash continuation is followed by a blank or a comment" \
+	"$_epipe_bs_gap" "0"
+
+# ---- the two split shapes, as fixtures --------------------------------------
+#
+# Assembled from fragments rather than written out, for the reason the probe above
+# is: a literal here would be a site the sweep then has to exempt.
+_epipe_two="$PGC_WORKDIR/epipe_twoline.sh"
+{
+	printf 'q "$SQL" %s\n' '|'
+	printf '\tgrep -%s PATTERN && echo yes || echo no\n' q
+} > "$_epipe_two"
+check "the sweep sees a pipeline split AFTER the pipe, which all six live sites were" \
+	"$(_epipe_joined_lines "$_epipe_two" | grep -cE "$_epipe_pat" || true)" "1"
+check "and reports it at the PRODUCER's line, which is the line that has to change" \
+	"$(_epipe_joined_lines "$_epipe_two" | grep -E "$_epipe_pat" | cut -d: -f2)" "1"
+
+_epipe_bsplit="$PGC_WORKDIR/epipe_backslash.sh"
+{
+	printf 'sed %ss/x//%s "$1" \\\n' "'" "'"
+	printf '%s grep -%sE PATTERN && echo yes || echo no\n' '|' q
+} > "$_epipe_bsplit"
+check "and a pipeline split BEFORE the pipe, with the operator at column 1" \
+	"$(_epipe_joined_lines "$_epipe_bsplit" | grep -cE "$_epipe_pat" || true)" "1"
+check "premise: and the physical-line pattern alone saw neither of those two" \
+	"$(grep -hcE "$_epipe_pat" "$_epipe_two" "$_epipe_bsplit" | awk '{ s += $1 } END { print s + 0 }')" "0"
+
+# THE SAME SPLIT, INDENTED, WAS NEVER INVISIBLE. This arm exists because the first
+# version of the one above claimed both shapes were hidden and went red saying so:
+# one tab in front of the reader is a [^|], so the physical pattern matches it
+# unaided. Pinning the narrower claim keeps the next reader from re-deriving the
+# wrong one.
+_epipe_bsind="$PGC_WORKDIR/epipe_backslash_indented.sh"
+{
+	printf 'sed %ss/x//%s "$1" \\\n' "'" "'"
+	printf '\t%s grep -%sE PATTERN && echo yes || echo no\n' '|' q
+} > "$_epipe_bsind"
+check "premise: indent that same reader by a tab and the physical-line pattern sees it unaided" \
+	"$(grep -cE "$_epipe_pat" "$_epipe_bsind" || true)" "1"
+check "premise: the physical stream names the file even when it reads only one of them" \
+	"$(grep -nHE "$_epipe_pat" "$_epipe_bsind" | cut -d: -f1)" "$_epipe_bsind"
+check "premise: and without -H it reports a line number where the key wants a path" \
+	"$(grep -nE "$_epipe_pat" "$_epipe_bsind" | cut -d: -f1)" "2"
+# And the consequence, stated rather than left to be noticed: an indented split
+# site is reported TWICE, once at the reader by the physical stream and once at the
+# producer by the joiner. Two hits, one pipeline. That is noise in a red report,
+# not blindness in a green one, and either line is a line the fix touches -- so it
+# is pinned here instead of being suppressed with a third stream to maintain.
+check "and an indented split is reported twice, at the reader and at the producer" \
+	"$({ grep -nHE "$_epipe_pat" "$_epipe_bsind"
+	     _epipe_joined_lines "$_epipe_bsind" | grep -E "$_epipe_pat"
+	   } | awk -F: '!seen[$1 ":" $2]++' | grep -c . || true)" "2"
+
+# THE KEY IS EXERCISED, by the one shape that matches twice at the SAME line: a
+# pipeline that matches on its own line and also ends in a pipe, so the join
+# restates it. Without the key the sweep would count one site as two here.
+_epipe_dup="$PGC_WORKDIR/epipe_dup.sh"
+{
+	printf 'echo "$a" %s grep -%s X %s\n' '|' q '|'
+	printf '\tgrep -%s Y\n' q
+} > "$_epipe_dup"
+check "premise: that shape matches in both streams at one line, which is what the key is for" \
+	"$({ grep -nHE "$_epipe_pat" "$_epipe_dup"
+	     _epipe_joined_lines "$_epipe_dup" | grep -E "$_epipe_pat"
+	   } | grep -c . || true)" "2"
+check "and the sweep counts it once, because a hit is keyed on file:line" \
+	"$({ grep -nHE "$_epipe_pat" "$_epipe_dup"
+	     _epipe_joined_lines "$_epipe_dup" | grep -E "$_epipe_pat"
+	   } | awk -F: '!seen[$1 ":" $2]++' | grep -c . || true)" "1"
+
+# The gap form gets its own fixture because bash's behaviour here is the whole
+# reason the joiner skips: a reader separated from its producer by blank and
+# comment lines still runs.
+_epipe_gap="$PGC_WORKDIR/epipe_gap.sh"
+{
+	printf 'q "$SQL" %s\n' '|'
+	printf '\n'
+	printf '\t# why this pipeline is shaped the way it is\n'
+	printf '\n'
+	printf '\tgrep -%s PATTERN && echo yes || echo no\n' q
+} > "$_epipe_gap"
+check "and it follows the pipe across blank and comment lines" \
+	"$(_epipe_joined_lines "$_epipe_gap" | grep -cE "$_epipe_pat" || true)" "1"
+# Run, not scanned, and deliberately NOT with an early-exit reader: `wc -c` reads
+# to EOF, so this demonstration cannot take the EPIPE it is demonstrating around.
+# Joined, the reader receives four bytes. Unjoined, it would be its own command
+# reading /dev/null and the output would carry the producer's text instead.
+_epipe_gap_demo="$PGC_WORKDIR/epipe_gap_demo.sh"
+{
+	printf "printf '%%s' abcd %s\n" '|'
+	printf '\n'
+	printf '\t# a comment in the middle of a pipeline\n'
+	printf '\n'
+	printf '\twc -c\n'
+} > "$_epipe_gap_demo"
+check "premise: bash joins a pipeline across blank and comment lines, which is why the joiner must" \
+	"$(bash "$_epipe_gap_demo" </dev/null | tr -d ' ')" "4"
+
+# `||` IS NOT A PIPE ACROSS A LINE BREAK EITHER. The single-line case is pinned
+# above; joining gives it a second way to be wrong, because a fallback reader on
+# the following line sits in the same shape a split pipeline does.
+_epipe_oror2="$PGC_WORKDIR/epipe_oror_two.sh"
+{
+	printf '[ "$rc" = 124 ] %s\n' '||'
+	printf '\tgrep -%s PAT <<<"$out"\n' q
+} > "$_epipe_oror2"
+check "the joiner does not mistake a two-line || fallback for a split pipeline" \
+	"$(_epipe_joined_lines "$_epipe_oror2" | grep -cE "$_epipe_pat" || true)" "0"
+check "premise: and its second line really does hold the reader it must not flag" \
+	"$(grep -c 'grep -q PAT' "$_epipe_oror2")" "1"
+
+# A COMMENT IS NOT A PRODUCER, which is what stops the sweep being fed its own
+# documentation. This file alone spells the forbidden shape out a dozen times.
+_epipe_cmt="$PGC_WORKDIR/epipe_comment.sh"
+{
+	printf '# a comment line that ends in a pipe %s\n' '|'
+	printf '%s grep -%s PATTERN\n' '|' q
+} > "$_epipe_cmt"
+check "a comment ending in a pipe is not a producer" \
+	"$(_epipe_joined_lines "$_epipe_cmt" | grep -cE "$_epipe_pat" || true)" "0"
+check "premise: and bash agrees -- with no command to continue, the reader alone will not parse" \
+	"$(bash -n "$_epipe_cmt" 2>&1 | grep -c 'syntax error' || true)" "1"
+
+# ---- the one false positive the JOIN CREATES, and why it is accepted --------
+#
+# Every fixture above reveals a pipeline that was always there. This one is the
+# other kind, and it can be constructed: a double-quoted string continued across
+# a line break, whose first line happens to end in a bare `|`, reads as a
+# pipeline once the two lines are concatenated.
+#
+#     note="a pipeline like foo |
+#     grep -q bar is banned"
+#
+# bash sees one assignment of a two-line string. The joiner sees a producer and a
+# reader, and the sweep flags it.
+#
+# ACCEPTED rather than fixed, and the reason is the DIRECTION of the failure.
+# Telling the two apart needs quote state carried across lines through $'"'"'...'"'"',
+# escapes and nesting -- a new instrument with its own failure modes, replacing
+# one that fails LOUD. A false positive names the file and the line and turns the
+# gate red; the blindness it replaces printed nothing and went green for six live
+# sites. The corpus holds zero of these today, which is what the zero-hit arm
+# above measures, and rewriting one if it ever appears costs a line.
+_epipe_str="$PGC_WORKDIR/epipe_string.sh"
+{
+	printf 'note="a pipeline like foo %s\n' '|'
+	printf 'grep -%s bar is banned"\n' q
+} > "$_epipe_str"
+check "the join CREATES a hit on a two-line quoted string, the sweep's one false positive" \
+	"$(_epipe_joined_lines "$_epipe_str" | grep -cE "$_epipe_pat" || true)" "1"
+check "premise: and bash runs that file as one assignment -- no reader, no output, rc 0" \
+	"$(bash "$_epipe_str" </dev/null 2>&1; echo "rc=$?")" "rc=0"

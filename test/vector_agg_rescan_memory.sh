@@ -272,9 +272,14 @@ rescan_slope() {	# rescan_slope TABLE [GUC] -> bytes per rescan
 	awk -v a="$hi" -v b="$lo" -v d="$(( RS_HI - RS_LO ))" 'BEGIN { printf "%d", ((a - b) * 1024) / d }'
 }
 # The columnar arm must really be OUR node, or it is measuring the plain scan.
+# Captured first, then read from a here-string. Piping the plan straight into an
+# early-exit reader answers "absent" for a plan that CONTAINS the node whenever
+# the writer takes EPIPE first, and the failure direction is the expensive one:
+# this premise would report the vectorized aggregate missing and send the reader
+# after a planner regression that is not there (#486).
+vam_plan_on="$(q "$GUC EXPLAIN (COSTS OFF) SELECT sum(s.c) FROM (SELECT i FROM vam_drv LIMIT 100) d, LATERAL (SELECT count(*) c FROM vam_rs WHERE v > d.i) s")"
 check_text "premise: the columnar rescan arm is the vectorized aggregate" \
-	"$(q "$GUC EXPLAIN (COSTS OFF) SELECT sum(s.c) FROM (SELECT i FROM vam_drv LIMIT 100) d, LATERAL (SELECT count(*) c FROM vam_rs WHERE v > d.i) s" |
-	   grep -q 'Columnar Vectorized Aggregates' && echo yes || echo no)" yes
+	"$(grep -q 'Columnar Vectorized Aggregates' <<<"$vam_plan_on" && echo yes || echo no)" yes
 vec_slope="$(rescan_slope vam_rs)"
 heap_slope="$(rescan_slope vam_heap)"
 echo "      per-rescan growth: columnar vectorized aggregate = ${vec_slope:-unset} B, heap floor = ${heap_slope:-unset} B"
@@ -305,12 +310,16 @@ check_num "the rescanned aggregate still returns the heap's answer" \
 # next start rebuilds a fresh list and a fresh metadata struct per group into the
 # same context. Nothing reclaims the previous one.
 GUC_OFF="SET pgcolumnar.enable_ungrouped_vector_agg=off; SET pgcolumnar.enable_group_vectorization=off; SET enable_material=off;"
+# ONE capture, read twice. Both premises are statements about the SAME plan, so
+# explaining it twice was two chances for the answers to disagree as well as two
+# pipelines that could take EPIPE. The second one is the dangerous half: it WANTS
+# "no", so a spurious absence makes it pass for the wrong reason and the vacuity
+# is silent rather than red.
+vam_plan_off="$(q "$GUC_OFF EXPLAIN (COSTS OFF) SELECT sum(s.c) FROM (SELECT i FROM vam_drv LIMIT 100) d, LATERAL (SELECT count(*) c FROM vam_rs WHERE v > d.i) s")"
 check_text "premise: with the aggregate off the arm is the plain columnar scan" \
-	"$(q "$GUC_OFF EXPLAIN (COSTS OFF) SELECT sum(s.c) FROM (SELECT i FROM vam_drv LIMIT 100) d, LATERAL (SELECT count(*) c FROM vam_rs WHERE v > d.i) s" |
-	   grep -q 'Custom Scan (PgColumnarScan)' && echo yes || echo no)" yes
+	"$(grep -q 'Custom Scan (PgColumnarScan)' <<<"$vam_plan_off" && echo yes || echo no)" yes
 check_text "premise: and it is NOT the vectorized aggregate node" \
-	"$(q "$GUC_OFF EXPLAIN (COSTS OFF) SELECT sum(s.c) FROM (SELECT i FROM vam_drv LIMIT 100) d, LATERAL (SELECT count(*) c FROM vam_rs WHERE v > d.i) s" |
-	   grep -q 'Columnar Vectorized Aggregates' && echo yes || echo no)" no
+	"$(grep -q 'Columnar Vectorized Aggregates' <<<"$vam_plan_off" && echo yes || echo no)" no
 plain_slope="$(rescan_slope vam_rs "$GUC_OFF")"
 plain_heap="$(rescan_slope vam_heap "$GUC_OFF")"
 echo "      per-rescan growth: plain columnar scan = ${plain_slope:-unset} B, heap floor = ${plain_heap:-unset} B"

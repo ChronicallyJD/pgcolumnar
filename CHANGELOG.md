@@ -160,6 +160,43 @@ true until the next version shipped.
 
 ### Fixed
 
+- The sweep that forbids piping a captured string into `grep -q` now joins a
+  pipeline split across two lines, and the six suites that had split one are
+  fixed (#486).
+
+  The sweep read one physical line at a time. `producer |` on one line with
+  `grep -q PATTERN` on the next was therefore invisible to it: the producer's line
+  holds no reader, and the reader's line holds no producer. Six live sites were
+  written that way -- three in `test/vector_agg_rescan_memory.sh`, one each in
+  `test/unique_conc.sh`, `test/native_groupagg_batch.sh` and
+  `bench/run_clickbench.sh`. Every one of them answers a premise that decides
+  whether a whole arm measures what it claims to, and the failure direction is the
+  expensive one: the pipeline reports the thing it was looking for as ABSENT, so a
+  plan that contains the vectorized aggregate reads as a planner regression.
+
+  `test/unique_conc.sh` is the one to read. The comment directly above it explains
+  this exact trap, and captures the output into a variable for that reason. The
+  next line pipes that variable into `grep -q` anyway.
+
+  The sweep now builds logical lines before it matches, and applies one pattern to
+  both the physical and the joined stream. Three behaviours of bash were measured
+  rather than assumed: a pending `|` skips blank and comment lines, a `\` joins the
+  next physical line with no skipping, and a comment never continues at all. Two
+  premises the joiner rests on are asserted instead of coded around -- no line
+  opens a heredoc and also continues, and no `\` continuation is followed by a
+  blank or a comment -- so if either stops being true the gate says so rather than
+  reading past it.
+
+  One false positive is accepted, and a fixture pins it: a double-quoted string
+  continued across a line break, whose first line ends in a bare `|`, reads as a
+  pipeline once the two lines are joined. It fails loud, where the blindness it
+  replaces failed silent. A second latent defect went with it -- the physical
+  stream now passes `-H`, because `grep -n` omits the filename when it reads a
+  single file and the heredoc exemption keys on `file:line`.
+
+  Planting any one of the six sites back in its old form takes the rule red and
+  names the file and the line.
+
 - `ALTER TABLE ... RENAME COLUMN` now carries the new name into
   `pgcolumnar.projection_declaration`, for the named relation and for every
   inheritance descendant, including a `PARTITION OF` child (#888).
