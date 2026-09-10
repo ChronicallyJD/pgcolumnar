@@ -390,7 +390,7 @@ if [ "$CITEXT" = 1 ]; then
 	check "2c post-fix: exactly one row equal to 'abc'" \
 		"$(ctl_q "SELECT count(*) FROM s_ci WHERE v = 'abc';")" "1"
 else
-	echo "SKIP  2c citext case test (citext extension not available)"
+	check_skip "the 2c citext case" "SKIP  2c citext case test (citext extension not available)" "citext extension not available"
 fi
 
 # ===========================================================================
@@ -522,7 +522,7 @@ if [ "$PG_MAJOR" -ge 15 ]; then
 	check "6 NULLS NOT DISTINCT: exactly one NULL row" \
 		"$(ctl_q "SELECT count(*) FROM s_nn WHERE k IS NULL;")" "1"
 else
-	echo "SKIP  6 NULLS NOT DISTINCT test (PostgreSQL < 15)"
+	check_skip "the NULLS NOT DISTINCT case" "SKIP  6 NULLS NOT DISTINCT test (PostgreSQL < 15)" "PostgreSQL < 15"
 fi
 
 # ===========================================================================

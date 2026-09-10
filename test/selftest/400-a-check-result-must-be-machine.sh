@@ -227,6 +227,58 @@ done
 unset -f _rq_bad
 unset _rq_v
 
+# ---- a named SKIP is an outcome, so it is counted and recorded --------------
+#
+# `echo "SKIP  ..."` printed a line a reader sees and left PGC_CHECKS alone, so
+# 22 sites across 20 files reported an outcome that no count and no record ever
+# saw. The tree's own comment said why that mattered -- "the skip must be
+# visible: a check that reports nothing is indistinguishable from a check that
+# passes" -- and it was true while the human line WAS the record.
+#
+# THE EXEMPTION IS DERIVED, NOT A FILENAME LIST. A file that calls `check` is a
+# suite or a part, and its skips are check outcomes. run_all_versions.sh calls
+# `check` zero times because it is the runner: its one `echo "SKIP"` declines a
+# whole PostgreSQL major before any suite exists, so there is no PGC_CHECKS for
+# it to belong to. That distinction is read off the files rather than written
+# here, so a new runner or a new suite is classified without editing this arm.
+_sk_offenders=""
+for _sk_f in "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh; do
+	[ -e "$_sk_f" ] || continue
+	# A comment is not a statement, so the pattern anchors to the line start
+	# after whitespace only. Measured: this arm's own prose above says
+	# echo "SKIP" and is not matched, which a looser pattern would flag.
+	[ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_f")" -gt 0 ] || continue
+	if [ "$(grep -cE '^[[:space:]]*echo "SKIP' "$_sk_f")" -gt 0 ]; then
+		_sk_offenders="$_sk_offenders ${_sk_f##*/}"
+	fi
+done
+check "no file that calls check prints a SKIP outcome the count cannot see" \
+	"$(printf '%s' "$_sk_offenders" | wc -w | tr -d ' ')" "0"
+[ -z "$_sk_offenders" ] || printf '      %s\n' $_sk_offenders
+
+# The sweep has to be looking at something, and it has to be able to find one.
+_sk_seen=0
+for _sk_f in "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh; do
+	[ -e "$_sk_f" ] || continue
+	[ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_f")" -gt 0 ] && _sk_seen=$((_sk_seen + 1))
+done
+check "premise: the sweep classified a corpus of check-calling files" \
+	"$([ "$_sk_seen" -ge 50 ] && echo yes || echo "no ($_sk_seen)")" "yes"
+
+_sk_fix="$PGC_WORKDIR/skipsweep"; rm -rf "$_sk_fix"; mkdir -p "$_sk_fix"
+printf 'check "x" a a\necho "SKIP  a bare skip"\n' > "$_sk_fix/offender.sh"
+check "premise: and it would name a file that calls check and echoes a SKIP" \
+	"$([ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_fix/offender.sh")" -gt 0 ] \
+	   && [ "$(grep -cE '^[[:space:]]*echo "SKIP' "$_sk_fix/offender.sh")" -gt 0 ] \
+	   && echo caught || echo missed)" "caught"
+
+printf 'echo "SKIP  a bare skip"\n' > "$_sk_fix/runner.sh"
+check "premise: while a file that calls no check is not its business" \
+	"$([ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_fix/runner.sh")" -gt 0 ] \
+	   && echo caught || echo "not a suite")" "not a suite"
+
+unset _sk_offenders _sk_f _sk_seen _sk_fix
+
 # ---- the timing helpers reported an outcome that nothing counted -------------
 #
 # check_timing and check_ratio_needs_quiet_machine, under PGC_SKIP_TIMING=1,

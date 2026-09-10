@@ -275,7 +275,7 @@ ansp  "and it answers in C order, matching heap" colh colc \
 ALTCOLL="$(q "SELECT collname FROM pg_collation WHERE collname IN ('en_US.utf8','en_US.UTF-8','en_US','und-x-icu') ORDER BY 1 LIMIT 1;")"
 if [ -z "$ALTCOLL" ] || \
    [ "$(q "SELECT (min(k) COLLATE \"C\") = (SELECT min(k COLLATE \"$ALTCOLL\") FROM colh) FROM colh;" 2>/dev/null)" != "f" ]; then
-	echo "SKIP  the collation-change demonstration: this server has no collation that"
+	check_skip "the collation-change demonstration" "SKIP  the collation-change demonstration: this server has no collation that" "this server has no suitable collation"
 	echo "      disagrees with C on ASCII, so the arm could not fail and is not run."
 	echo "      The refusal it demonstrates is asserted above on COLLATE \"C\"."
 else

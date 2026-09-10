@@ -59,7 +59,7 @@ if ! pgc_is_number "${PGC_MAJOR:-}"; then
 	pgc_summary
 fi
 if [ "$PGC_MAJOR" -lt 18 ]; then
-	echo "SKIP  pgcolumnar.analyze() needs pg_restore_attribute_stats (PG18+); this server is $PGC_MAJOR"
+	check_skip "the differential analyze path" "SKIP  pgcolumnar.analyze() needs pg_restore_attribute_stats (PG18+); this server is $PGC_MAJOR" "needs pg_restore_attribute_stats, PG18+"
 	pgc_summary
 fi
 

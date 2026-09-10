@@ -89,7 +89,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if ! mod_is_valid "$MOD"; then
-	echo "SKIP  no valid module installed at $MOD, so there is no state to arrange"
+	check_skip "stash recovery" "SKIP  no valid module installed at $MOD, so there is no state to arrange" "no valid module installed at $MOD"
 	pgc_summary
 fi
 SAFE="$(mktemp /tmp/pgc-objstore-safe.XXXXXX)"

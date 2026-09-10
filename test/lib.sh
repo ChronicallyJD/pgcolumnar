@@ -1262,6 +1262,26 @@ pgc_require_tools() {
 # So the ratio is skipped and the rest of the suite runs. A skip is announced
 # rather than silent, and it is not counted as a pass, because a count that
 # includes checks nobody ran is the thing this project keeps having to unlearn.
+# A named check that could not run HERE, for a reason the suite knows.
+#
+# WHY THIS EXISTS. `echo "SKIP  ..."` printed a line a reader sees and left
+# PGC_CHECKS alone, so the outcome existed for a human and for nobody else: no
+# record, no count, and nothing for `pgc_reconcile_records` to reconcile. The
+# tree's own comment at native_index_projection.sh said why that mattered -- "the
+# skip must be visible: a check that reports nothing is indistinguishable from a
+# check that passes" -- and that was TRUE while the human line WAS the record. It
+# stopped being true when the RESULT stream became the machine-readable one, and
+# 22 sites were left behind on the wrong side of the change. Named by
+# @linuxhikerpm on #917; the owner asked for every site, not the three examples.
+#
+# DISPLAY IS PASSED WHOLE, exactly as pgc_record takes it, so every existing
+# human line stays byte-identical. These messages are individually worded and a
+# reader greps them; recomposing them here would change what people see for no
+# gain, which is the same reason pgc_record does not compose PASS lines either.
+check_skip() {	# check_skip NAME DISPLAY [REASON]
+	pgc_record SKIP "$1" "$2" "${3:-}"
+}
+
 check_timing() {
 	local name="$1" got="$2" want="$3"
 
@@ -1564,7 +1584,12 @@ pgc_skip() {  # pgc_skip <capability> <message>
 	cap="$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')"
 	allow_one="PGC_ALLOW_MISSING_$cap"
 	if [ "${PGC_ALLOW_MISSING:-0}" = 1 ] || [ "${!allow_one:-0}" = 1 ]; then
-		echo "SKIP  $2 (waived by $allow_one or PGC_ALLOW_MISSING)"
+		# The unwaived branch below records a FAIL. This one printed and left
+		# PGC_CHECKS at zero, so waiving a dependency also erased the outcome --
+		# the same asymmetry check_timing had, in the function whose whole
+		# subject is "a missing dependency is not a pass".
+		check_skip "$2" "SKIP  $2 (waived by $allow_one or PGC_ALLOW_MISSING)" \
+			"waived by $allow_one or PGC_ALLOW_MISSING"
 		pgc_summary
 	fi
 	pgc_record FAIL "$2" "FAIL  $2"

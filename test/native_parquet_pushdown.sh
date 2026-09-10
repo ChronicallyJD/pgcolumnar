@@ -211,7 +211,7 @@ if f.metadata.num_row_groups != 4:
     sys.exit("expected 4 row groups")
 PYDEC
 	if [ $? -ne 0 ]; then
-		echo "SKIP  could not build the integer-DECIMAL pushdown file"
+		check_skip "the integer-DECIMAL pushdown case" "SKIP  could not build the integer-DECIMAL pushdown file" "could not build the fixture file"
 	else
 		psql_run "CREATE FOREIGN TABLE ftdec (d numeric) SERVER pq
 		          OPTIONS (path '$PGC_WORKDIR/dec_push.parquet');"
@@ -225,7 +225,7 @@ PYDEC
 			"$(skipped_for_t ftdec 'd >= 0')" "0"
 	fi
 else
-	echo "SKIP  pyarrow not available; integer-DECIMAL pushdown case skipped"
+	check_skip "the integer-DECIMAL pushdown case" "SKIP  pyarrow not available; integer-DECIMAL pushdown case skipped" "pyarrow not available"
 fi
 
 pgc_summary

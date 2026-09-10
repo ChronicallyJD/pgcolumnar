@@ -194,7 +194,7 @@ if psql_run "CREATE EXTENSION IF NOT EXISTS amcheck;" >/dev/null 2>&1 &&
 			"$(grep -qE 'ERROR' <<<"$out" && echo bad || echo ok)" "ok"
 	done
 else
-	echo "SKIP  amcheck is not installed on this build; the seq-scan oracle above still ran"
+	check_skip "the amcheck oracle for $idx" "SKIP  amcheck is not installed on this build; the seq-scan oracle above still ran" "amcheck is not installed on this build"
 fi
 
 pgc_summary

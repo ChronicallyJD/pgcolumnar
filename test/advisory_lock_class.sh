@@ -127,7 +127,7 @@ if [ -n "$LK_CLASSID" ] && [ "$LK_CLASSID" -le 2147483647 ] && [ "$LK_OBJID" -le
 		sleep 0.2
 	done
 else
-	echo "SKIP  classid $LK_CLASSID or objid $LK_OBJID exceeds int4, so the SQL form cannot address it"
+	check_skip "the SQL form of the advisory lock" "SKIP  classid $LK_CLASSID or objid $LK_OBJID exceeds int4, so the SQL form cannot address it" "classid or objid exceeds int4"
 fi
 
 # ---------------------------------------------------------------------------

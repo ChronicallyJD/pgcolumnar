@@ -557,7 +557,7 @@ _fp_as() {	# _fp_as EXPR -> stdout
 }
 
 if [ -z "$_fp_user" ]; then
-	echo "SKIP  no non-root user to read as; root ignores chmod 000"
+	check_skip "the unreadable-source refusal" "SKIP  no non-root user to read as; root ignores chmod 000" "no non-root user to read as"
 else
 	_fp_base="$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")"
 	check "premise: the tree fingerprints to something when it is readable" \
