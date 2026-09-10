@@ -826,6 +826,33 @@ def test_the_mode_this_layer_only_narrows_is_still_listed_as_open(expect):
                     "the document still names the mode this layer only narrows")
     expect.text("open" if "raises-catches-setup" in section3 else "moved", "open",
                 "and names it in the section for what is NOT refused")
+    # APPEARING IN SECTION 3 IS NOT THE SAME AS BEING OPEN, and this arm passed while
+    # the document said the opposite of what it exists to assert. Section 3 keeps a
+    # back-reference for every mode that MOVES -- "`X` is now closed" -- so the id is
+    # present in section 3 whichever state it is in. A branch that wrote
+    # "`raises-catches-setup` is now closed." into section 3 and added the row to
+    # section 2 satisfied the line above and moved the refused count to 29.
+    #
+    # The arm already split on "is now closed" for the OTHER mode, two lines below, and
+    # did not apply the same care to its own subject. Two further conditions, because
+    # either alone can be satisfied by the wrong document: the id must appear in section
+    # 3 OUTSIDE any closure back-reference, and it must not appear in section 2 at all.
+    # Found by taking the closure claim seriously enough to measure the residuals, which
+    # showed the mode is reachable by a comprehension and by a helper one file over.
+    # PER LINE, NOT BY SPLITTING, and my first version of this condition got that wrong.
+    # `split("is now closed")` truncates at the FIRST back-reference in section 3, which
+    # today belongs to `insert-wrote-no-rows` and sits ABOVE this mode's entry -- so the
+    # check reported "only as a back-reference" about a document that names the mode
+    # correctly. A positional test on a section that holds several back-references is a
+    # test about their order.
+    named_open = [ln for ln in section3.splitlines()
+                  if "raises-catches-setup" in ln and "is now closed" not in ln]
+    expect.at_least(len(named_open), 1,
+                    "and names it OUTSIDE a closure back-reference, which reads the same way")
+    section2 = doc[re.search(r"^## 2\. ", doc, re.M).end():start.start()]
+    expect.text("absent" if "raises-catches-setup" not in section2 else "claimed refused",
+                "absent",
+                "and does not also claim it refused in the section for what IS refused")
     expect.text("absent" if "raises-too-broad" not in section3.split("is now closed")[0]
                 else "present", "absent",
                 "premise: and the mode this layer DOES close is not loose in section 3")

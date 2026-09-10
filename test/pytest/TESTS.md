@@ -1418,8 +1418,8 @@ over tests nothing ran.
 ## 18. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 29
-of them.** The other 43, of which 42 were demonstrated, are listed there with the
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 28
+of them.** The other 44, of which 43 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
 Read it before adding a test. One gap is most likely to affect a new test now.
@@ -1596,7 +1596,7 @@ one condition faithfully, and require the copy to go blind.
 | `test_a_conftest_cannot_switch_the_broad_family_list_off` | the rule's own family list is not writable from the corpus it polices |
 | `test_a_bare_sqlstate_expression_does_not_pin_anything` | `exc.value.sqlstate` as a statement of its own asserts nothing, so mentioning the field is not pinning it |
 
-### How `raises-catches-setup` closed
+### How `raises-catches-setup` narrowed, and what is left
 
 The count rule refuses a block holding more than one top-level statement. Two shapes
 are **one** statement and still hide the setup inside the block, so the count saw
@@ -1625,8 +1625,36 @@ and that is what makes the budget zero. Measured over the corpus: five
 `pytest.raises` blocks, four calling `build_and_install` (imported) and one calling a
 method, and the scan reports **no offence** on any of them.
 
-**The residual is a method.** A method that performs setup and then the statement is
-invisible to this rule, and no static rule can see inside it.
+### What is still reachable, measured
+
+The mode stays in `VACUITY_MODES.md` section 3, and the refused count did not move,
+because two ordinary spellings still reach it:
+
+| shape | verdict |
+| --- | --- |
+| a `for` loop over two statements | refused |
+| the same two as a **list comprehension** | allowed |
+| the same two as a **tuple of calls** | allowed |
+| a helper defined in **another file** | allowed |
+| an honest one-statement helper defined in **this** file | refused — a false positive |
+
+A comprehension and a tuple are **expressions**, not compound statements, so a rule
+about statement kinds cannot see them. And `local_defs` is built from one file, so
+moving the helper one file over defeats it. Neither is a contrivance; both are ordinary
+Python. The last row is the rule's cost rather than a gap — an honest single-statement
+local helper is refused, and the author must inline it.
+
+A method that performs setup and then the statement is invisible for the same reason,
+and no static rule can see inside it.
+
+**The arm that should have caught the overclaim did not.**
+`test_the_mode_this_layer_only_narrows_is_still_listed_as_open` required the mode to be
+named in section 3 — and section 3 keeps a back-reference for every mode that *moves*
+("`X` is now closed"), so the id is present in section 3 whichever state the document
+claims. A first version of this work wrote the closure into section 3, added the row to
+section 2, moved the count to 29, and that arm passed. It now also requires the mode to
+be named outside a closure back-reference and to be absent from section 2; all three
+shapes of the overclaim redden it. Residuals named by @jdatcmd on review.
 | `test_a_sqlstate_assigned_and_never_read_does_not_pin_anything` | the same hole one step on: bound to a name nothing uses |
 | `test_one_hop_through_a_local_name_is_an_honest_pin` | the cost side — `code = exc.value.sqlstate` then `expect.text(code, ...)` stays collectable |
 | `test_the_keyword_form_is_checked_by_both_rules` | `pytest.raises(expected_exception=...)` is not an exemption from either rule |

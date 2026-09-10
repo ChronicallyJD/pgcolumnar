@@ -47,8 +47,8 @@ recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 29 |
-| named in section 3, not refused | 43 |
+| named in section 2, refused today | 28 |
+| named in section 3, not refused | 44 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -65,7 +65,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-29 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+28 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -87,7 +87,6 @@ test in `test_layer.py` that fails without it.
 | an empty parameter set fails the run, with its own message | `empty-parametrize-is-a-silent-skip` |
 | a skip during fixture setup fails the run | `session-fixture-skip-greens-the-whole-suite` |
 | a broad `pytest.raises` must pin a SQLSTATE, found by AST | `raises-too-broad` |
-| a `pytest.raises` block may not hold a compound statement or call a function this file defines | `raises-catches-setup` |
 | every comparison refuses a value carrying the `QUERY_ERROR` prefix, on either side | `error-swallowed-to-empty` |
 | a write whose command tag reports 0 rows fails the test unless the zero is named | `insert-wrote-no-rows` |
 
@@ -122,7 +121,7 @@ guard whose subject is false greens has no business emitting a false red.
 
 ## 3. What it does not refuse
 
-55 modes by the run's count, **43 of them named below**, **47 demonstrated by a run**. 51 have a refusal already designed.
+55 modes by the run's count, **44 of them named below**, **48 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -187,9 +186,9 @@ Still open in this family:
 `DatabaseError`, `Exception` or `BaseException` does not collect unless the block
 binds the exception and the body pins its SQLSTATE. See section 2.
 
-**`raises-catches-setup` is now closed.** The statement COUNT rule refused a block
-  holding more than one top-level statement, and two shapes are ONE statement that still
-  performs the setup inside the block:
+- `raises-catches-setup` — **narrowed again, and still not closed.** The statement COUNT
+  rule refused a block holding more than one top-level statement, and two shapes are ONE
+  statement that still performs the setup inside the block:
 
       with pytest.raises(psycopg.errors.UndefinedObject) as exc:
           _setup_then_run(conn)          # a HELPER CALL: one statement
@@ -199,21 +198,36 @@ binds the exception and the body pins its SQLSTATE. See section 2.
               conn.execute(stmt)                     # statement holding two
 
   Both were measured against the shipped scan reporting `1 passed`, exit 0, **zero
-  offences**, with the setup raising and the statement under test never running.
+  offences**, with the setup raising and the statement under test never running. Both are
+  refused now, by two rules: no compound statement (all nine kinds Python has, looked up
+  by name so a missing `TryStar` or `Match` cannot silently narrow the rule), and no call
+  to a function DEFINED IN THE SAME FILE, anywhere in the statement.
+
+  WHAT REMAINS, measured rather than reasoned, which is why this entry stays in section 3
+  and the refused count did not move:
+
+      a `for` loop over two statements                     REFUSED
+      the same two statements as a list comprehension      allowed
+      the same two as a tuple of calls                     allowed
+      a helper defined in ANOTHER file                      allowed
+      an honest one-statement helper defined in THIS file   REFUSED (a false positive)
+
+  A comprehension and a tuple are EXPRESSIONS rather than compound statements, so a rule
+  about statement kinds cannot see them; and `local_defs` is built from one file, so
+  moving the helper one file over defeats it. Both are ordinary Python, not contrivances.
+  The last row is the rule's cost rather than a gap: an honest single-statement local
+  helper is refused, and the author must inline it.
 
   THE FIX IS NOT A DEEPER COUNT, for the reason this entry always gave: counting
-  recursively would also refuse a legitimate single-statement loop. It is a claim about
-  WHICH statement raised, in two rules — no compound statement (all nine kinds, looked
-  up by name so a missing `TryStar` or `Match` cannot silently narrow the rule), and no
-  call to a function DEFINED IN THE SAME FILE, anywhere in the statement. A call to an
-  IMPORTED function or to a METHOD is the thing under test and stays allowed, which is
-  what makes the budget zero: measured over the corpus, five `pytest.raises` blocks —
-  four calling an imported function, one calling a method — and no offence on any.
+  recursively would also refuse a legitimate single-statement loop. What would close it
+  is a claim about which statement raised that does not depend on the SHAPE of the
+  statement -- a helper that runs exactly one statement and owns the assertion. Measured,
+  the corpus has no SQL-raising `pytest.raises` block at all, so that helper would have
+  no call sites today and would be an instrument with nothing exercising it.
 
-  THE RESIDUAL IS A METHOD. A method that performs setup and then the statement is
-  invisible to this rule, and no static rule can see inside it. The two arms that used
-  to assert these shapes were NOT refused now assert that they are, so the closure is a
-  measurement rather than a sentence. See TESTS.md section 20.
+  The two arms that used to assert these shapes were NOT refused now assert that they
+  are, so the narrowing is a measurement rather than a sentence. Residuals named by
+  @jdatcmd on review. See TESTS.md section 20.
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
   `zero-on-both-arms`, `tuple-assert-always-true`, `approx-of-nothing`
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
@@ -362,9 +376,10 @@ Each entry names the red test to write first.
    It closes `raises-too-broad` and narrows `raises-catches-setup`, which stays
    open in 3.4 with the two shapes it cannot see named there. What would close the
    sibling is the next entry:
-5. `test_layer_requires_the_raiser_to_be_the_statement_under_test` — closes
-   `raises-catches-setup`. It needs a claim about WHICH statement raised, not a
-   deeper statement count; 3.4 says why a recursive count is the wrong fix.
+5. ~~`test_layer_requires_the_raiser_to_be_the_statement_under_test` — closes
+   `raises-catches-setup`.~~ **Done, and it NARROWS rather than closes** — 3.4 lists what
+   remains, measured: a comprehension or a tuple instead of a `for`, and a helper defined
+   in another file. Both are ordinary Python. The refused count therefore did not move.
 
 The three that turned a whole run green rather than one test are done. What remains
 is per-assertion work, so the ordering matters less: take the sentinel first, since
@@ -377,6 +392,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 29 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 28 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.
