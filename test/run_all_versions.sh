@@ -940,6 +940,99 @@ pgc_log_shows_accounting() {	# pgc_log_shows_accounting LOGFILE -> yes|no
 	fi
 }
 
+pgc_log_shows_any_accounting() {	# pgc_log_shows_any_accounting LOGFILE -> yes|no
+	# Did this suite count its checks AT RUNTIME, by any mechanism the log shows?
+	#
+	# Two exist in the tree. lib.sh's pgc_summary prints the accounting line, and
+	# 239 suites use it. bench_guards and docs_style keep private counters and
+	# print their own `checks run: N`; they never source lib.sh, so the first
+	# reader cannot see them, and calling them unaccounted would be false.
+	#
+	# Both are runtime-observable and derived rather than declared, so a suite
+	# that adopts either mechanism leaves the debt bucket on its own -- which is
+	# the property that keeps the debt file from becoming a permission slip.
+	local _log="$1"
+	[ -f "$_log" ] || { echo no; return 0; }
+	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log" || true)" != 0 ] \
+		|| [ "$(grep -cE '^checks run: [0-9]+$' "$_log" || true)" != 0 ]; then
+		echo yes
+	else
+		echo no
+	fi
+}
+
+pgc_reconcile_population() {	# pgc_reconcile_population REGISTERED ACCOUNTED NOTDISPATCHED DEBT -> 0 ok, 1 unaccounted
+	# THE REGISTERED SET IS AN INPUT. pgc_reconcile_accounting reconciles the
+	# declared set against the observed one, and both are derived from the suites
+	# themselves -- so a registered suite in NEITHER is outside the universe it
+	# reconciles. Driven from that function with all its inputs empty: it prints
+	# `inputs=0 | both=0 ... sum=0` and returns 0, whatever SUITES holds.
+	#
+	# Reported by @linuxhikerpm, structurally: treating absence of a declaration
+	# as absence from the population preserves the overcount this change is named
+	# for. So the population is reconciled separately, over its own four buckets,
+	# and every registered suite must land in exactly one:
+	#
+	#   accounted        its log shows it counted its checks, by either mechanism
+	#   not dispatched   the driver recorded that it never ran it
+	#   known debt       named in the tracked debt file
+	#   unaccounted      none of the above -- FAILS, by name
+	#
+	# The debt file is DEBT, not an exemption: it is tracked, so adding a name is
+	# a diff a reviewer sees, and a name that starts accounting or stops being
+	# registered is reported so the burn-down cannot stall silently.
+	local _reg="$1" _acct="$2" _nd="${3:-}" _debt="${4:-}" _rc=0
+	local _rf _af _ndf _df _unacc _stale_acct _stale_reg _n
+	local _nreg _nacc _nnd _ndebt _nunacc _sum
+
+	_rf="$(mktemp)"; _af="$(mktemp)"; _ndf="$(mktemp)"; _df="$(mktemp)"
+	LC_ALL=C sort -u "$_reg" 2>/dev/null | sed '/^$/d' >"$_rf"
+	LC_ALL=C sort -u "$_acct" 2>/dev/null | sed '/^$/d' >"$_af"
+	[ -n "$_nd" ] && [ -f "$_nd" ] && LC_ALL=C sort -u "$_nd" | sed '/^$/d' >"$_ndf"
+	[ -n "$_debt" ] && [ -f "$_debt" ] && \
+		grep -vE '^[[:space:]]*(#|$)' "$_debt" | LC_ALL=C sort -u >"$_df"
+
+	# Buckets, in precedence order, so each registered name lands in exactly one.
+	local _t1 _t2
+	_t1="$(mktemp)"; _t2="$(mktemp)"
+	LC_ALL=C comm -23 "$_rf" "$_af"  >"$_t1"          # registered, not accounted
+	LC_ALL=C comm -23 "$_t1" "$_ndf" >"$_t2"          # ... nor not-dispatched
+	_unacc="$(LC_ALL=C comm -23 "$_t2" "$_df")"       # ... nor known debt
+
+	_nreg="$(grep -c . "$_rf" || true)"
+	_nacc="$(LC_ALL=C comm -12 "$_rf" "$_af" | grep -c . || true)"
+	_nnd="$(LC_ALL=C comm -12 "$_t1" "$_ndf" | grep -c . || true)"
+	_ndebt="$(LC_ALL=C comm -12 "$_t2" "$_df" | grep -c . || true)"
+	_nunacc="$(printf '%s' "$_unacc" | grep -c . || true)"
+	_sum=$(( _nacc + _nnd + _ndebt + _nunacc ))
+
+	# Debt that is no longer debt. Reported rather than fatal: a burn-down that
+	# reddens the gate the moment someone FIXES something teaches people not to.
+	_stale_acct="$(LC_ALL=C comm -12 "$_df" "$_af")"
+	_stale_reg="$(LC_ALL=C comm -23 "$_df" "$_rf")"
+	rm -f "$_rf" "$_af" "$_ndf" "$_df" "$_t1" "$_t2"
+
+	if [ "$_nunacc" != 0 ]; then
+		while IFS= read -r _n; do
+			[ -n "$_n" ] && echo "    registered but accounted by nothing: $_n"
+		done <<<"$_unacc"
+		_rc=1
+	fi
+	while IFS= read -r _n; do
+		[ -n "$_n" ] && echo "    listed as debt but now accounts: $_n"
+	done <<<"$_stale_acct"
+	while IFS= read -r _n; do
+		[ -n "$_n" ] && echo "    listed as debt but not registered: $_n"
+	done <<<"$_stale_reg"
+
+	echo "  population reconciliation: registered=$_nreg | accounted=$_nacc, not dispatched=$_nnd, known debt=$_ndebt, unaccounted=$_nunacc | sum=$_sum"
+	if [ "$_nreg" != "$_sum" ]; then
+		echo "    the population does not add up: $_nreg registered, $_sum in the buckets"
+		_rc=1
+	fi
+	return $_rc
+}
+
 pgc_reconcile_accounting() {	# pgc_reconcile_accounting DECLARED OBSERVED [NOTDISPATCHED] -> 0 ok, 1 asymmetric
 	# Set equality in both directions. The two directions catch opposite
 	# mistakes and neither can stand in for the other:
@@ -1137,6 +1230,24 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	fi
 	if ! pgc_reconcile_accounting "$_acc_declared" "$_acc_observed" "$_acc_notdisp"; then
 		echo "  PG$major cannot account for every registered suite, which is not a pass"
+		verfail=1
+	fi
+
+	# THE POPULATION, which the symmetry check above cannot see (#916, reported by
+	# @linuxhikerpm). Its inputs are both derived from the suites, so a registered
+	# suite in neither is outside the universe it reconciles. Here the registered
+	# set IS the input, and a name accounted by nothing fails by name.
+	_acc_registered="$builddir/accounting.registered"
+	_acc_accounted="$builddir/accounting.accounted"
+	printf '%s\n' "${SUITES[@]}" >"$_acc_registered"
+	: >"$_acc_accounted"
+	for s in "${SUITES[@]}"; do
+		[ "$(pgc_log_shows_any_accounting "$builddir/${s}.log")" = yes ] \
+			&& printf '%s\n' "$s" >>"$_acc_accounted"
+	done
+	if ! pgc_reconcile_population "$_acc_registered" "$_acc_accounted" \
+		"$_acc_notdisp" "$builddir/test/suites_without_accounting.txt"; then
+		echo "  PG$major has a registered suite nothing accounts for, which is not a pass"
 		verfail=1
 	fi
 

@@ -1096,6 +1096,46 @@ suites are exempt is not a fact about correctness, and pinning it would be a sec
 copy of the list this design removes. What is asserted is that the partition covers
 the population and that both buckets are occupied.
 
+### `test_the_accounted_reader_takes_either_runtime_mechanism`
+
+Two runtime-observable mechanisms exist: `pgc_summary`'s accounting line, used by 239
+suites, and a suite's own `checks run:` line, which `bench_guards` and `docs_style`
+print from private counters without ever sourcing `lib.sh`. A reader that knew only the
+first would call those two unaccounted, which is false.
+
+### `test_a_registered_suite_accounted_by_nothing_fails_by_name`
+
+The defect @linuxhikerpm blocked #922 on. `pgc_reconcile_accounting` takes the declared
+and observed sets, both derived from the suites themselves, so a registered suite in
+neither is **outside the universe it reconciles** — with all its inputs empty it reports
+complete symmetry and returns 0, whatever `SUITES` holds. Treating absence of a
+declaration as absence from the population preserves the overcount.
+
+`pgc_reconcile_population` takes the registered set as an input and puts every
+registered suite in exactly one of four buckets: accounted, not dispatched, known debt,
+or unaccounted — and unaccounted fails, by name. Each of the three ways out is asserted
+to actually let a suite out, or the bucket would be a name for "always fails".
+
+### `test_the_debt_file_excuses_only_what_it_names`
+
+Debt is recorded by name rather than as a count, which is what makes it a burn-down: a
+new unaccounted suite fails while the known ones are excused. Debt that is no longer
+debt — a suite that now accounts, or one no longer registered — is reported, so the
+burn-down cannot stall silently. Those two are reported rather than fatal: a gate that
+reddens the moment someone *fixes* something teaches people not to fix things.
+
+### `test_the_population_partitions_and_prints_its_identity`
+
+`inputs == sum(buckets)` over the registered population. Unlike the symmetry check's
+identity, this one can be false on the data: a name can genuinely fall outside all four
+buckets.
+
+### `test_the_debt_file_is_tracked_and_holds_only_registered_suites`
+
+`test/suites_without_accounting.txt` is tracked so that adding a name is a diff a
+reviewer sees — the whole reason it is a file and not a number in the environment. Every
+name in it must be a registered suite.
+
 ### `test_the_declaration_reader_survives_pipefail_on_a_long_suite`
 
 A regression arm. The first implementation piped `sed` into `grep -q`; grep exits on
