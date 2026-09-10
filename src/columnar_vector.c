@@ -3367,8 +3367,9 @@ pgcolumnar_batch_gates_ok(const PgColumnarAggSpec *specs, int naggs,
 	 *
 	 * The gate below is exactly the exactness marker the conservative keys need
 	 * kept out of the fold: PgColumnarBuildScanKeys emits keys WEAKER than their
-	 * clause for a ScalarArrayOpExpr ([min, max] range, #704) and for an anchored
-	 * LIKE (#426), and pgcolumnar_clause_to_scankey now reports that inexactness.
+	 * clause for a ScalarArrayOpExpr (a set key with a bounded [min,max]
+	 * fallback, #704/#752) and for an anchored LIKE (#426), and
+	 * pgcolumnar_clause_to_scankey reports that inexactness.
 	 * PgColumnarQualsExactlyKeyed demands one EXACT key per clause, so those keys
 	 * never serve as the fold's WHERE even if pgcolumnar_clause_to_predicate were
 	 * later taught to accept a SAOP. The byval gather guard below is a second,

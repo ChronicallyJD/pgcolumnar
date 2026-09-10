@@ -963,9 +963,10 @@ pgcolumnar_clause_to_scankey(Node *clause, Index scanrelid, TupleDesc tupdesc,
 	*exact = false;
 
 	/*
-	 * `col IN (...)` / `col = ANY(array)` becomes a [min, max] range (#704). Its
-	 * keys are conservative, so this returns with exact still false and the fold
-	 * refuses them (#715).
+	 * `col IN (...)` / `col = ANY(array)` becomes one set key, with a bounded
+	 * [min,max] fallback above the element limit (#704, #752). Both forms are
+	 * conservative pruning keys, so exact remains false and the fold refuses
+	 * them as its complete row filter (#715).
 	 */
 	if (IsA(clause, ScalarArrayOpExpr))
 		return pgcolumnar_saop_scankey((ScalarArrayOpExpr *) clause,
