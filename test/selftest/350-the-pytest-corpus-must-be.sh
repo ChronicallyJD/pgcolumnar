@@ -88,17 +88,41 @@ check "premise: the sweep found the corpus rather than an empty glob" \
 check "every test file and every test in the corpus is named in TESTS.md" \
 	"$(_dcv_missing "$_dcv_dir" "$_dcv_doc")" "[]"
 
-# The count TESTS.md states, parsed out of it. Written in a fixed form precisely
-# so it can be read back: prose that says "twenty-five" cannot be compared with
-# anything, which is how the stale header survived being read many times.
+# TESTS.md STATES NO TOTALS, AND THAT IS THE POINT (#908).
+#
+# It used to, and this part compared the stated pair against the corpus, which is
+# what made it a claim rather than decoration. The problem was never the check: it
+# was that the number was WRITTEN rather than DERIVED, and its correct value is a
+# function of the MERGE rather than of either branch. It collided on essentially
+# every rebase touching the corpus -- ten times in one day, both sides wrong every
+# time, so there was no side to pick.
+#
+# REMOVING IT COSTS NOTHING, provably. The two sweeps are strictly stronger than
+# any count: the arm above requires every test on disk to be NAMED here, and the
+# reverse arm below requires every name here to EXIST on disk. Two subsets in
+# opposite directions is set equality, so any count over the document equals the
+# count over the corpus. A stated total was a derived value maintained by hand.
 _dcv_stated="$(grep -oE '^\*\*[0-9]+ tests in [0-9]+ files\.\*\*' "$_dcv_doc" \
 	| head -1 | grep -oE '[0-9]+' | tr '\n' ' ' | sed 's/ $//')"
 
-check "TESTS.md states its totals in a form that can be read back" \
-	"$([ -n "$_dcv_stated" ] && echo yes || echo no)" "yes"
+check "TESTS.md states no totals line for a merge to get wrong" \
+	"$([ -z "$_dcv_stated" ] && echo none || echo "$_dcv_stated")" "none"
 
-check "and the totals it states are the totals on disk" \
-	"$_dcv_stated" "$_dcv_seen"
+# PREMISE: the reader must still be able to FIND a totals line, or the arm above
+# passes because the parser is broken rather than because the line is gone --
+# which is the shape this whole part exists to refuse.
+# $_dcv_fix is not created until the failure-proof section below, and this file
+# runs under `set -u`, so this fixture makes its own path rather than borrowing
+# one that does not exist yet.
+_dcv_ht="$PGC_WORKDIR/doccov-hastotals"; mkdir -p "$_dcv_ht"
+printf '**7 tests in 3 files.** and prose\n' > "$_dcv_ht/HASTOTALS.md"
+check "premise: the reader still finds a totals line when one is there" \
+	"$(grep -oE '^\*\*[0-9]+ tests in [0-9]+ files\.\*\*' "$_dcv_ht/HASTOTALS.md" \
+		| head -1 | grep -oE '[0-9]+' | tr '\n' ' ' | sed 's/ $//')" "7 3"
+
+# And the counts still REACH a reader -- they move to this run's output, where
+# they are computed from the corpus and cannot go stale.
+echo "      CORPUS: $_dcv_seen (test functions, files)"
 
 # ---- and the guard must be able to FAIL --------------------------------------
 #
@@ -132,6 +156,9 @@ check "an undocumented file is caught along with the tests inside it" \
 check "the sweep counts the fixture's tests and files" \
 	"$(_dcv_count "$_dcv_fix")" "2 1"
 
+# Kept although the real document no longer states a total: it proves the
+# comparison still works, so "no totals line" above is a fact about the document
+# rather than about a broken reader.
 check "a stated total that disagrees with disk is visible" \
 	"$([ "$(grep -oE '^\*\*[0-9]+ tests in [0-9]+ files\.\*\*' "$_dcv_fix/GOOD.md" \
 		| grep -oE '[0-9]+' | tr '\n' ' ' | sed 's/ $//')" = "$(_dcv_count "$_dcv_fix")" ] \
@@ -208,7 +235,39 @@ check "an unbackticked name in prose is not treated as a claim" \
 
 unset -f _dcv_absent
 
-unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix
+# ---- and the names must be UNIQUE, or the equality argument does not hold ----
+#
+# The two sweeps give equality of the two NAME SETS. That is not equality of
+# DEFINITION COUNTS, which is what a total counts: two files defining one name
+# leave both arms green while the counts differ (@jdatcmd, against #919). It
+# cannot happen today, so the conclusion was true in fact and not by
+# construction -- the difference between an argument and a guard.
+#
+# It closes something real beyond the argument: `_dcv_missing` asks whether a
+# name appears in the document AT ALL, so a test defined TWICE and documented
+# ONCE reads as fully covered while pytest runs both.
+
+_dcv_dupes() {	# _dcv_dupes DIR -> "" or the repeated names
+	grep -hoE '^def (test_[A-Za-z0-9_]+)' "$1"/test_*.py 2>/dev/null \
+		| sed 's/^def //' | sort | uniq -d
+}
+
+check "no test name is defined twice in the corpus" \
+	"$(_dcv_dupes "$_dcv_dir" | tr '\n' ' ' | sed 's/ $//')" ""
+
+# And it must be able to FAIL, on a fixture rather than on the tree.
+printf 'def test_shared_shape(expect):\n    pass\n' > "$_dcv_fix/test_a.py"
+printf 'def test_shared_shape(expect):\n    pass\n' > "$_dcv_fix/test_b.py"
+check "a name defined in two files is named, not passed over" \
+	"$(_dcv_dupes "$_dcv_fix" | tr '\n' ' ' | sed 's/ $//')" "test_shared_shape"
+rm -f "$_dcv_fix/test_a.py" "$_dcv_fix/test_b.py"
+
+check "control: distinct names in the same corpus report no duplicate" \
+	"$(_dcv_dupes "$_dcv_dir" | tr '\n' ' ' | sed 's/ $//')" ""
+
+unset -f _dcv_dupes
+
+unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix _dcv_ht
 unset -f _dcv_missing _dcv_count
 
 # ---- the mode inventory must count itself, and the count must be checkable ----
