@@ -126,13 +126,22 @@ _WRITE_TAGS = ("INSERT", "UPDATE", "DELETE", "MERGE", "COPY")
 
 
 class _Write:
-    """One write statement's outcome: the tag, the count, and whether it was named."""
+    """One write statement's outcome.
 
-    __slots__ = ("tag", "count", "acknowledged")
+    THE ORDINAL IS AMONG ALL THE TEST'S WRITES, not among the empty ones. The
+    refusal numbered the survivors it was about to print, so "#1" meant "the first
+    one I am complaining about" and identified no statement -- a reader counting
+    writes in the source went to the wrong line. Found by attacking this guard with
+    three writes where the empty one is the second: the filtered number said #1 and
+    the real answer was #2.
+    """
 
-    def __init__(self, tag, count):
+    __slots__ = ("tag", "count", "acknowledged", "ordinal")
+
+    def __init__(self, tag, count, ordinal):
         self.tag = tag
         self.count = count
+        self.ordinal = ordinal
         self.acknowledged = False
 
 
@@ -152,8 +161,19 @@ def note_write(nodeid, cur):
     if tag not in _WRITE_TAGS:
         return None
     count = getattr(cur, "rowcount", -1)
-    w = _Write(tag, count)
-    _WRITES.setdefault(nodeid, []).append(w)
+    seen = _WRITES.setdefault(nodeid, [])
+    w = _Write(tag, count, len(seen) + 1)
+    seen.append(w)
+    # STAMPED ON THE CURSOR THAT RAN IT, so an acknowledgement is about a statement
+    # rather than about a pair of numbers. Two writes can carry the same tag and the
+    # same count -- one accidental, one deliberate -- and matching on those
+    # acknowledged whichever came first, which marked the accidental one as named and
+    # reported the deliberate one instead. A psycopg cursor may refuse a new
+    # attribute, so this is defensive and `wrote` still falls back to matching.
+    try:
+        cur._pgc_write = w
+    except (AttributeError, TypeError):
+        pass
     return w
 
 # lib.sh:58 PGC_EXIT_INCOMPLETE. The same number deliberately: a suite that could
@@ -383,10 +403,30 @@ class Expect:
                 f"with no count is not a write whose rows can be asserted."
             )
         tag = str(getattr(cur, "statusmessage", "") or "").split(" ", 1)[0].upper()
-        for w in _WRITES.get(self.nodeid, ()):
-            if not w.acknowledged and w.count == count and (not tag or w.tag == tag):
-                w.acknowledged = True
-                break
+        if tag not in _WRITE_TAGS:
+            raise VacuityError(
+                # A SELECT matching nothing reports `SELECT 0` with rowcount 0, so
+                # this compared 0 with 0 and PASSED -- asserting "this write wrote no
+                # rows" about a statement that is not a write. It read as a deliberate
+                # zero and pinned nothing, which is this layer's own subject appearing
+                # inside the assertion meant to close it.
+                f"{name}: not-a-write: the statement reported tag "
+                f"{tag or '(none)'!s}, which is not one of {', '.join(_WRITE_TAGS)}. "
+                f"wrote() asserts how many rows a WRITE moved; for a query that "
+                f"returned no rows, assert the rows."
+            )
+        # BY IDENTITY FIRST: the write stamped on this cursor is the statement this
+        # call is about. The value match is the fallback for a cursor that could not
+        # be stamped, and it is why the ordinal in the refusal is absolute.
+        w = getattr(cur, "_pgc_write", None)
+        if w is not None and not w.acknowledged:
+            w.acknowledged = True
+        else:
+            for candidate in _WRITES.get(self.nodeid, ()):
+                if not candidate.acknowledged and candidate.count == count \
+                        and candidate.tag == tag:
+                    candidate.acknowledged = True
+                    break
         self.num(count, want, name)
 
     # -- row sets ----------------------------------------------------------
@@ -822,7 +862,7 @@ def pytest_runtest_call(item):
     # to the wrong statement.
     empty = [w for w in _WRITES.pop(item.nodeid, ()) if w.count == 0 and not w.acknowledged]
     if empty:
-        which = ", ".join(f"#{i + 1} {w.tag}" for i, w in enumerate(empty))
+        which = ", ".join(f"#{w.ordinal} {w.tag}" for w in empty)
         raise VacuityError(
             # ONE UNBREAKABLE TOKEN FIRST. pytest word-wraps a long traceback line,
             # and an arm matching a multi-word phrase against one line then matches

@@ -1664,6 +1664,9 @@ separately, so a reader sees a green test beside an error.
 | `test_expect_wrote_refuses_a_count_that_is_not_a_count` | `rowcount == -1` is refused rather than compared |
 | `test_expect_wrote_still_compares` | acknowledging a count does not excuse a wrong one |
 | `test_several_writes_and_only_the_empty_one_is_named` | with three writes and one empty, the refusal names the empty one |
+| `test_wrote_refuses_a_statement_that_is_not_a_write` | `expect.wrote` on a `SELECT 0` is refused, not compared |
+| `test_the_acknowledgement_names_one_write_and_not_its_twin` | naming one zero does not acknowledge a different identical zero |
+| `test_acknowledging_both_identical_zeros_passes` | the control for that arm: naming both is legitimate |
 
 ### Two properties, two files, on purpose
 
@@ -1682,6 +1685,30 @@ Splitting them is not tidiness. #917's pytest twin tested the reconciler's body 
 left the runner's CALL to it uncovered: removing the call kept the pytest half at
 9 passed while the shell half went red by one. Proving a function and proving its
 call site are two proofs, and the second is the one that goes missing.
+
+### Two holes found by attacking this guard, after it was green
+
+Both were found by asking what the guard would accept rather than what it refuses,
+and both are recorded because the first version shipped green with them.
+
+**`expect.wrote` accepted a SELECT.** A query matching nothing reports `SELECT 0`
+with `rowcount == 0`, so `expect.wrote(cur, 0, name)` compared 0 with 0 and passed --
+asserting "this write wrote no rows" about a statement that is not a write. It reads
+as a deliberate zero and pins nothing, which is this document's own subject appearing
+inside the assertion written to close it. A non-write tag is now refused.
+
+**The refusal numbered the wrong thing.** It enumerated the empty writes it was about
+to print, so `#1` meant "the first one I am complaining about" and identified no
+statement -- a reader counting writes in the source went to the wrong line. The
+ordinal is now the write's position among ALL the test's writes.
+
+That one also made an arm that could not discriminate. With two writes, both the old
+and the new numbering print `#1`, so the arm passed either way; the arm now uses
+three writes with the empty one second, where the old numbering says `#1` and the new
+one says `#2`. An acknowledgement is also matched by the cursor that ran the
+statement rather than by `(tag, count)`, because two writes can carry the same tag
+and the same count -- one accidental, one deliberate -- and matching on the pair
+marked the accidental one as named and reported the deliberate one instead.
 
 ### What made the arms themselves wrong twice
 

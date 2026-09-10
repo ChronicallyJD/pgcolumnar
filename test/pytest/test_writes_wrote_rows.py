@@ -199,3 +199,77 @@ def test_several_writes_and_only_the_empty_one_is_named(expect, pytester):
     expect.refusal(result, "and the UPDATE is the one named, not the INSERTs",
                    r"UPDATE")
     expect.refusal(result, "and the mode is named", r"insert-wrote-no-rows")
+
+# ---- two holes I found by attacking my own guard ------------------------------
+
+
+def test_wrote_refuses_a_statement_that_is_not_a_write(expect, pytester):
+    """`expect.wrote` must not accept a SELECT.
+
+    A SELECT that matched nothing reports `SELECT 0` with `rowcount == 0`, so
+    `expect.wrote(cur, 0, ...)` compared 0 with 0 and passed -- asserting "this
+    write wrote no rows" about a statement that is not a write at all. It reads as
+    a deliberate zero and pins nothing, which is this document's whole subject in
+    the assertion meant to close it.
+    """
+    result = _inner(pytester, """
+    def test_wrote_about_a_select(expect, request):
+        expect.wrote(_Cur("SELECT 0", 0), 0, "a select is not a write")
+    """)
+    expect.outcomes(result, "wrote() refuses a non-write statement", passed=0, failed=1)
+    expect.refusal(result, "and the refusal names the reason", r"not-a-write")
+
+
+def test_the_acknowledgement_names_one_write_and_not_its_twin(expect, pytester):
+    """Acknowledging one zero must not acknowledge a DIFFERENT identical zero.
+
+    Two writes can carry the same tag and the same count: one accidental, one
+    deliberate. Matching on (tag, count) alone acknowledged whichever came first,
+    so naming the deliberate one could mark the accidental one as named. The test
+    still failed -- one unacknowledged write remained -- but the refusal named the
+    wrong statement, which is the same defect as a wrong line number in a
+    traceback.
+
+    The write is now carried on the cursor that ran it, so an acknowledgement is
+    about that statement rather than about a pair of numbers.
+    """
+    # THREE WRITES, AND THE ORDINAL IS WHAT DISCRIMINATES. With two writes both
+    # spellings of this guard print "#1" and the arm passes either way -- it did,
+    # before I changed the shape. The accidental write is the SECOND of three here,
+    # so value-matching (which acknowledges the accidental one and leaves the
+    # deliberate one, then numbers the survivors from 1) prints "#1", and
+    # identity-matching with an absolute ordinal prints "#2". Only one of those is
+    # the statement a reader has to go and look at.
+    result = _inner(pytester, """
+    def test_two_identical_zeros(expect, request):
+        n = request.node.nodeid
+        fine = _Cur("INSERT 0 5", 5)
+        accidental = _Cur("INSERT 0 0", 0)
+        deliberate = _Cur("INSERT 0 0", 0)
+        for c in (fine, accidental, deliberate):
+            pgc_vacuity.note_write(n, c)
+        expect.wrote(deliberate, 0, "the third one is deliberate")
+    """)
+    expect.outcomes(result, "the accidental zero is still unacknowledged",
+                    passed=0, failed=1)
+    expect.refusal(result, "and it is named by its position among ALL the writes",
+                   r"#2")
+
+
+def test_acknowledging_both_identical_zeros_passes(expect, pytester):
+    """The control for the arm above: naming both is legitimate and must pass.
+
+    Without this, the arm above is satisfied by a guard that can never be
+    satisfied, which is a refusal that has stopped being a test.
+    """
+    result = _inner(pytester, """
+    def test_two_named_zeros(expect, request):
+        n = request.node.nodeid
+        first = _Cur("DELETE 0", 0)
+        second = _Cur("DELETE 0", 0)
+        pgc_vacuity.note_write(n, first)
+        pgc_vacuity.note_write(n, second)
+        expect.wrote(first, 0, "the first delete matched nothing")
+        expect.wrote(second, 0, "and so did the second")
+    """)
+    expect.outcomes(result, "naming both zeros passes", passed=1, failed=0)
