@@ -209,12 +209,16 @@ this was first counted. The file is the stable unit, so each file below is named
 with the mechanism that makes it a reference -- which is also what has to change
 for it to stop being one.
 
-**The debt this starts with, on 2026-09-10: 4 python files and 7 shell files.**
+**The debt this starts with, on 2026-09-10: 3 python files and 7 shell files**,
+with a fourth python file arriving in PR #923.
 
 Python that reaches into shell:
 
 - `test_build_refusal.py` -- sources the real `test/lib.sh` in three helpers
-  (`_sh`, `_sh_fp`, `_sh_fp_as`), behind 39 call sites. The largest of these.
+  (`_sh`, `_sh_fp`, `_sh_fp_as`), behind 36 calls. The largest of these. Counted
+  with `ast`, not `grep`: the pattern `[^_a-z]_sh(` also matches `def _sh(`, which
+  is how the first draft said 39 -- 36 calls plus the 3 definitions. Reported by
+  @OffgridwithJD. Rule 3 above, caught in the very entry that states it.
 - `test_suite_accounting.py` -- reads `run_all_versions.sh`'s text, sources the
   real `lib.sh` from a suite it writes, and executes the real runner.
 - `pgc_cluster.py` -- sources the real `test/lib.sh`.
