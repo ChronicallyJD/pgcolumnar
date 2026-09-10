@@ -185,16 +185,33 @@ check "parallel-built index returns each row once" \
 
 # amcheck where available. The skip must be visible: a check that reports nothing is
 # indistinguishable from a check that passes, which is what this file is about.
+# ONE LIST, BOTH BRANCHES. The names the else branch declines have to be the
+# names the then branch checks, or two logs from two boxes differ by ten checks
+# and nobody reading them can say why. It also stops the two drifting when an
+# index is added to one branch and not the other.
+_ixs="w_k w_k12 w_c18 w_expr w_part w_len w_par w_par2 w_pare w_parp w_ser"
 if psql_run "CREATE EXTENSION IF NOT EXISTS amcheck;" >/dev/null 2>&1 &&
 	[ "$(q "SELECT count(*) FROM pg_proc WHERE proname='bt_index_check'")" != "0" ]; then
-	for ix in w_k w_k12 w_c18 w_expr w_part w_len w_par w_par2 w_pare w_parp w_ser; do
+	for ix in $_ixs; do
 		out=$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
 			-d "$PGC_DB" -c "SELECT bt_index_check('$ix'::regclass)" 2>&1)
 		check "bt_index_check($ix)" \
 			"$(grep -qE 'ERROR' <<<"$out" && echo bad || echo ok)" "ok"
 	done
 else
-	check_skip "the amcheck oracle for $idx" "SKIP  amcheck is not installed on this build; the seq-scan oracle above still ran" "amcheck is not installed on this build"
+	# ELEVEN LINES, NOT ONE. The first version printed the old single summary
+	# line and recorded eleven, which selftest 400 refused and was right to: a
+	# line reading `SKIP  ...` that no record backs is exactly the shape this
+	# branch of the change exists to remove, and a reader cannot tell it from a
+	# recorded one. The then branch prints eleven PASS lines; this prints eleven
+	# SKIP lines, and the reason travels on each.
+	echo "      amcheck is not installed on this build; the seq-scan oracle above still ran"
+	for ix in $_ixs; do
+		check_skip "bt_index_check($ix)" \
+			"SKIP  bt_index_check($ix): amcheck is not installed on this build" \
+			"amcheck is not installed on this build"
+	done
 fi
+unset _ixs
 
 pgc_summary

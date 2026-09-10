@@ -279,6 +279,62 @@ check "premise: while a file that calls no check is not its business" \
 
 unset _sk_offenders _sk_f _sk_seen _sk_fix
 
+# ---- a check_skip must not read a name its own file never assigns ----------
+#
+# I SHIPPED THIS DEFECT AND THIS ARM IS WHY IT CANNOT COME BACK. Converting the
+# skips, I wrote `check_skip "the amcheck oracle for $idx"` into
+# native_index_projection.sh. The loop variable is `ix`, in the OTHER branch, and
+# `$idx` appeared nowhere else in the file. Every suite runs under `set -u`, so on
+# any box without amcheck the else branch died with "idx: unbound variable" at
+# rc=1, before pgc_summary and before any `checks run:` line. CI never saw it: the
+# PGDG packages carry amcheck, so CI always takes the then branch. Found by
+# @OffgridwithJD on a container without it.
+#
+# `bash -n` cannot see this -- the syntax is fine -- and neither can any arm that
+# only runs the branch CI happens to take. So the check is static and reads the
+# text: every name a check_skip line expands must be assigned somewhere in that
+# same file, or be one of the harness globals lib.sh exports.
+_us_globals=" PGC_MAJOR PGC_SUITE PGC_DB PGC_PORT PGC_BINDIR PGC_TESTDIR PGC_WORKDIR PGC_SRCDIR PGC_ALLOW_MISSING "
+_us_unbound() {	# _us_unbound FILE -> lines naming a variable the file never assigns
+	local _f="$1" _line _v _n
+	grep -nE '^[[:space:]]*check_skip ' "$_f" 2>/dev/null | while IFS= read -r _line; do
+		_n="${_line%%:*}"
+		for _v in $(printf '%s' "${_line#*:}" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | tr -d '${'); do
+			case "$_us_globals" in *" $_v "*) continue ;; esac
+			grep -qE "(^|[[:space:]]|;)$_v=" "$_f" && continue
+			grep -qE "for[[:space:]]+$_v[[:space:]]+in[[:space:]]" "$_f" && continue
+			grep -qE "local[[:space:]][^#]*\b$_v\b" "$_f" && continue
+			printf '%s:%s:%s\n' "${_f##*/}" "$_n" "$_v"
+		done
+	done
+}
+
+_us_bad=""
+for _us_f in "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh; do
+	[ -e "$_us_f" ] || continue
+	_us_bad="$_us_bad$(_us_unbound "$_us_f")"
+done
+check "no check_skip reads a name its own file never assigns" \
+	"$(printf '%s' "$_us_bad" | grep -c . || true)" "0"
+[ -z "$_us_bad" ] || printf '      %s\n' $_us_bad
+
+# The sweep must be able to find one, and must not flag a name that IS assigned.
+_us_fix="$PGC_WORKDIR/unbound"; rm -rf "$_us_fix"; mkdir -p "$_us_fix"
+printf 'check_skip "the oracle for $idx" "SKIP  x" "y"\n' > "$_us_fix/bad.sh"
+check "premise: it names a check_skip reading an unassigned variable" \
+	"$(_us_unbound "$_us_fix/bad.sh" | grep -c . || true)" "1"
+
+printf 'for ix in a b; do\ncheck_skip "the oracle for $ix" "SKIP  x" "y"\ndone\n' > "$_us_fix/good.sh"
+check "and leaves one whose variable is the loop it sits in" \
+	"$(_us_unbound "$_us_fix/good.sh" | grep -c . || true)" "0"
+
+printf 'idx=w_k\ncheck_skip "the oracle for $idx" "SKIP  x" "y"\n' > "$_us_fix/assigned.sh"
+check "and leaves one whose variable is assigned earlier" \
+	"$(_us_unbound "$_us_fix/assigned.sh" | grep -c . || true)" "0"
+
+unset -f _us_unbound
+unset _us_bad _us_f _us_fix _us_globals
+
 # ---- the timing helpers reported an outcome that nothing counted -------------
 #
 # check_timing and check_ratio_needs_quiet_machine, under PGC_SKIP_TIMING=1,
