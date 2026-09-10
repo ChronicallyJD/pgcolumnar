@@ -18,6 +18,62 @@ true until the next version shipped.
 
 ### Added
 
+- A broad `pytest.raises` must name a SQLSTATE, and the block must hold one
+  statement (#432).
+
+  `pytest.raises(psycopg.Error)` claims that one of 254 SQLSTATEs arrived, across 42
+  SQLSTATE classes, counted against psycopg 3.3.5. It does not claim even that much.
+  Measured on this tree before the guard landed, this reported `1 passed`, exit 0:
+
+      with pytest.raises(psycopg.Error):
+          conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+          conn.execute("SELECT pgc_definitely_no_such_function()")
+      expect.num(1, 1, "the server rejected the call")
+
+  What satisfied it was `OperationalError` with `sqlstate` None: the connect failed,
+  nothing reached a server, and the statement under test never executed.
+
+  `pgc_vacuity.py` now refuses two shapes at collection time, found by walking the
+  `ast` rather than matching lines, so an offending file does not collect at all. A
+  `raises` over `Error`, `DatabaseError`, `Exception` or `BaseException` must bind the
+  exception and pin its SQLSTATE, and any `raises` block must hold exactly one
+  top-level statement. `expect.sqlstate(exc.value, "42883", name)` is the honest form
+  the refusal points at; it compares a typed field, refuses a two-character SQLSTATE
+  class as the prefix claim it is, and refuses an empty set of codes so the tuple
+  escape hatch cannot become the hole.
+
+  The family list is bound inside the scan rather than at module level. Every
+  `conftest.py` under `test/pytest/` is imported before collection, so a module-level
+  tuple is writable from the corpus the rule polices -- `import pgc_vacuity` then
+  `pgc_vacuity.<the tuple> = ()` -- after which the scan reports zero offences for
+  ever and the suite is green with the guard off and nothing saying so. An arm writes
+  three spellings of the name onto the module and requires the refusal to still
+  arrive.
+
+  This CLOSES `raises-too-broad`, which moves to `VACUITY_MODES.md` section 2, and
+  only NARROWS `raises-catches-setup`, which stays in section 3.4. The statement rule
+  counts TOP-LEVEL statements, so two shapes still walk past it, each being one
+  statement that performs the setup inside the block: a call to a helper, and a
+  compound statement such as a `for` holding the setup and the statement under test.
+  Both are measured at `1 passed`, exit 0, zero offences, and both have an arm
+  asserting the scan reports nothing on them, so the residual is a measurement rather
+  than a sentence. A recursive statement count would catch them and would also refuse
+  a legitimate single-statement loop; what would close the mode is a claim about which
+  statement raised.
+
+  Parsed rather than grepped, because the suite writes the forbidden shape inside a
+  `pytester.makepyfile` string in every arm. Over `test/pytest/*.py` the `ast` finds
+  5 `pytest.raises` call sites and reports 0 offences, while a `pytest.raises(` line
+  regex matches 35 lines, 30 of them inside a string literal or a comment. Swapping
+  `ast.parse` for that regex makes the layer refuse its own test suite with 22
+  invented offences and exit 4, which is mutation 11 of 11 in the removal proof.
+
+  `test/pytest/test_raises_sqlstate.py` carries the behavioural arms, all through
+  `pytester`. `test/selftest/440-a-raises-must-name-a-sqlstate.sh` carries the static
+  half, so the structure is checked where pytest, psycopg and a virtualenv are not
+  installed; it also requires the two residual arms and the section 3.4 entry to
+  still exist, so the guard cannot quietly grow into a claim of completeness.
+
 - Exact zone-map boundary coverage now lives in matching shell and pytest tests
   (#831).
 
