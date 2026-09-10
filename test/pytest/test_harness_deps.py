@@ -81,12 +81,6 @@ NO_CLUSTER = [
     # declaration has to say so. The third time this arm has caught a merge-order
     # consequence rather than a mistake.
     "test_failed_query_sentinel.py",
-    # This branch's own new file, named by the same arm when main gained the
-    # classifier. It drives `test/lib.sh` by subprocess, so what it needs is bash
-    # and the tree rather than psycopg or a cluster: cluster-free, not
-    # driver-dependent, 9 passed in a venv with no driver. Note for whoever pays
-    # down the CONTEXT.md harness-independence debt -- this is one of the files on
-    # that list, so the job now runs a file the rule says should not have this
 ]
 
 
