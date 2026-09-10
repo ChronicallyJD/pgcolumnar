@@ -47,8 +47,8 @@ recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 25 |
-| named in section 3, not refused | 47 |
+| named in section 2, refused today | 26 |
+| named in section 3, not refused | 46 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -65,7 +65,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-25 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+26 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -86,6 +86,7 @@ test in `test_layer.py` that fails without it.
 | the reported node-id set is reconciled against the collected one | `crashed-worker-silently-loses-tests` |
 | an empty parameter set fails the run, with its own message | `empty-parametrize-is-a-silent-skip` |
 | a skip during fixture setup fails the run | `session-fixture-skip-greens-the-whole-suite` |
+| every comparison refuses a value carrying the `QUERY_ERROR` prefix, on either side | `error-swallowed-to-empty` |
 
 Three of those were added after checking this layer against the inventory rather
 than reasoning about it, and all three had passed silently before:
@@ -118,7 +119,7 @@ guard whose subject is false greens has no business emitting a false red.
 
 ## 3. What it does not refuse
 
-55 modes by the run's count, **47 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
+55 modes by the run's count, **46 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -191,10 +192,21 @@ Still open in this family:
 - `mutation-arm-unobservable` — both arms of an A/B produce the identical answer and
   both are green. The assertion that would catch it, that the arms must **differ**,
   is the one nobody writes.
-- `error-swallowed-to-empty` — two queries raise, a helper turns each into the same
-  falsy value, and they compare equal. `lib.sh` closed this deliberately with a
-  unique `QUERY_ERROR.$seq` per failure. **The port has the sentinel constant but
-  nothing produces it.**
+**`error-swallowed-to-empty` is now closed.** Every comparison in the layer refuses a
+  value carrying the `QUERY_ERROR` prefix, on either side, at any depth — so two
+  queries that both failed cannot compare equal, whatever a helper turned them into.
+  `query_error()` produces a value unique per occurrence, as `lib.sh`'s
+  `QUERY_ERROR.$seq` does, for the paths that compare without the layer. See
+  section 2 and TESTS.md section 18.
+
+  THE EARLIER VERSION OF THIS PARAGRAPH SAID "the port has the sentinel constant but
+  nothing produces it", AND THAT WAS WRONG IN BOTH HALVES. Two sites did produce
+  sentinels by hand (`test_hilbert_locality.py`, one of them from inside SQL), and the
+  thing actually missing was not a producer: it was the refusal in four of the five
+  comparisons. `expect.text`, `expect.rows`, `expect.row_set` and `expect.ordered_rows`
+  each passed with a sentinel on both sides; only `expect.hash` refused. A map that
+  names the wrong gap is worse than one that admits it does not know, so the
+  measurement is recorded here rather than quietly replaced.
 - `guc-set-but-path-never-engaged`, `aggregate-masks-empty-fixture`,
   `db-derived-empty-parametrize`, `null-filter-matches-nothing`,
   `loop-over-zero-rows`, `assert-inside-a-loop-over-zero-rows`
@@ -257,6 +269,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 25 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 26 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.

@@ -23,12 +23,61 @@ import ast
 import numbers
 import pathlib
 
+import itertools
+
 import pytest
 
-# The sentinel a failed query yields, mirroring pgc_set_hash's QUERY_ERROR.$seq.
-# Unique per occurrence so two failing queries can never compare equal and pass.
+# The sentinel a failed query yields, mirroring lib.sh's `res="QUERY_ERROR.$seq"`.
+#
+# THE COMMENT HERE USED TO CLAIM "unique per occurrence so two failing queries can
+# never compare equal", WHICH WAS FALSE OF A CONSTANT. `QUERY_ERROR == QUERY_ERROR`,
+# so two failures that both assigned it compared EQUAL, and a test comparing one
+# failed query against another passed. Measured before the fix: `expect.text`,
+# `expect.rows`, `expect.row_set` and `expect.ordered_rows` all passed with the
+# sentinel on both sides.
+#
+# lib.sh does not have this problem because its sentinel is PRODUCED, with a
+# sequence number, by the one helper every suite calls. The port had the constant
+# and no producer, so uniqueness was a sentence rather than a mechanism.
+#
+# QUERY_ERROR stays as the PREFIX every refusal matches on. `query_error()` is the
+# producer, and it is what a caller should use.
 QUERY_ERROR = "QUERY_ERROR"
 EMPTY = "EMPTY"
+
+_query_error_seq = itertools.count(1)
+
+
+def query_error(detail=""):
+    """The value a failed query yields: unique per occurrence, by construction.
+
+    Two failures can never compare equal, which is the whole mechanism -- a helper
+    that turns every failure into one falsy value makes "both queries failed" look
+    exactly like "both queries agreed". lib.sh closed this with a sequence number
+    per failure and this is the port of that, not of the constant.
+
+    The sequence is per process. Under xdist each worker is its own process, so two
+    workers can mint the same number -- which is harmless, because a comparison only
+    ever happens inside one test, and the refusals below match the PREFIX rather
+    than any particular number.
+    """
+    n = next(_query_error_seq)
+    return f"{QUERY_ERROR}.{n}.{detail}" if detail else f"{QUERY_ERROR}.{n}"
+
+
+def _failed_query(v):
+    """Is this value a failed query's sentinel? Matches the prefix, at any depth.
+
+    A sentinel arrives as a CELL inside a row as often as it arrives as a whole
+    side -- `[(QUERY_ERROR,)]` is what a one-column query that failed looks like
+    after a helper swallowed the error -- so the walk is the point rather than a
+    convenience. Strings only: a tuple is walked, not tested.
+    """
+    if isinstance(v, str):
+        return v.startswith(QUERY_ERROR)
+    if isinstance(v, (list, tuple, set, frozenset)):
+        return any(_failed_query(x) for x in v)
+    return False
 
 # Reasons a test may declare itself unrunnable. Closed, exactly as lib.sh keeps it
 # closed, so "skipped" cannot become a way to stop asserting things quietly.
@@ -90,6 +139,25 @@ class Expect:
         self.unrunnable = None
 
     # -- the recorder -------------------------------------------------------
+    def _refuse_failed_query(self, name, got, want):
+        """Refuse a comparison where either side is a failed query.
+
+        ONE definition, called by every comparison, so an assertion added later
+        inherits it instead of being the next hole. `hash` had its own copy of this
+        and four other assertions had none: `text`, `rows`, `row_set` (which
+        delegates to `rows`) and `ordered_rows` each passed with the sentinel on
+        both sides, which is `error-swallowed-to-empty` exactly -- two queries
+        raise, a helper turns each into the same value, and they compare equal.
+        """
+        for side, v in (("left", got), ("right", want)):
+            if _failed_query(v):
+                raise VacuityError(
+                    f"{name}: the {side} side is a failed query: {v!r}. Two failures "
+                    f"compare equal, so this assertion cannot fail. Use "
+                    f"query_error() so each failure is distinct, and assert the "
+                    f"failure you expect rather than comparing two of them."
+                )
+
     def _counted(self):
         self.count += 1
 
@@ -123,6 +191,12 @@ class Expect:
         instruments differ, an ordered oracle could quietly be implemented as a set
         one and every ordering test in the tree would go silent.
         """
+        # BEFORE the repr mapping, not after. row_set hands `rows` a list of repr
+        # STRINGS, and `repr(("QUERY_ERROR.1",))` is `"('QUERY_ERROR.1',)"` -- which
+        # does not start with the prefix, so the refusal inside `rows` cannot see a
+        # sentinel that arrived as a cell. Delegating an assertion does not delegate
+        # its refusals when the delegation transforms the data.
+        self._refuse_failed_query(name, got, want)
         self.rows(sorted(map(repr, got)), sorted(map(repr, want)), name,
                   allow_empty=allow_empty)
 
@@ -148,6 +222,7 @@ class Expect:
                 f"{name}: both sequences are empty, so this comparison could not "
                 f"have failed. Use rows(..., allow_empty='why') if empty is the point."
             )
+        self._refuse_failed_query(name, g, w)
         if len(set(map(repr, g))) < 2 and len(set(map(repr, w))) < 2:
             raise VacuityError(
                 f"{name}: order cannot be observed in these sequences. Every element "
@@ -211,6 +286,7 @@ class Expect:
         correctly returned nothing. `allow_empty` takes a REASON, not a flag, so
         the escape hatch costs more to type than the honest assertion.
         """
+        self._refuse_failed_query(name, got, want)
         if _empty(got) and _empty(want) and not allow_empty:
             raise VacuityError(
                 f"{name}: both sides are empty, so this comparison could not have "
@@ -229,10 +305,9 @@ class Expect:
                 f"{name}: the same object is compared against itself, so this "
                 f"could not have failed."
             )
-        if isinstance(got, str) and got.startswith(QUERY_ERROR):
-            raise VacuityError(f"{name}: the left side is a failed query: {got!r}")
-        if isinstance(want, str) and want.startswith(QUERY_ERROR):
-            raise VacuityError(f"{name}: the right side is a failed query: {want!r}")
+        # The same definition the others use. This was the only assertion that
+        # refused a sentinel, and it did so with its own copy of the test.
+        self._refuse_failed_query(name, got, want)
         if _empty(got) and _empty(want):
             raise VacuityError(f"{name}: both hashes are empty.")
         self._counted()
@@ -241,7 +316,8 @@ class Expect:
 
     # -- text --------------------------------------------------------------
     def text(self, got, want, name):
-        """Compare text exactly. Refuses an empty expectation."""
+        """Compare text exactly. Refuses an empty expectation and a failed query."""
+        self._refuse_failed_query(name, got, want)
         if _empty(want):
             raise VacuityError(
                 f"{name}: the expected text is empty, so anything empty satisfies it."

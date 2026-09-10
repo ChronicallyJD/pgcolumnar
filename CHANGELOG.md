@@ -160,6 +160,51 @@ true until the next version shipped.
 
 ### Fixed
 
+- A failed query is no longer comparable with another failed query (#432).
+
+  `error-swallowed-to-empty`: two queries raise, a helper turns each into the same
+  value, and they compare equal. The test is green and has asserted nothing about
+  either query. `test/lib.sh` closed this by PRODUCING the sentinel with a sequence
+  number per failure -- `res="QUERY_ERROR.$seq"` -- so two failures can never compare
+  equal.
+
+  The pytest port had the constant `QUERY_ERROR = "QUERY_ERROR"`, a comment claiming it
+  was "unique per occurrence" -- which is false of a constant -- and a refusal in
+  exactly one assertion. Measured before the fix, with a sentinel on both sides:
+  `expect.hash` refused; `expect.text`, `expect.rows`, `expect.row_set` and
+  `expect.ordered_rows` all PASSED. Four of the five comparisons accepted two failed
+  queries as agreement. `expect.num`, `expect.at_least` and `expect.rowcount` refused
+  already, by their type guards rather than by anything about sentinels.
+
+  There is now one refusal, called by every comparison, so an assertion added later
+  inherits it instead of being the next hole -- which is how this survived: `hash` had
+  a refusal and the four written after it did not. It matches the prefix at any depth,
+  because a sentinel arrives as a CELL inside a row as often as it arrives as a whole
+  side. `row_set` refuses BEFORE it maps its rows through `repr`, since
+  `repr(("QUERY_ERROR.1",))` does not start with the prefix: delegating an assertion
+  does not delegate its refusals when the delegation transforms the data.
+
+  `query_error()` produces a value unique per occurrence, for the paths that compare
+  without the layer -- a helper comparing by hand, which is what the two existing
+  hand-rolled sentinels in `test_hilbert_locality.py` do. The refusal is the mechanism;
+  the producer is the second line. One of those two sentinels is produced by
+  `coalesce(...)` inside SQL and cannot use the Python producer, which is why the
+  refusal has to be the mechanism rather than the other way round.
+
+  Each refusal is proved load-bearing: removing it from one assertion at a time makes
+  the arm name that assertion and no other, five times out of five. The mutations are
+  only distinguishable with `__pycache__` cleared between runs -- the five deleted
+  lines are byte-identical, so three of the five leave the file the same size and
+  Python reuses the stale bytecode, which made two of the refusals look like they did
+  not bite.
+
+  `VACUITY_MODES.md` said "the port has the sentinel constant but nothing produces it",
+  and that was wrong in both halves: two sites did produce sentinels by hand, and the
+  thing actually missing was the refusal in four of the five comparisons. The
+  correction is recorded in the document rather than quietly replacing the sentence,
+  because a map that names the wrong gap is worse than one that admits it does not
+  know.
+
 - `ALTER TABLE ... RENAME COLUMN` now carries the new name into
   `pgcolumnar.projection_declaration`, for the named relation and for every
   inheritance descendant, including a `PARTITION OF` child (#888).
