@@ -94,6 +94,7 @@ SUITES=(
 	harness_selftest
 	hilbert_cluster
 	hilbert_curve
+	hilbert_locality
 	iceberg_catalog
 	iceberg_data_files
 	iceberg_deletes
