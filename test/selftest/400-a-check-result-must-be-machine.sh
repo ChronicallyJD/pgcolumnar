@@ -50,26 +50,45 @@ _human() {	# _human HELPER ARGS... -> the human lines that helper emitted
 check "a passing check emits exactly one record" \
 	"$(_rec check "a name" x x | wc -l)" "1"
 check "and its verdict field says PASS" \
-	"$(_rec check "a name" x x | cut -f4)" "PASS"
+	"$(_rec check "a name" x x | cut -f5)" "PASS"
 check "and its name field is the check's name, spaces intact" \
-	"$(_rec check "a name" x x | cut -f3)" "a name"
+	"$(_rec check "a name" x x | cut -f4)" "a name"
+
+# ---- and WHICH PART asked it ------------------------------------------------
+#
+# The suite is not enough. harness_selftest sources 40-odd parts into one shell,
+# and its premises are phrased to be COPIED: "premise: the pytest layer is where
+# THIS PART thinks it is" says "this part" so the same sentence works in any of
+# them. main carries two copies of that one and two of another, and the count
+# grows with every part anyone adds -- OffgridwithJD found all six of their own
+# branches adding more.
+#
+# So (suite, name) is not a key of checks, it is a key of check NAMES. The part
+# makes it a key of the thing it identifies, and it is derived from BASH_SOURCE
+# rather than from a convention, so the next part written the same way is keyed
+# correctly without anyone remembering.
+check "the record names the part the check was asked from" \
+	"$(_rec check "a name" x x | cut -f3)" "$(basename "${BASH_SOURCE[0]}" .sh)"
+check "premise: and that is this fragment, not the suite" \
+	"$([ "$(_rec check "n" x x | cut -f3)" != "$(_rec check "n" x x | cut -f2)" ] \
+		&& echo different || echo same)" "different"
 
 check "a failing check emits exactly one record" \
 	"$(_rec check "a name" x y | wc -l)" "1"
 check "and its verdict field says FAIL" \
-	"$(_rec check "a name" x y | cut -f4)" "FAIL"
+	"$(_rec check "a name" x y | cut -f5)" "FAIL"
 
 check "an unrunnable check emits exactly one record" \
 	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | wc -l)" "1"
 check "and its verdict field says UNRUN, which is neither of the other two" \
-	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f4)" "UNRUN"
+	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f5)" "UNRUN"
 check "and the REASON_CODE travels in the reason field, not in prose" \
-	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f5)" "MISSING_DEPENDENCY"
+	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f6)" "MISSING_DEPENDENCY"
 
 # A reason code the enum does not contain is already a FAIL. It must record that
 # verdict, not the one it was asked for.
 check "a bogus reason code records FAIL, not UNRUN" \
-	"$(_rec check_unrunnable "a name" NOT_A_REASON "x" | cut -f4)" "FAIL"
+	"$(_rec check_unrunnable "a name" NOT_A_REASON "x" | cut -f5)" "FAIL"
 
 # ---- every helper, not just the two that were easy --------------------------
 #
@@ -80,10 +99,10 @@ check "a bogus reason code records FAIL, not UNRUN" \
 check "check_text on an empty side emits one record" \
 	"$(_rec check_text "n" "" "x" | wc -l)" "1"
 check "and records FAIL, because nothing was compared" \
-	"$(_rec check_text "n" "" "x" | cut -f4)" "FAIL"
+	"$(_rec check_text "n" "" "x" | cut -f5)" "FAIL"
 check "check_num on a non-number emits one record" \
 	"$(_rec check_num "n" "abc" "1" | wc -l)" "1"
-check "and records FAIL" "$(_rec check_num "n" "abc" "1" | cut -f4)" "FAIL"
+check "and records FAIL" "$(_rec check_num "n" "abc" "1" | cut -f5)" "FAIL"
 check "check_ratio on a non-number emits one record" \
 	"$(_rec check_ratio "n" "abc" "1" "2" | wc -l)" "1"
 check "check_ratio with a zero side emits one record" \
@@ -91,7 +110,7 @@ check "check_ratio with a zero side emits one record" \
 check "check_ratio that forms a ratio emits one record" \
 	"$(_rec check_ratio "n" "1" "1" "2" | wc -l)" "1"
 check "and records PASS when the ratio is inside the bound" \
-	"$(_rec check_ratio "n" "1" "1" "2" | cut -f4)" "PASS"
+	"$(_rec check_ratio "n" "1" "1" "2" | cut -f5)" "PASS"
 check "pgc_pass emits one record" "$(_rec pgc_pass "n" | wc -l)" "1"
 check "pgc_fail emits one record" "$(_rec pgc_fail "n" "d" | wc -l)" "1"
 

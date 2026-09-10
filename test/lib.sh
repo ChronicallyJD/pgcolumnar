@@ -1009,6 +1009,30 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 			_v=FAIL
 			;;
 	esac
+	# WHICH PART asked this question, derived from the call stack.
+	#
+	# The suite is not enough. harness_selftest sources 40-odd parts into one
+	# shell, and its premises are phrased to be COPIED -- "premise: the pytest
+	# layer is where THIS PART thinks it is" says "this part" precisely so the
+	# same sentence works in any of them. main carries two copies of that one and
+	# two of another, and the number grows with every part anyone adds.
+	#
+	# So a key of (suite, name) is not a key of checks, it is a key of check
+	# NAMES, and they differ by however many parts share a boilerplate premise.
+	# One of them going red would then mark every sharer as observed red -- a
+	# claim about a check nothing attacked. Found by OffgridwithJD, who noticed
+	# that all six of their own branches added more.
+	#
+	# BASH_SOURCE, not a convention change, so the next part written the same way
+	# is keyed correctly without anyone remembering. Parameter expansion only: no
+	# basename fork, at 3,762 call sites.
+	local _part="" _bs
+	for _bs in "${BASH_SOURCE[@]}"; do
+		case "$_bs" in */lib.sh|lib.sh) continue ;; esac
+		_part="${_bs##*/}"; _part="${_part%.sh}"
+		break
+	done
+
 	printf '%s\n' "$_display"
 	# Tabs in a field would split it. Nothing in the tree puts one in a check
 	# name, and this makes that true rather than assumed.
@@ -1020,8 +1044,9 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	# an idle box, 2,000 calls, identical output on every input including a real
 	# tab: 3.1577 ms per call against 0.0096 ms, 331x, or 11.9 seconds of pure
 	# fork overhead across a full suite against 36 ms. Reported by OffgridwithJD.
-	printf 'RESULT\t%s\t%s\t%s\t%s\n' \
+	printf 'RESULT\t%s\t%s\t%s\t%s\t%s\n' \
 		"${PGC_SUITE:-unknown}" \
+		"${_part:-${PGC_SUITE:-unknown}}" \
 		"${_name//$'\t'/ }" \
 		"$_v" \
 		"${_reason//$'\t'/ }"
