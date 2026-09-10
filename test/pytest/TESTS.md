@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**134 tests in 11 files.** One hundred and nineteen of them test the harness rather than the
+**135 tests in 11 files.** One hundred and twenty of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -487,13 +487,27 @@ itself. The subject is the instrument every other arm in this section depends on
 if the fingerprint can be wrong, `never report on source you did not build` reports
 on nothing.
 
-`test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one` drives the
-real shell function with a **stub `md5sum` that is the real one except on its Nth
-call**, where it fails with no output — a fork that hits `EAGAIN`, an OOM kill, a
-loaded runner. The old code substituted that empty digest into the hash and
-returned status 0, so one unchanged tree produced three different confident
-answers. The premise arm requires the stub to agree with the real `md5sum` when
-nothing is configured to fail, or the test would be measuring the stub.
+`test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one` and
+`test_a_failed_digest_gives_unverified_and_never_a_false_stale` are the two arms
+here, and THE MECHANISM CHANGED WITH THE IMPLEMENTATION. They used to drive the real
+shell function with a **stub `md5sum`** on `PATH`, because the shell forked one
+per file. The digest now lives in `test/pgc_fingerprint.py` and uses `hashlib`,
+which no `PATH` can reach, so the stub would have left both arms green while
+testing nothing — the exact shape this corpus exists to refuse.
+
+A real read failure needs a real reader who is denied, and **root is denied
+nothing**: `chmod 000` is invisible to it. Measured before the arms were
+rewritten:
+
+    as root      28a7149e07ae   <- reads the mode-000 file regardless
+    as postgres  (empty)        <- the failure the arm needs
+
+So the tree is built outside any mode-0700 directory and read by a second user,
+and where no such user exists the arm records `expect.cannot_run` rather than
+passing. `test_one_tree_hashes_one_way_however_the_locale_is_set` pins the defect
+the single implementation removed on the way: `sort -z` used locale collation and
+nothing pinned a locale, so one tree hashed two ways —
+`LC_ALL=C` gave `6d122a7158d5` and `LC_ALL=en_US.UTF-8` gave `0b59bd75fa4f`.
 
 `test_a_failed_digest_gives_unverified_and_never_a_false_stale` is the property
 that matters. `stale` is the FATAL; `unknown` prints `freshness UNVERIFIED` and
@@ -1009,3 +1023,6 @@ complete. This is why the property comparison reads names.
 enclosing command line only while the plain word appears nowhere else in it. A probe
 whose body also contained `/tmp/pgc-pytest-*` counted its own invocation as a leaked
 process. Walking `/proc/<pid>/cmdline` is the reliable instrument.
+
+`test_one_tree_hashes_one_way_however_the_locale_is_set` requires one tree to
+give one fingerprint across every installed locale.
