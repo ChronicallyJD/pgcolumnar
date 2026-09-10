@@ -361,7 +361,7 @@ true until the next version shipped.
   paths now exit 66, the status `lib.sh` calls `PGC_EXIT_SKIPPED`, paired with the
   `SKIPPED (ran no checks)` line the runners already require beside it.
 
-  `test/selftest/410-the-self-test-must-not-report.sh` holds the arms, including a
+  `test/selftest/430-the-self-test-must-not-report.sh` holds the arms, including a
   heredoc-aware sweep requiring that **no** part exits 0 -- closing the class rather
   than the two instances. The sweep has to be heredoc-aware because the parts generate
   fixture scripts that legitimately end in `exit 0`: it sees 2 sites before this change
