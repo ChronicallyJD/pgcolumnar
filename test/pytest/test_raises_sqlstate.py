@@ -38,6 +38,9 @@ refuses it -- the false positive the broad-except scan already paid for once.
 `test_the_raises_scan_reads_code_not_a_string_literal` pins that.
 """
 
+import pathlib
+
+
 CONF = "pytest_plugins = ['pgc_vacuity']"
 
 
@@ -521,3 +524,233 @@ def test_a_conftest_cannot_switch_the_broad_family_list_off(pytester, expect):
     expect.run_failed(result, "a conftest writing the family list does not disable "
                               "the rule")
     result.stderr.fnmatch_lines(["*pytest.raises(Error) names no SQLSTATE*"])
+
+
+# ---- MENTIONING THE FIELD IS NOT PINNING IT ----------------------------------
+#
+# `_sqlstate_pinned_names` counted any `ast.Attribute` named `sqlstate` anywhere in
+# the body, so naming the field switched the broad-family rule off. Both shapes below
+# collected CLEAN against that version, and both are byte-for-byte the vacuity this
+# file is named for -- any of the 254 SQLSTATEs satisfies them. Reported by @jdatcmd,
+# who drove the scan over six constructed files instead of reading it.
+#
+# The rule now requires the read to reach a CALL, and follows one hop of assignment
+# so the honest `code = exc.value.sqlstate` / `expect.text(code, ...)` form is not
+# refused. One hop, not two: this is a floor, and the floor is stated.
+
+
+def test_a_bare_sqlstate_expression_does_not_pin_anything(pytester, expect):
+    """`exc.value.sqlstate` as a statement of its own asserts nothing at all."""
+    pytester.makepyfile(
+        """
+        import psycopg
+        import pytest
+
+        def test_an_unknown_function_is_rejected(expect):
+            with pytest.raises(psycopg.Error) as exc:
+                conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+            exc.value.sqlstate
+            expect.num(1, 1, "the server rejected the call")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "mentioning the field is not pinning it")
+    result.stderr.fnmatch_lines(["*pytest.raises(Error) names no SQLSTATE*"])
+
+
+def test_a_sqlstate_assigned_and_never_read_does_not_pin_anything(pytester, expect):
+    """The same hole with one more step: bound to a name nothing uses."""
+    pytester.makepyfile(
+        """
+        import psycopg
+        import pytest
+
+        def test_an_unknown_function_is_rejected(expect):
+            with pytest.raises(psycopg.Error) as exc:
+                conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+            code = exc.value.sqlstate
+            expect.num(1, 1, "the server rejected the call")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "an unread assignment is not a pin")
+    result.stderr.fnmatch_lines(["*pytest.raises(Error) names no SQLSTATE*"])
+
+
+def test_one_hop_through_a_local_name_is_an_honest_pin(pytester, expect):
+    """The cost side. Refusing this would outlaw a form nobody should stop writing,
+    and a guard that refuses honest tests is a guard somebody switches off."""
+    pytester.makepyfile(
+        """
+        import psycopg
+        import pytest
+
+        def test_an_unknown_function_is_rejected(expect):
+            with pytest.raises(psycopg.Error) as exc:
+                conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+            code = exc.value.sqlstate
+            expect.text(code, "42883", "the function does not exist")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a pin reached through one local name is collectable",
+                    passed=0, failed=1, errors=0)
+    result.stdout.no_fnmatch_line("*names no SQLSTATE*")
+
+
+# ---- THE CLASS MAY ARRIVE BY KEYWORD ----------------------------------------
+#
+# `if tail != "raises" or not call.args: continue` skipped the item BEFORE it was
+# appended, so `pytest.raises(expected_exception=...)` was checked by neither rule --
+# and the statement rule was therefore silently conditional on the class being
+# positional, which this file's own prose stated unconditionally. Reported by
+# @jdatcmd, who built the two forms as a pair differing in nothing else: the
+# positional one reported two offences and the keyword one reported none.
+
+
+def test_the_keyword_form_is_checked_by_both_rules(pytester, expect):
+    """Broad, unbound, and two statements, with the class passed by keyword."""
+    pytester.makepyfile(
+        """
+        import psycopg
+        import pytest
+
+        def test_an_unknown_function_is_rejected(expect):
+            with pytest.raises(expected_exception=psycopg.Error):
+                conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+                conn.execute("SELECT pgc_definitely_no_such_function()")
+            expect.num(1, 1, "the server rejected the call")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "the keyword form is not an exemption")
+    result.stderr.fnmatch_lines(["*pytest.raises(Error) names no SQLSTATE*"])
+    result.stderr.fnmatch_lines(["*holds 2 statements*"])
+
+
+def test_the_keyword_form_with_a_pin_is_collectable(pytester, expect):
+    """And it is not refused merely for being the keyword form."""
+    pytester.makepyfile(
+        """
+        import psycopg
+        import pytest
+
+        def test_an_unknown_function_is_rejected(expect):
+            with pytest.raises(expected_exception=psycopg.Error) as exc:
+                conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+            expect.sqlstate(exc.value, "42883", "the function does not exist")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a pinned keyword form is collectable",
+                    passed=0, failed=1, errors=0)
+    result.stdout.no_fnmatch_line("*names no SQLSTATE*")
+
+
+# ---- THE NEUTERING PROOF, WHICH A TEXT PIN CANNOT CARRY ---------------------
+#
+# `test/selftest/440` checks this scan by grepping its source, and a text pin catches
+# a rewrite or a deletion but not `False and` -- which is how a guard actually dies.
+# @jdatcmd measured three faithful neuterings (prefix `False and`, rename nothing,
+# leave every pinned substring in place) and all three left that part at 55 passed
+# while the scan went blind.
+#
+# THE PROOF BELONGS HERE, not there: the shell harness and this corpus are parallel
+# in functionality and do not drive each other. So this arm copies the layer, disables
+# one condition faithfully, imports the copy, and requires the copy to go blind to a
+# file the real layer refuses. It fails if the scan stops being load-bearing, whatever
+# the neutering looks like.
+
+
+def _layer_copy(tmp_path, old, new, name):
+    """A copy of pgc_vacuity with ONE condition disabled, imported under its own name."""
+    import importlib.util
+    src = pathlib.Path(__file__).with_name("pgc_vacuity.py").read_text()
+    assert old in src, "the condition to disable is not in the layer verbatim: %r" % old
+    twin = tmp_path / (name + ".py")
+    twin.write_text(src.replace(old, new, 1))
+    spec = importlib.util.spec_from_file_location(name, twin)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod, twin
+
+
+def _offence_fixture(tmp_path):
+    f = tmp_path / "fixture_case.py"
+    f.write_text(
+        "import psycopg\n"
+        "import pytest\n\n"
+        "def test_it(conn, expect):\n"
+        "    with pytest.raises(psycopg.Error):\n"
+        "        conn.execute('SELECT pgc_no_such()')\n"
+        "        conn.execute('SELECT 1')\n"
+        "    expect.num(1, 1, 'rejected')\n"
+    )
+    return f
+
+
+def test_disabling_the_sqlstate_rule_makes_the_scan_blind(tmp_path, expect):
+    """Faithful: `False and` prefixed, nothing renamed, the pinned text left intact."""
+    import pgc_vacuity
+    case = _offence_fixture(tmp_path)
+    real = [s for s in pgc_vacuity._raises_sites(case) if "names no SQLSTATE" in s]
+    expect.num(len(real), 1, "the real layer reports the unpinned broad raises")
+    twin, path = _layer_copy(
+        tmp_path,
+        "if broad and (bound is None or bound not in pinned):",
+        "if False and broad and (bound is None or bound not in pinned):",
+        "twin_sqlstate",
+    )
+    expect.at_least(path.read_text().count("bound not in pinned"), 1,
+                    "and the twin still CONTAINS the text a grep arm pins")
+    blind = [s for s in twin._raises_sites(case) if "names no SQLSTATE" in s]
+    expect.num(len(blind), 0, "while the twin reports none, which no text pin can see")
+
+
+def test_disabling_the_statement_rule_makes_the_scan_blind(tmp_path, expect):
+    """The second condition, same shape, so neither rule rests on the other's arm."""
+    import pgc_vacuity
+    case = _offence_fixture(tmp_path)
+    real = [s for s in pgc_vacuity._raises_sites(case) if "statements" in s]
+    expect.num(len(real), 1, "the real layer reports the two-statement block")
+    twin, path = _layer_copy(
+        tmp_path,
+        "if sites and len(node.body) != 1:",
+        "if False and sites and len(node.body) != 1:",
+        "twin_statements",
+    )
+    expect.at_least(path.read_text().count("len(node.body) != 1"), 1,
+                    "and the twin still contains the pinned text")
+    blind = [s for s in twin._raises_sites(case) if "statements" in s]
+    expect.num(len(blind), 0, "while the twin reports none")
+
+def test_the_mode_this_layer_only_narrows_is_still_listed_as_open(expect):
+    """`raises-catches-setup` must stay in VACUITY_MODES.md section 3.
+
+    Property 1 CLOSES `raises-too-broad`. Property 2 only narrows
+    `raises-catches-setup`, because the statement rule counts TOP-LEVEL statements and
+    two shapes walk past it -- both asserted above. A document that quietly moved the
+    mode to section 2 would claim a closure this scan does not make, which is the
+    failure a map makes worse than a silence.
+
+    Reading a document is the one thing this corpus and the shell harness may both do:
+    they are parallel in functionality and do not drive each other, and the docs are
+    where they are allowed to meet.
+    """
+    import re
+    doc = pathlib.Path(__file__).with_name("VACUITY_MODES.md").read_text()
+    # SECTION 3 RUNS TO SECTION 4, not to 3.1. Splitting on "## 3." truncated at the
+    # first subsection heading and reported the mode missing from its own section --
+    # my own arm failing for a reason that had nothing to do with the document.
+    start = re.search(r"^## 3\. ", doc, re.M)
+    end = re.search(r"^## 4\. ", doc, re.M)
+    expect.text("found" if start and end else "missing", "found",
+                "premise: section 3 and section 4 both have headings to bound by")
+    section3 = doc[start.end():end.start()]
+    expect.at_least(doc.count("raises-catches-setup"), 1,
+                    "the document still names the mode this layer only narrows")
+    expect.text("open" if "raises-catches-setup" in section3 else "moved", "open",
+                "and names it in the section for what is NOT refused")
+    expect.text("absent" if "raises-too-broad" not in section3.split("is now closed")[0]
+                else "present", "absent",
+                "premise: and the mode this layer DOES close is not loose in section 3")

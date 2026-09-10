@@ -1303,16 +1303,24 @@ and the suite is green with the guard switched off and nothing saying so.
 `test_a_conftest_cannot_switch_the_broad_family_list_off` writes three plausible
 spellings of the name onto the module and requires the refusal to still arrive.
 Rebinding the scan FUNCTION from a conftest is still possible; that is true of every
-name in every Python plugin, and selftest 440 plus `test_guards_pinned.py` are what
+name in every Python plugin, and `test_guards_pinned.py` is what
 notice a scan that stopped being called.
 
 ### The static half
 
-Selftest `440-a-raises-must-name-a-sqlstate.sh` asserts the structure these arms
-rest on, greppable from a checkout with nothing installed — the same division as
-selftests 360 and 370, because CI installs neither pytest, psycopg nor a
-virtualenv. It also requires the two residual arms and the section 3.4 entry to
-still exist, so the guard cannot quietly grow into a claim of completeness.
+**THE ARMS LIVE HERE AND NOWHERE ELSE.** An earlier version of this work carried a
+shell mirror, `test/selftest/440-a-raises-must-name-a-sqlstate.sh`, which checked this
+scan by grepping its source: 44 of its 55 checks were `grep -c` against the function's
+text and it invoked `python3` zero times. @jdatcmd showed what that cannot do —
+three faithful neuterings (`False and` prefixed, nothing renamed, every pinned
+substring left in place) left the part at 55 passed while the scan went blind.
+
+The mirror is gone, for two reasons that point the same way. A text pin cannot see a
+disabled arm, so the proof has to RUN the scan; and the shell harness and this corpus
+are **parallel in functionality without driving each other** — a shell part whose whole
+subject is this file's source text is a dependency, not a parallel guard. So the
+neutering proof is the two `test_disabling_*` arms above, which copy the layer, disable
+one condition faithfully, and require the copy to go blind.
 
 ### The arms
 
@@ -1340,3 +1348,11 @@ still exist, so the guard cannot quietly grow into a claim of completeness.
 | `test_a_helper_hiding_the_setup_is_not_refused` | **residual 1 of 2, pinned.** One statement, a narrow class, a pinned SQLSTATE, and the setup inside the helper still raised: `1 passed`, no offence |
 | `test_a_compound_statement_hiding_the_setup_is_not_refused` | **residual 2 of 2, pinned.** A `for` holding the setup and the statement under test is one top-level statement: `1 passed`, no offence |
 | `test_a_conftest_cannot_switch_the_broad_family_list_off` | the rule's own family list is not writable from the corpus it polices |
+| `test_a_bare_sqlstate_expression_does_not_pin_anything` | `exc.value.sqlstate` as a statement of its own asserts nothing, so mentioning the field is not pinning it |
+| `test_a_sqlstate_assigned_and_never_read_does_not_pin_anything` | the same hole one step on: bound to a name nothing uses |
+| `test_one_hop_through_a_local_name_is_an_honest_pin` | the cost side — `code = exc.value.sqlstate` then `expect.text(code, ...)` stays collectable |
+| `test_the_keyword_form_is_checked_by_both_rules` | `pytest.raises(expected_exception=...)` is not an exemption from either rule |
+| `test_the_keyword_form_with_a_pin_is_collectable` | and it is not refused merely for being the keyword form |
+| `test_disabling_the_sqlstate_rule_makes_the_scan_blind` | the neutering proof: a copy of the layer with `False and` prefixed, nothing renamed, goes blind while still containing the pinned text |
+| `test_disabling_the_statement_rule_makes_the_scan_blind` | the same for the second condition, so neither rule rests on the other's arm |
+| `test_the_mode_this_layer_only_narrows_is_still_listed_as_open` | `raises-catches-setup` must stay in section 3 of the mode inventory |

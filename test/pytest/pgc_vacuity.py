@@ -953,7 +953,7 @@ def _root_name(node):
 
 
 def _sqlstate_pinned_names(fn):
-    """Names whose SQLSTATE this function body asserts something about.
+    """Names whose SQLSTATE this function body ASSERTS something about.
 
     Two spellings, because both are honest and the scan must accept whichever the
     caller chose:
@@ -961,21 +961,53 @@ def _sqlstate_pinned_names(fn):
         expect.sqlstate(exc.value, "42883", name)        # the helper
         expect.text(exc.value.sqlstate, "42883", name)   # the field, read directly
 
-    The first is a call to something named `sqlstate`, so every name inside its
-    arguments counts as pinned; the second is an attribute read, so the name it is
-    rooted at counts.
+    THE ATTRIBUTE HAS TO REACH A CALL. The first version counted any `ast.Attribute`
+    named `sqlstate` anywhere in the body, so MENTIONING the field switched the rule
+    off. Measured, both collecting clean against the first version and both being the
+    exact vacuity this rule is named for -- any of the 254 SQLSTATEs satisfies them:
+
+        exc.value.sqlstate                    # a bare expression, asserts nothing
+        code = exc.value.sqlstate             # assigned, never read
+
+    Reported by @jdatcmd, who ran the scanner over six constructed files rather than
+    reading it.
+
+    So a read counts when it is an ARGUMENT to a call, and one hop of assignment is
+    followed -- `code = exc.value.sqlstate` then `expect.text(code, ...)` is honest and
+    common, and refusing it would be a false positive on a form nobody should have to
+    stop writing. A second hop is not followed: this is a floor, and the floor is
+    stated rather than implied.
     """
     pinned = set()
+    # Names a sqlstate read was assigned to, and names that appear as call arguments.
+    assigned_from_sqlstate = {}
+    call_arg_names = set()
     for node in _walk_own(fn):
-        if isinstance(node, ast.Attribute) and node.attr == "sqlstate":
-            root = _root_name(node.value)
-            if root:
-                pinned.add(root)
+        if isinstance(node, ast.Call):
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                for sub in ast.walk(arg):
+                    if isinstance(sub, ast.Name):
+                        call_arg_names.add(sub.id)
+                    if isinstance(sub, ast.Attribute) and sub.attr == "sqlstate":
+                        root = _root_name(sub.value)
+                        if root:
+                            pinned.add(root)
+        if isinstance(node, ast.Assign):
+            for sub in ast.walk(node.value):
+                if isinstance(sub, ast.Attribute) and sub.attr == "sqlstate":
+                    root = _root_name(sub.value)
+                    for t in node.targets:
+                        if isinstance(t, ast.Name) and root:
+                            assigned_from_sqlstate[t.id] = root
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "sqlstate"):
             for sub in ast.walk(node):
                 if isinstance(sub, ast.Name):
                     pinned.add(sub.id)
+    # One hop: assigned from a sqlstate read, and later handed to a call.
+    for local, root in assigned_from_sqlstate.items():
+        if local in call_arg_names:
+            pinned.add(root)
     return pinned
 
 
@@ -1078,12 +1110,30 @@ def _raises_sites(path):
                 f = call.func
                 tail = (f.attr if isinstance(f, ast.Attribute)
                         else f.id if isinstance(f, ast.Name) else None)
-                if tail != "raises" or not call.args:
+                if tail != "raises":
+                    continue
+                # THE CLASS MAY ARRIVE BY KEYWORD. `not call.args` skipped the item
+                # BEFORE it was appended, so `pytest.raises(expected_exception=E)`
+                # was checked by neither rule -- and the statement rule was therefore
+                # silently conditional on the class being positional, which the
+                # documentation stated unconditionally. Reported by @jdatcmd, who
+                # built the positional and keyword forms as a pair that differ in
+                # nothing else: the positional one was an offence and the keyword one
+                # was clean.
+                expected = None
+                if call.args:
+                    expected = call.args[0]
+                else:
+                    for kw in call.keywords:
+                        if kw.arg == "expected_exception":
+                            expected = kw.value
+                            break
+                if expected is None:
                     continue
                 sites.append(item)
                 bound = (item.optional_vars.id
                          if isinstance(item.optional_vars, ast.Name) else None)
-                broad = [c for c in _raises_class_names(call.args[0])
+                broad = [c for c in _raises_class_names(expected)
                          if c in broad_families]
                 if broad and (bound is None or bound not in pinned):
                     # THE OFFENCE PHRASE STAYS ON ONE SOURCE LINE. The message

@@ -209,7 +209,7 @@ binds the exception and the body pins its SQLSTATE. See section 2.
   `test_a_helper_hiding_the_setup_is_not_refused` and
   `test_a_compound_statement_hiding_the_setup_is_not_refused` in
   `test_raises_sqlstate.py` assert the scan reports nothing on these two shapes, so
-  the gap is a measurement rather than a sentence, and selftest 440 requires both
+  the gap is a measurement rather than a sentence, and `test_raises_sqlstate.py` requires both
   arms plus this entry to still exist.
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
   `zero-on-both-arms`, `tuple-assert-always-true`, `approx-of-nothing`

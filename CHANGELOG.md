@@ -68,11 +68,33 @@ true until the next version shipped.
   `ast.parse` for that regex makes the layer refuse its own test suite with 22
   invented offences and exit 4, which is mutation 11 of 11 in the removal proof.
 
-  `test/pytest/test_raises_sqlstate.py` carries the behavioural arms, all through
-  `pytester`. `test/selftest/440-a-raises-must-name-a-sqlstate.sh` carries the static
-  half, so the structure is checked where pytest, psycopg and a virtualenv are not
-  installed; it also requires the two residual arms and the section 3.4 entry to
-  still exist, so the guard cannot quietly grow into a claim of completeness.
+  THE ARMS LIVE IN ONE HARNESS. `test/pytest/test_raises_sqlstate.py` carries all of
+  them, through `pytester` and through the scan directly. An earlier version of this
+  change also shipped a shell mirror, `test/selftest/440-a-raises-must-name-a-sqlstate.sh`,
+  which checked the scan by GREPPING ITS SOURCE: 44 of its 55 checks were `grep -c`
+  against the function's text and it invoked `python3` zero times. Reviewing it,
+  @linuxhikerpm measured three faithful neuterings -- `False and` prefixed, nothing
+  renamed, every pinned substring left in place -- and all three left that part at 55
+  passed while the scan went blind. A text pin catches a rewrite or a deletion; it
+  cannot catch `False and`, which is how a guard actually dies.
+
+  The mirror is gone, and the second reason is the one that settles it: the shell
+  harness and the pytest corpus are parallel in functionality and do not drive each
+  other. A shell part whose whole subject is another harness's source text is a
+  dependency rather than a parallel guard -- it asserts against an implementation
+  instead of against the product. So the neutering proof is now two arms that copy the
+  layer, disable one condition faithfully, and require the copy to go blind while still
+  containing the text a grep arm would have pinned.
+
+  THREE DEFECTS @linuxhikerpm FOUND IN THE GUARD ITSELF, each reproduced before it was
+  fixed. A bare `exc.value.sqlstate`, and a `code = exc.value.sqlstate` never read, both
+  satisfied the pin while asserting nothing -- the rule counted any attribute named
+  `sqlstate` anywhere in the body. It now requires the read to reach a CALL, following
+  one hop of assignment so the honest `code = ...` / `expect.text(code, ...)` form is not
+  refused. And `pytest.raises(expected_exception=...)` escaped BOTH rules, because the
+  class was read from `call.args[0]` and the item was skipped before it was recorded,
+  which made the statement rule silently conditional on the class being positional while
+  the documentation stated it unconditionally.
 
 - Exact zone-map boundary coverage now lives in matching shell and pytest tests
   (#831).
