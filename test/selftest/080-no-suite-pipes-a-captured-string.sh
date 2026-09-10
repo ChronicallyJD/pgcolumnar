@@ -91,29 +91,54 @@ _epipe_globs=("$TESTDIR"/*.sh)
 
 # file:line pairs that sit inside a quoted heredoc, computed from the files.
 _epipe_heredoc_lines() {
-	awk '
-		# Reset per FILE. awk keeps globals across inputs, so an unterminated
-		# heredoc in one file leaves the scanner inside one for every file after
-		# it -- and a later line that happens to equal the stale tag closes it in
-		# the wrong place. Measured: without this, 080s own line 26 fell OUTSIDE
-		# the exemption when the sweep ran over all 302 files, and inside it when
-		# the same function ran over that file alone.
-		FNR == 1 { inhd = 0; tag = "" }
-		!inhd && match($0, /<<[-]?'"'"'[A-Za-z_][A-Za-z0-9_]*'"'"'/) {
-			tag = substr($0, RSTART, RLENGTH)
-			gsub(/^<<[-]?'"'"'/, "", tag); gsub(/'"'"'$/, "", tag)
-			inhd = 1; next
+	# TWO PASSES PER FILE, and each condition is there because it was measured.
+	#
+	# A COMMENT IS NOT A HEREDOC OPENER. The first version matched the opener anywhere
+	# on a line and left heredoc mode only on a line equal to the tag, so a COMMENT that
+	# merely NAMED the idiom exempted every line after it. Measured by @jdatcmd on real
+	# code: with a genuine two-line violation restored this part went red, and adding one
+	# comment line 24 lines above it -- changing nothing else -- took it back to 37
+	# passed while the violation was still there byte-for-byte. The rule stopped looking.
+	#
+	# AND THE TERMINATOR MUST EXIST. That comment names the tag on its own line, so
+	# skipping comment lines alone would still leave a TRAILING comment able to open one.
+	# A candidate with no later line equal to its tag is not a heredoc -- which is the
+	# property, rather than a guess about where the `#` was. It also retires the old
+	# per-file reset: an unterminated candidate now exempts nothing instead of leaking
+	# into the next file.
+	#
+	# THE QUOTE IS PASSED IN, not written in the program. Building the regex from `q`
+	# keeps a single quote out of a single-quoted shell string, where the escaping is
+	# its own source of defects.
+	awk -v q="'" '
+		function flush(   i, j, k, tag, t, re) {
+			re = "<<[-]?" q "[A-Za-z_][A-Za-z0-9_]*" q
+			i = 1
+			while (i <= n) {
+				if (L[i] !~ /^[ \t]*#/ && match(L[i], re)) {
+					tag = substr(L[i], RSTART, RLENGTH)
+					sub("^<<[-]?" q, "", tag)
+					sub(q "$", "", tag)
+					for (j = i + 1; j <= n; j++) {
+						t = L[j]
+						gsub(/^[ \t]+|[ \t]+$/, "", t)
+						if (t == tag) break
+					}
+					if (j <= n) {
+						# Line numbers within THIS file, which is what the
+						# grep -nH keys are compared against. A running total
+						# would match nothing.
+						for (k = i + 1; k < j; k++) print fname ":" k ":"
+						i = j + 1
+						continue
+					}
+				}
+				i++
+			}
 		}
-		inhd {
-			t = $0; gsub(/^[ \t]+|[ \t]+$/, "", t)
-			if (t == tag) { inhd = 0; next }
-			# FNR, not NR. NR is cumulative across inputs, so the second file
-			# onwards reports line numbers from a running total and no key ever
-			# matches the grep -n output it is compared against. It is the
-			# neighbouring question answered plausibly: single-file runs agree,
-			# because there NR == FNR.
-			print FILENAME ":" FNR ":"
-		}
+		FNR == 1 { if (n) flush(); delete L; n = 0; fname = FILENAME }
+		{ L[++n] = $0 }
+		END { if (n) flush() }
 	' "$@"
 }
 _epipe_hd="$(_epipe_heredoc_lines "${_epipe_globs[@]}" 2>/dev/null || true)"
@@ -404,8 +429,19 @@ check "premise: the joiner joined continuations, so the sweep is not still line-
 # the joiner needs to skip to the terminator; writing that now would be an
 # instrument with nothing exercising it, which is how twelve suites came to
 # maintain a check counter that nothing read.
+# THE DENOMINATOR IS PRINTED AND ASSERTED, because a numerator of zero is what a
+# broken detector reports too. Measured by @jdatcmd: replacing the opener pattern with
+# one that cannot match anything left this arm green, so "no line opens a heredoc AND
+# continues" could not be told from "no line opens a heredoc". That is the
+# inputs == sum(buckets) rule this directory applies everywhere else, missing from the
+# two arms I added.
+_epipe_hd_open="$(grep -chE "(^|[^<])<<-?['\"]?[A-Za-z_]" "${_epipe_globs[@]}" 2>/dev/null \
+	| awk '{ s += $1 } END { print s + 0 }')"
 _epipe_hd_cont="$(grep -nE "(^|[^<])<<-?['\"]?[A-Za-z_]" "${_epipe_globs[@]}" 2>/dev/null \
 	| grep -cE '([^|]\||\\)[[:space:]]*$' || true)"
+echo "  epipe sweep: heredoc openers=$_epipe_hd_open, of which continuing=$_epipe_hd_cont"
+check "premise: the opener detector found heredocs to classify" \
+	"$([ "${_epipe_hd_open:-0}" -ge 50 ] && echo yes || echo "no ($_epipe_hd_open)")" "yes"
 check "premise: no line opens a heredoc AND continues, which is what lets the joiner ignore bodies" \
 	"$_epipe_hd_cont" "0"
 
@@ -425,8 +461,57 @@ _epipe_bs_gap="$(awk '
 		t = $0; sub(/[ \t]+$/, "", t)
 		prev = (t ~ /\\$/ && t !~ /^[ \t]*#/)
 	}' "${_epipe_globs[@]}" 2>/dev/null | grep -c . || true)"
+_epipe_bs_n="$(awk '
+	{
+		t = $0; sub(/[ \t]+$/, "", t)
+		if (t ~ /\\$/ && t !~ /^[ \t]*#/) n++
+	}
+	END { print n + 0 }' "${_epipe_globs[@]}" 2>/dev/null)"
+echo "  epipe sweep: backslash continuations=$_epipe_bs_n, of which followed by a gap=$_epipe_bs_gap"
+check "premise: the continuation detector found continuations to classify" \
+	"$([ "${_epipe_bs_n:-0}" -ge 500 ] && echo yes || echo "no ($_epipe_bs_n)")" "yes"
 check "premise: no backslash continuation is followed by a blank or a comment" \
 	"$_epipe_bs_gap" "0"
+
+# A COMMENT NAMING THE IDIOM MUST NOT EXEMPT WHAT FOLLOWS IT, which is the hole
+# @jdatcmd found: one comment line 24 lines above a genuine violation took this part
+# from red to 37 passed with the violation still there byte-for-byte. A heredoc opener
+# is now recognised only on a non-comment line AND only when a later line equals its
+# tag, so a comment that names the tag on its own line -- which is how anybody writes
+# it in prose -- cannot open one.
+_epipe_cmthd="$PGC_WORKDIR/epipe_comment_heredoc.sh"
+{
+	printf '# the idiom is cat <<%sEOF%s ... EOF, which this suite does not use\n' "'" "'"
+	printf 'x="value"\n'
+	printf 'echo "$x" %s grep -%s PLANTED && echo yes || echo no\n' '|' q
+} > "$_epipe_cmthd"
+check "a comment naming a heredoc exempts nothing, so the line below it is still seen" \
+	"$(_epipe_heredoc_lines "$_epipe_cmthd" | grep -c . || true)" "0"
+check "and the planted violation in that file is found by the pattern" \
+	"$(grep -cE "$_epipe_pat" "$_epipe_cmthd")" "1"
+
+# The control: a REAL heredoc, opened in code and terminated, still exempts its body.
+# Without this the arm above is satisfied by an exemption that never fires at all.
+_epipe_realhd="$PGC_WORKDIR/epipe_real_heredoc.sh"
+{
+	printf 'cat > /dev/null <<%sEOF%s\n' "'" "'"
+	printf 'echo "$x" %s grep -%s INSIDE && echo yes || echo no\n' '|' q
+	printf 'EOF\n'
+} > "$_epipe_realhd"
+check "control: a real heredoc, opened in code and terminated, still exempts its body" \
+	"$(_epipe_heredoc_lines "$_epipe_realhd" | grep -c . || true)" "1"
+check "premise: and that body line is the one the pattern would otherwise flag" \
+	"$(grep -cE "$_epipe_pat" "$_epipe_realhd")" "1"
+
+# And an UNTERMINATED candidate exempts nothing, which is what stops a trailing comment
+# naming a tag from switching the rule off for the rest of the file.
+_epipe_unterm="$PGC_WORKDIR/epipe_unterminated.sh"
+{
+	printf 'echo hi   # see cat <<%sNOPE%s for the idiom\n' "'" "'"
+	printf 'echo "$x" %s grep -%s PLANTED && echo yes || echo no\n' '|' q
+} > "$_epipe_unterm"
+check "an opener with no terminator exempts nothing" \
+	"$(_epipe_heredoc_lines "$_epipe_unterm" | grep -c . || true)" "0"
 
 # ---- the two split shapes, as fixtures --------------------------------------
 #

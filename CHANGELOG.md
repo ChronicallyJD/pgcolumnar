@@ -194,6 +194,31 @@ true until the next version shipped.
   stream now passes `-H`, because `grep -n` omits the filename when it reads a
   single file and the heredoc exemption keys on `file:line`.
 
+  A COMMENT NAMING A HEREDOC USED TO EXEMPT THE REST OF THE FILE. The exemption
+  scanner matched the opener anywhere on a line and left heredoc mode only on a line
+  equal to the tag, so a COMMENT that merely named the idiom switched the rule off for
+  everything after it. @linuxhikerpm measured it: with a genuine two-line violation
+  restored this part went red, and adding one comment line 24 lines above it -- changing
+  nothing else -- took it back to 37 passed while the violation was still there byte for
+  byte. This change is where that becomes load-bearing, because it deletes the filename
+  exclusion and rests the argument on the exemption being DERIVED rather than listed.
+
+  Two conditions now, each measured. An opener is recognised only on a NON-COMMENT line,
+  and only when a later line EQUALS its tag -- one with no terminator exempts nothing.
+  The second condition is what stops a TRAILING comment doing the same thing, and it
+  retires the old per-file reset: an unterminated candidate can no longer leak into the
+  next file. Proved by restoring the violation, adding the comment, and staying red; and
+  by writing `cat <<'X' |` plainly in this file's own prose, which used to take its
+  exempt-line count from 6 to 187 and now changes nothing.
+
+  AND BOTH NEW PREMISE ARMS WERE NUMERATOR-ONLY. They reported zero whether or not their
+  detector worked: replacing the heredoc-opener pattern with one that cannot match left
+  the arm green, and so did making the continuation detector never arm. The denominators
+  are printed and asserted now -- 179 openers and 5,533 continuations -- which is the
+  inputs == sum(buckets) rule the rest of this directory applies. An earlier draft of
+  this entry claimed "if either stops being true the gate says so"; that was the half
+  which was not true.
+
   Planting any one of the six sites back in its old form takes the rule red and
   names the file and the line.
 
