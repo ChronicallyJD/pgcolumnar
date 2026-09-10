@@ -50,7 +50,7 @@ sorts() {	# sorts QUERY -> yes|no
 	local _plan
 	_plan="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
 		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
-	[ "$(grep -cE '^ *(->)? *(Incremental )?Sort' <<<"$_plan" || true)" != 0 ] \
+	[ "$(grep -cE '^ *(->)? *(Incremental )?Sort' <<<"$_plan" || true)" -ne 0 ] \
 		&& echo yes || echo no
 }
 inv() {		# inversions on the lead column in the order the scan returns rows
@@ -453,7 +453,7 @@ sorts_off() {
 	_plan="$(env PATH="$PGC_BINDIR:$PATH" PGOPTIONS="-c pgcolumnar.enable_sorted_pathkeys=off" \
 		psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres -d "$PGC_DB" -At \
 		-c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
-	[ "$(grep -cE '^ *(->)? *(Incremental )?Sort' <<<"$_plan" || true)" != 0 ] \
+	[ "$(grep -cE '^ *(->)? *(Incremental )?Sort' <<<"$_plan" || true)" -ne 0 ] \
 		&& echo yes || echo no
 }
 check "premise: the claim is live with the GUC on" "$(sorts 'SELECT k FROM c ORDER BY k')" "no"

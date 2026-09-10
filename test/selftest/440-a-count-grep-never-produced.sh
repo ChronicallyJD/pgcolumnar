@@ -47,6 +47,24 @@ check "premise: while a valid pattern prints a number" \
 
 # ---- and the shape cannot come back ------------------------------------------
 #
+# GREEDY, NOT `[^)]*`, AND THAT IS THE WHOLE POINT. The first version of this sweep
+# stopped at the first `)` -- which is inside the GREP PATTERN, not at the end of the
+# substitution -- so any pattern containing a parenthesis hid its own site entirely.
+# Three sites were invisible, all spelling `grep -cE '^ *(->)? *(Incremental )?Sort'`:
+# sorted_mark_rename.sh:183 and sorted_pathkeys.sh:53 and :456. Found by @jdatcmd.
+#
+# AND THE COUNT HID IT TOO, because the count and the guard came out of the SAME regex.
+# I published "58 sites, of which 20 string-compared and 32 numeric" -- and 20 + 32 is
+# 52, not 58. Two instruments, never reconciled: the 58 came from a broad grep and the
+# 20 from this narrow one. With the greedy form the split reconciles, which is the
+# `inputs == sum(buckets)` rule this directory applies everywhere:
+#
+#     on main (cfe1fde9)   58 inputs = 23 string-compared + 35 numeric
+#     after this change    58 inputs =  0 string-compared + 58 numeric
+#
+# A guard derived through the same pattern as its own population agrees with it by
+# construction. The plant below carries a parenthesis for exactly that reason.
+#
 # HEREDOC-AWARE, like the exit-0 sweep in part 430 (#934): the suites generate fixture
 # scripts, and a forbidden idiom inside a generated script is the fixture rather than
 # an offence. Measured: 20 sites before this change and 0 after.
@@ -61,7 +79,7 @@ _c929_sweep() {
 			}
 		}
 		/^[ \t]*#/ { next }
-		/\[ "\$\(grep -c[a-zA-Z]*[^)]*\)" (!=|=) / { printf "%s:%d\n", FILENAME, FNR }
+		/\[ "\$\(grep -c[a-zA-Z]*.*\)" (!=|=) / { printf "%s:%d\n", FILENAME, FNR }
 	' "$@"
 }
 _c929_files=("$PGC_SRCDIR"/test/*.sh "$PGC_SRCDIR"/test/selftest/*.sh)
@@ -80,6 +98,13 @@ check "premise: and it finds a planted string comparison on a grep -c" \
 	"$(_c929_plant '!=' "$PGC_WORKDIR/p929.sh"; _c929_sweep "$PGC_WORKDIR/p929.sh" | grep -c .)" "1"
 check "premise: and the = 0 spelling too, which fails the same way" \
 	"$(_c929_plant '=' "$PGC_WORKDIR/p929b.sh"; _c929_sweep "$PGC_WORKDIR/p929b.sh" | grep -c .)" "1"
+# THE PLANT THAT THE FIRST VERSION PASSED. Every other plant here uses `grep -c x f`,
+# with no parenthesis, so none of them could fail on the `[^)]*` bug. This one differs
+# from the plain plant in exactly one respect: the pattern contains `(a)`.
+check "premise: and it finds one whose PATTERN contains a parenthesis, which the first version could not" \
+	"$(printf 'if [ "$(grep -cE %s^(a)b%s f || true)" %s 0 ]; then :; fi\n' "'" "'" '!=' \
+	     > "$PGC_WORKDIR/p929e.sh"
+	   _c929_sweep "$PGC_WORKDIR/p929e.sh" | grep -c .)" "1"
 check "premise: while a numeric comparison is not an offence" \
 	"$(_c929_plant '-ne' "$PGC_WORKDIR/p929c.sh"; _c929_sweep "$PGC_WORKDIR/p929c.sh" | grep -c .)" "0"
 check "premise: nor is one inside a generated fixture script" \

@@ -354,7 +354,7 @@ true until the next version shipped.
   is the failure this harness spends most of its effort refusing. The old form failed
   red.
 
-  **20 sites** compared a count as a string; they now compare numerically, which is
+  **23 sites** compared a count as a string; they now compare numerically, which is
   behaviour-preserving in every case that is not broken. Measured:
 
       input                      [ "$n" != 0 ]   [ "$n" -ne 0 ]   stderr
@@ -364,14 +364,29 @@ true until the next version shipped.
 
   Both spellings failed the same way. `= 0` is an ABSENCE claim, and on an empty value
   it is false -- which does not assert absence, and is the safe direction once it is
-  loud. All 20 sites pass exactly one input to grep, so the value is always a bare
+  loud. All 23 sites pass exactly one input to grep, so the value is always a bare
   number and a numeric comparison cannot be confused by `file:count` output.
 
-  The other 29 sites already compared numerically and were never affected.
+  THE POPULATION RECONCILES, and the first version of this entry did not. It said
+  "58 sites, of which 20 string-compared and 32 numeric" -- and 20 + 32 is 52. The 58
+  came from a broad grep and the 20 from the sweep's own narrower one, so two
+  instruments were reported as one measurement. With the sweep's pattern corrected:
+
+      on main (cfe1fde9)   58 inputs = 23 string-compared + 35 numeric
+      after this change    58 inputs =  0 string-compared + 58 numeric
 
   `test/selftest/440-a-count-grep-never-produced.sh` holds the arms and a heredoc-aware
   sweep requiring zero string comparisons on a `grep -c`, so the class is closed rather
-  than the 20 instances. The sweep skips comments as well as heredocs: a flat grep
+  than the 23 instances.
+
+  THE SWEEP'S FIRST PATTERN COULD NOT SEE THREE OF THEM. `[^)]*` stopped at the first
+  `)`, which is inside the GREP PATTERN rather than at the end of the substitution, so
+  any pattern containing a parenthesis hid its own site: `sorted_mark_rename.sh:183` and
+  `sorted_pathkeys.sh:53` and `:456`, each spelling
+  `grep -cE '^ *(->)? *(Incremental )?Sort'`. The guard and its population came out of
+  the same regex, so the guard agreed with the count by construction -- which is why one
+  plant now carries a parenthesis and differs from the plain one in nothing else.
+  Reported by @jdatcmd. The sweep skips comments as well as heredocs: a flat grep
   counts the paragraph that documents the idiom, which is how a guard comes to flag its
   own explanation.
 
