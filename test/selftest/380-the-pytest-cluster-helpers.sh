@@ -29,21 +29,47 @@ _pc_cl="$PGC_TESTDIR/pytest/pgc_cluster.py"
 check "premise: the pytest cluster helper is where this part thinks it is" \
 	"$([ -f "$_pc_cl" ] && echo yes || echo no)" "yes"
 
-check "the fingerprint derives its build directories from a Makefile glob" \
-	"$(grep -c 'glob("\*/Makefile")' "$_pc_cl")" "1"
+# THE FINGERPRINT MOVED (#907). It was an independent Python implementation in
+# pgc_cluster.py and an independent shell one in lib.sh; the pair produced four
+# defects in a day. Both now delegate to test/pgc_fingerprint.py, so these arms
+# follow the property to where it lives. Left pointed at pgc_cluster.py they
+# would have gone GREEN by finding nothing to object to, which is why each one
+# below is mirrored against a fixture that must make it red.
+_pc_fp="$PGC_TESTDIR/pgc_fingerprint.py"
 
-# A list would pass the arm above if someone added the glob AND kept a name.
+check "premise: the one fingerprint implementation is where this part thinks it is" \
+	"$([ -f "$_pc_fp" ] && echo yes || echo no)" "yes"
+
+check "the fingerprint derives its build directories from a Makefile on disk" \
+	"$(grep -c '_is_plain_file(d / "Makefile")' "$_pc_fp")" "1"
+
+# A list would pass the arm above if someone added the derivation AND kept a name.
 check "and it names no module directory, so it is a derivation and not a list" \
-	"$(grep -c '"objstore"' "$_pc_cl")" "0"
+	"$(grep -c '"objstore"' "$_pc_fp")" "0"
 
 # src/module.c and objstore/module.c are different inputs. Hashing the bare name
-# would make them interchangeable, which is a collision the glob itself cannot
-# prevent.
+# would make them interchangeable, which is a collision the derivation cannot
+# prevent by itself.
 check "the hash mixes in each file's path relative to the tree, not its name" \
-	"$(grep -c 'relative_to(srcdir)' "$_pc_cl")" "1"
+	"$(grep -c 'relative_to(root)' "$_pc_fp")" "1"
 
 check "and no longer mixes in the bare filename" \
-	"$(grep -c 'h.update(path.name.encode())' "$_pc_cl")" "0"
+	"$(grep -c 'h.update(path.name.encode())' "$_pc_fp")" "0"
+
+# AND NEITHER CALLER MAY KEEP A PRIVATE COPY. This is the arm that would catch
+# #907 recurring: the whole point is one implementation, so a second one
+# reappearing in either caller is the defect, not a detail.
+check "the pytest helper keeps no private fingerprint implementation" \
+	"$(grep -cE 'hashlib\.md5|glob\("\*/Makefile"\)' "$_pc_cl")" "0"
+
+check "and the shell keeps none either" \
+	"$(grep -cE 'md5sum < |xargs -0 cat' "$PGC_TESTDIR/lib.sh")" "0"
+
+# STDLIB ONLY, AND NOTHING FROM test/pytest/. lib.sh runs this module with the
+# SYSTEM interpreter; an import from the pytest tree or a third-party package
+# would make every bash suite unrunnable until somebody installed pytest.
+check "the module imports nothing from the pytest tree" \
+	"$(grep -cE '^(import|from) +(pgc_|conftest|pytest|psycopg)' "$_pc_fp")" "0"
 
 # ---- and the lifecycle ------------------------------------------------------
 #
@@ -80,9 +106,19 @@ printf 'def make_cluster(a, b):\n    root = mkdtemp()\n    return cluster, root\
 check "a make_cluster with no cleanup is caught" \
 	"$(grep -c 'shutil.rmtree(root' "$_pc_fix/noguard.py")" "0"
 
-printf '    dirs = [srcdir / "src"]\n' > "$_pc_fix/srconly.py"
+printf '    dirs = [root / "src"]\n' > "$_pc_fix/srconly.py"
 check "a fingerprint that reads src only is caught" \
-	"$(grep -c 'glob("\*/Makefile")' "$_pc_fix/srconly.py")" "0"
+	"$(grep -c '_is_plain_file(d / "Makefile")' "$_pc_fix/srconly.py")" "0"
+
+# And the private-copy arms must be able to redden too, or "0" above means only
+# that the pattern matches nothing anywhere.
+printf 'import hashlib\nh = hashlib.md5(b"")\n' > "$_pc_fix/privatecopy.py"
+check "a caller that reimplements the digest is caught" \
+	"$(grep -cE 'hashlib\.md5' "$_pc_fix/privatecopy.py")" "1"
+
+printf 'from pgc_cluster import x\n' > "$_pc_fix/badimport.py"
+check "an import from the pytest tree is caught" \
+	"$(grep -cE '^(import|from) +(pgc_|conftest|pytest|psycopg)' "$_pc_fix/badimport.py")" "1"
 
 printf '    dirs = [srcdir / "src", srcdir / "objstore"]\n' > "$_pc_fix/listed.py"
 check "and a hard-coded module list is caught by the name arm" \
@@ -90,7 +126,12 @@ check "and a hard-coded module list is caught by the name arm" \
 
 # The mirror: the same three greps on the REAL file, so a zero above is a missing
 # guard rather than a pattern that matches nothing anywhere.
-check "premise: while the real helper satisfies the two it must" \
-	"$(grep -cE 'glob\("\*/Makefile"\)|shutil.rmtree\(root' "$_pc_cl")" "2"
+# The mirror: the same greps on the REAL files, so a zero above is a missing
+# guard rather than a pattern that matches nothing anywhere.
+check "premise: while the real module satisfies the derivation arm" \
+	"$(grep -cE '_is_plain_file\(d / "Makefile"\)' "$_pc_fp")" "1"
 
-unset _pc_cl _pc_body _pc_fix
+check "premise: and the real helper still carries its cleanup" \
+	"$(grep -cE 'shutil.rmtree\(root' "$_pc_cl")" "1"
+
+unset _pc_cl _pc_fp _pc_body _pc_fix

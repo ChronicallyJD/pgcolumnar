@@ -512,55 +512,86 @@ unset _wr _wr_rc _wr_written _wr_expected _wr_f
 # deliberately does not fail. A false UNVERIFIED costs a line of output. A false
 # FATAL costs a red matrix and teaches people to re-run past the check.
 
+# THE MECHANISM HAD TO CHANGE WHEN THE IMPLEMENTATION DID (#907).
+#
+# This block used to stub `md5sum` on PATH, because the shell forked it once per
+# file. The digest is now hashlib inside test/pgc_fingerprint.py, which no PATH
+# can reach -- so the stub would have left every arm below GREEN while testing
+# nothing at all, which is the precise failure this file exists to refuse.
+#
+# A real read failure needs a real reader who is denied, and root is denied
+# nothing: chmod 000 is invisible to it. Measured before this was written:
+#
+#     as root      28a7149e07ae   <- reads the mode-000 file regardless
+#     as postgres  (empty)        <- the failure these arms need
+#
+# The tree therefore lives outside any 0700 directory and is read by a second
+# user. Where no such user exists the arms SKIP loudly rather than pass quietly:
+# a guard that cannot run is not a guard that held.
 _fp="$(mktemp -d "${TMPDIR:-/tmp}/pgc-fpfail.XXXXXX")"
-mkdir -p "$_fp/tree/src" "$_fp/bin"
+mkdir -p "$_fp/tree/src"
 printf 'int a;\n' > "$_fp/tree/src/a.c"
 printf 'int b;\n' > "$_fp/tree/src/b.c"
 printf 'int c;\n' > "$_fp/tree/src/c.c"
 printf 'all:\n\ttrue\n' > "$_fp/tree/Makefile"
 printf 'x\n' > "$_fp/tree/pgcolumnar.control"
+chmod -R a+rX "$_fp"
 
-# A stub that behaves exactly like md5sum except on its Nth invocation, where it
-# fails the way a fork failure or an OOM kill does: no output, non-zero status.
-cat > "$_fp/bin/md5sum" <<'STUB'
-#!/bin/bash
-_n=$(( $(cat "$PGC_FP_COUNT" 2>/dev/null || echo 0) + 1 ))
-echo "$_n" > "$PGC_FP_COUNT"
-[ "$_n" = "${PGC_FP_FAIL_ON:-0}" ] && exit 1
-exec /usr/bin/md5sum "$@"
-STUB
-chmod +x "$_fp/bin/md5sum"
+_fp_user=""
+if [ "$(id -u)" -ne 0 ]; then
+	_fp_user="-"			# already unprivileged; read in this shell
+else
+	for _fp_u in postgres nobody; do
+		id -u "$_fp_u" >/dev/null 2>&1 && { _fp_user="$_fp_u"; break; }
+	done
+fi
 
-_fp_base="$(pgc_source_fingerprint "$_fp/tree")"
-check "premise: the tree fingerprints to something on an unstubbed run" \
-	"$([ -n "$_fp_base" ] && echo yes || echo empty)" "yes"
+# _fp_as reads as the unprivileged user, or in this shell when already one.
+_fp_as() {	# _fp_as EXPR -> stdout
+	if [ "$_fp_user" = "-" ]; then
+		bash -c ". \"$PGC_TESTDIR/lib.sh\" || exit 1; $1"
+	else
+		runuser -u "$_fp_user" -- bash -c ". \"$PGC_TESTDIR/lib.sh\" || exit 1; $1"
+	fi
+}
 
-# Premise for the stub itself: with no failure configured it must agree with the
-# real thing, or the arms below would be measuring the stub rather than the fix.
-PGC_FP_COUNT="$_fp/count"; export PGC_FP_COUNT
-PGC_FP_FAIL_ON=0; export PGC_FP_FAIL_ON
-echo 0 > "$PGC_FP_COUNT"
-check "premise: the stub agrees with the real md5sum when nothing fails" \
-	"$(PATH="$_fp/bin:$PATH" pgc_source_fingerprint "$_fp/tree")" "$_fp_base"
+if [ -z "$_fp_user" ]; then
+	echo "SKIP  no non-root user to read as; root ignores chmod 000"
+else
+	_fp_base="$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")"
+	check "premise: the tree fingerprints to something when it is readable" \
+		"$([ -n "$_fp_base" ] && echo yes || echo empty)" "yes"
 
-# THE ARM. One failed digest, and the answer must be EMPTY rather than a hash.
-for _fp_n in 2 3; do
-	PGC_FP_FAIL_ON="$_fp_n"; export PGC_FP_FAIL_ON
-	echo 0 > "$PGC_FP_COUNT"
-	_fp_got="$(PATH="$_fp/bin:$PATH" pgc_source_fingerprint "$_fp/tree")"
-	check "a failed digest on file $_fp_n yields no fingerprint, not a wrong one" \
-		"$([ -z "$_fp_got" ] && echo empty || echo "$_fp_got")" "empty"
-done
+	# Premise for the mechanism: the unprivileged reader must agree with this
+	# shell while nothing is denied, or the arms below measure the user switch.
+	check "premise: the unprivileged read agrees while everything is readable" \
+		"$_fp_base" "$(pgc_source_fingerprint "$_fp/tree")"
 
-# And the verdict that follows from it, which is the property that matters: the
-# controller must say UNVERIFIED, never `stale`. `stale` is the FATAL.
-PGC_FP_FAIL_ON=2; export PGC_FP_FAIL_ON
-echo 0 > "$PGC_FP_COUNT"
-check "so the verdict is unknown -- UNVERIFIED -- and never stale" \
-	"$(pgc_freshness_verdict "$_fp_base" \
-		"$(PATH="$_fp/bin:$PATH" pgc_source_fingerprint "$_fp/tree")")" "unknown"
+	# THE ARM. One unreadable file, and the answer must be EMPTY, not a hash.
+	for _fp_n in b.c c.c; do
+		chmod 000 "$_fp/tree/src/$_fp_n"
+		_fp_got="$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")"
+		chmod 644 "$_fp/tree/src/$_fp_n"
+		check "an unreadable $_fp_n yields no fingerprint, not a wrong one" \
+			"$([ -z "$_fp_got" ] && echo empty || echo "$_fp_got")" "empty"
+	done
 
-unset PGC_FP_FAIL_ON PGC_FP_COUNT
+	check "control: and the tree fingerprints again once it is readable" \
+		"$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")" "$_fp_base"
+
+	# And the verdict that follows, which is the property that matters: the
+	# controller must say UNVERIFIED, never `stale`. `stale` is the FATAL.
+	chmod 000 "$_fp/tree/src/b.c"
+	check "so the verdict is unknown -- UNVERIFIED -- and never stale" \
+		"$(pgc_freshness_verdict "$_fp_base" \
+			"$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")")" "unknown"
+	chmod 644 "$_fp/tree/src/b.c"
+	check "control: a readable run still reads fresh" \
+		"$(pgc_freshness_verdict "$_fp_base" \
+			"$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")")" "fresh"
+fi
+unset _fp_user _fp_u _fp_got _fp_n
+unset -f _fp_as
 
 # ---------------------------------------------------------------------------
 # ONE TREE HASHES ONE WAY, HOWEVER THE PATH TO IT IS SPELLED.
@@ -766,3 +797,51 @@ _fr_hollow="$(mktemp -d "${TMPDIR:-/tmp}/pgc-rhollow.XXXXXX")"
 check "an empty manifest is reported as empty, not as silence" \
 	"$(pgc_freshness_report "$_fr_hollow" | grep -c 'empty -- nothing under')" "1"
 unset _fr _fr_hollow
+
+
+# ---- one tree hashes one way, however the LOCALE is set ---------------------
+#
+# The defect the single implementation removed on the way (#907). The shell
+# sorted its manifest with `sort -z`, which uses LOCALE COLLATION, and nothing in
+# this harness pins a locale. So the same tree fingerprinted two ways depending
+# on whose machine it was:
+#
+#     LC_ALL=C            6d122a7158d5
+#     LC_ALL=en_US.UTF-8  0b59bd75fa4f
+#
+# en_US.UTF-8 is a common desktop default, so this was a developer stamping a
+# tree and CI reading it back under C.UTF-8 and calling the binary stale. The
+# module sorts BYTES, which is what LC_ALL=C did and what every stamp already on
+# disk was written with.
+#
+# `_` against `-` is what the two collations order differently, and
+# columnar_arrow.c beside columnar-arrow.c is not a contrived pair in this tree.
+_lc="$(mktemp -d "${TMPDIR:-/tmp}/pgc-locale.XXXXXX")"
+mkdir -p "$_lc/tree/src"
+for _lc_n in columnar_arrow.c columnar-arrow.c columnarXarrow.c Columnar.c columnar.c; do
+	printf 'int x; /* %s */\n' "$_lc_n" > "$_lc/tree/src/$_lc_n"
+done
+printf 'all:\n\ttrue\n' > "$_lc/tree/Makefile"
+printf 'x\n' > "$_lc/tree/pgcolumnar.control"
+
+_lc_have=""
+for _lc_l in C C.utf8 en_US.utf8; do
+	locale -a 2>/dev/null | grep -qx "$_lc_l" && _lc_have="$_lc_have $_lc_l"
+done
+_lc_count="$(printf '%s\n' $_lc_have | grep -c .)"
+
+check "premise: at least two locales are installed to compare" \
+	"$([ "$_lc_count" -ge 2 ] && echo enough || echo "$_lc_count")" "enough"
+
+if [ "$_lc_count" -ge 2 ]; then
+	_lc_vals=""
+	for _lc_l in $_lc_have; do
+		_lc_vals="$_lc_vals $(LC_ALL="$_lc_l" LANG="$_lc_l" pgc_source_fingerprint "$_lc/tree")"
+	done
+	check "premise: the fixture fingerprints at all" \
+		"$([ -n "$(printf '%s' $_lc_vals)" ] && echo yes || echo empty)" "yes"
+	check "one tree, one fingerprint, whatever the locale" \
+		"$(printf '%s\n' $_lc_vals | sort -u | grep -c .)" "1"
+fi
+rm -rf "$_lc"
+unset _lc _lc_n _lc_l _lc_have _lc_count _lc_vals

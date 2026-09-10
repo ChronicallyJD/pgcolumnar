@@ -27,6 +27,46 @@ true until the next version shipped.
   regression cannot hide behind a correct answer. Each of the five one-token
   strategy mutations was proved to fail its corresponding assertion.
 
+- The source fingerprint has one implementation, in Python, and both harnesses
+  call it.
+
+  `test/lib.sh` and `test/pytest/pgc_cluster.py` each carried their own answer to
+  "what was this binary built from". In one day the pair produced four defects,
+  two in each copy, and not one was found by whoever wrote that copy: the Python
+  side never walked `objstore/*.c`, then mixed in each file's bare name so
+  `src/module.c` and `objstore/module.c` were interchangeable, then omitted each
+  build directory's `Makefile`; the shell side hashed `xargs -0 cat | md5sum`, a
+  stream with no per-file boundaries, so moving bytes between two files left the
+  hash unchanged while the source no longer compiled. The Python docstring
+  asserted parity with the shell throughout all four. It was false when written
+  and stayed false through two rounds of fixing.
+
+  `test/pgc_fingerprint.py` is now the only implementation. It is Python rather
+  than shell because the portable half should be the one that survives: bash is
+  largely a GNU thing, while Python is present on FreeBSD and Windows where bash
+  is not. It uses the standard library only and runs on the system interpreter,
+  never the pytest virtualenv, so a freshness gate cannot depend on the test
+  dependencies of a harness it gates.
+
+  It is also faster. The shell forked `md5sum` once per file; the module starts
+  one interpreter:
+
+      shell, forking md5sum per file      239 ms per call
+      the module                           26 ms per call
+      across 261 suites, twice each        124 s  ->  13 s
+
+  Unifying them closed a fifth defect that neither implementation had been
+  suspected of. `sort -z` orders by LOCALE COLLATION and nothing in the harness
+  pinned a locale, so one tree fingerprinted two ways depending on the machine:
+
+      LC_ALL=C             6d122a7158d5
+      LC_ALL=en_US.UTF-8   0b59bd75fa4f
+
+  `en_US.UTF-8` is a common desktop default, so a developer could stamp a tree
+  and have CI read it back and call the binary stale. The module sorts bytes,
+  which is what `LC_ALL=C` produced and what every stamp already on disk was
+  written with, so no existing stamp is invalidated.
+
 - The test harness refuses to measure a binary that was not built from the source
   under test.
 

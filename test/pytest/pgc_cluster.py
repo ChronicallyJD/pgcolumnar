@@ -18,6 +18,7 @@ Design notes that are load-bearing, from design/ISSUE_432_PYTEST_HARNESS.md:
 """
 
 import fcntl
+import importlib.util
 import hashlib
 import os
 import re
@@ -367,79 +368,51 @@ def build_and_install(srcdir, pg_config, major, runner=None):
         )
 
 
-def source_build_dirs(srcdir):
-    """Every directory the build compiles in: src/, plus any directory that
-    carries its own Makefile.
+# BOTH OF THESE NOW DELEGATE TO test/pgc_fingerprint.py.
+#
+# They used to be an independent implementation of what test/lib.sh does, and the
+# pair produced four defects in one day -- two here, two there, and not one found
+# by whoever wrote that copy (#907):
+#
+#     objstore/*.c never walked            here     found by @linuxhikerpm
+#     the bare NAME instead of the path    here     found while fixing the above
+#     `xargs -0 cat | md5sum`, no bounds   lib.sh   found by @linuxhikerpm
+#     each build dir's Makefile omitted    here     found while writing the twin
+#
+# The docstring here asserted "the same input set as pgc_source_fingerprint in
+# test/lib.sh" through all four. It was false when written and stayed false
+# through two rounds of fixing, which is the case against a prose claim of
+# agreement: it is not a mechanism, and it is worse than silence because it is
+# exactly what stops the next person checking.
+#
+# Loaded BY PATH rather than by package import: test/ is not a package, and this
+# module is imported by pytest from test/pytest/ while lib.sh runs it as a script
+# from test/. Neither should have to know about the other's layout.
+_FP_PATH = pathlib.Path(__file__).resolve().parent.parent / "pgc_fingerprint.py"
+_fp_spec = importlib.util.spec_from_file_location("pgc_fingerprint", _FP_PATH)
+_fp = importlib.util.module_from_spec(_fp_spec)
+_fp_spec.loader.exec_module(_fp)
 
-    DERIVED, NOT LISTED, and the same rule pgc_source_build_dirs uses in
-    test/lib.sh. Naming objstore/ here would fix today and fail the next time a
-    module is added; a directory with its own Makefile is what the top-level
+
+def source_build_dirs(srcdir):
+    """Every directory the build compiles in: src/, plus any with its own Makefile.
+
+    DERIVED, NOT LISTED. Naming objstore/ would fix today and fail the next time a
+    module is added; a directory carrying its own Makefile is what the top-level
     Makefile recurses into, so that is the property to read.
     """
-    srcdir = pathlib.Path(srcdir)
-    dirs = [srcdir / "src"]
-    for makefile in sorted(srcdir.glob("*/Makefile")):
-        if makefile.parent != srcdir / "src":
-            dirs.append(makefile.parent)
-    return dirs
+    return _fp.build_dirs(srcdir)
 
 
 def source_fingerprint(srcdir):
-    """A hash of everything a build reads, or None if the tree is unreadable.
+    """A hash of everything a build reads, or None if it could not be computed.
 
-    The same input set as pgc_source_fingerprint in test/lib.sh: the C sources
-    and headers of EVERY directory the build compiles in, the Makefile, the
-    control file and the SQL scripts. Content, not mtime, because a checkout or
-    a branch switch rewrites mtimes without changing what compiles, and
-    `git stash` does the reverse.
-
-    THE FIRST VERSION READ src/ ONLY, and said in this docstring that it matched
-    lib.sh while it did not. objstore/ is a separately built shared library the
-    top-level Makefile reaches by recursion, so editing
-    objstore/columnar_objstore_module.c left the hash unchanged and build_once
-    certified a stale module as current (@linuxhikerpm, #897 review):
-
-        objstore_before=2799803eaeac objstore_after=2799803eaeac
-        builds=1 second=already-built
-
-    That is the same gap #898 closes in test/lib.sh. This is an INDEPENDENT
-    implementation, so rebasing #898 would not have fixed it -- which is the
-    argument for the two eventually becoming one, not two that agree today.
+    None rather than "" because that is the contract this harness already had, and
+    build_once distinguishes "no fingerprint" from a real one. The module returns
+    "" for the same condition; the mapping happens here rather than there so the
+    shell and Python callers each get the shape they already expect.
     """
-    srcdir = pathlib.Path(srcdir)
-    paths = []
-    for d in source_build_dirs(srcdir):
-        # EACH BUILD DIRECTORY'S Makefile TOO, not only its sources. The shell
-        # implementation hashes `*.c`, `*.h` AND `Makefile` per directory; this
-        # read only the sources, so editing `objstore/Makefile` -- which changes
-        # how that module is built -- moved the shell hash and not this one:
-        #
-        #     baseline                  shell=45be41a5c47b  python=bea88c7d79ca
-        #     objstore/Makefile edited  shell=cfb8f4553041  python=bea88c7d79ca
-        #
-        # `build_once` then certified a stale module as current. That is
-        # @linuxhikerpm's #897 finding one layer over: they found the module's
-        # sources missing here, and the module's Makefile was still missing
-        # after that was fixed. The docstring claimed parity throughout.
-        paths += list(d.glob("*.c")) + list(d.glob("*.h")) + list(d.glob("Makefile"))
-    paths = sorted(
-        paths
-        + [p for p in (srcdir / "Makefile",) if p.exists()]
-        + sorted(srcdir.glob("*.control")) + sorted(srcdir.glob("*.sql"))
-    )
-    if not paths:
-        return None
-    h = hashlib.md5()
-    for path in paths:
-        try:
-            # The path relative to the tree, not just the name: with two build
-            # directories, src/module.c and objstore/module.c are different
-            # inputs and a bare name would make them interchangeable.
-            h.update(str(path.relative_to(srcdir)).encode())
-            h.update(path.read_bytes())
-        except (OSError, ValueError):
-            return None
-    return h.hexdigest()[:12]
+    return _fp.fingerprint(srcdir) or None
 
 
 def build_once(srcdir, pg_config, major, lock_path=None, runner=None):
