@@ -35,10 +35,14 @@ FORMAT
 ------
 Tab separated, one row per check, sorted:
 
-    suite <TAB> check name <TAB> last observed red <TAB> mutation
+    suite <TAB> part <TAB> check name <TAB> last observed red <TAB> mutation
 
 `last observed red` is a date, or the literal `never`. `mutation` is free text or
 empty. Both are written by this tool, never by hand.
+
+The row is keyed on (suite, part, name). The part matters because harness_selftest
+sources 40-odd parts into one shell and phrases its premises to be COPIED, so a
+name-only key is a key of check NAMES rather than of checks.
 """
 
 import argparse
@@ -60,14 +64,23 @@ def read_records(paths):
             if not line.startswith("RESULT\t"):
                 continue
             f = line.split("\t")
-            if len(f) < 4:
+            if len(f) < 5:
                 continue
-            out.append((f[1], f[2], f[3]))
+            # suite, part, name, verdict
+            out.append((f[1], f[2], f[3], f[4]))
     return out
 
 
 def read_ledger(path):
-    """{(suite, name): [last_red, mutation]} from a ledger file."""
+    """{(suite, part, name): [last_red, mutation]} from a ledger file.
+
+    KEYED ON THE PART AS WELL AS THE NAME. harness_selftest sources 40-odd parts
+    into one shell and phrases its premises to be copied -- "premise: the pytest
+    layer is where THIS PART thinks it is" works verbatim in any of them -- so
+    (suite, name) is a key of check NAMES rather than of checks, and one sharer
+    going red would mark them all. Measured over a real run: 583 records give 579
+    distinct (suite, name) and 582 distinct (suite, part, name).
+    """
     rows = {}
     p = pathlib.Path(path)
     if not p.exists():
@@ -76,30 +89,30 @@ def read_ledger(path):
         if not line.strip() or line.startswith("#"):
             continue
         f = line.split("\t")
-        while len(f) < 4:
+        while len(f) < 5:
             f.append("")
-        rows[(f[0], f[1])] = [f[2] or NEVER, f[3]]
+        rows[(f[0], f[1], f[2])] = [f[3] or NEVER, f[4]]
     return rows
 
 
 def write_ledger(path, rows):
     lines = [
-        "\t".join((suite, name, v[0], v[1]))
-        for (suite, name), v in sorted(rows.items())
+        "\t".join((suite, part, name, v[0], v[1]))
+        for (suite, part, name), v in sorted(rows.items())
     ]
     pathlib.Path(path).write_text("\n".join(lines) + ("\n" if lines else ""))
 
 
 def cmd_census(args):
-    for suite, name, verdict in read_records(args.logs):
-        print(f"{suite}\t{name}\t{verdict}")
+    for suite, part, name, verdict in read_records(args.logs):
+        print(f"{suite}\t{part}\t{name}\t{verdict}")
     return 0
 
 
 def cmd_merge(args):
     rows = read_ledger(args.ledger)
-    for suite, name, verdict in read_records(args.logs):
-        key = (suite, name)
+    for suite, part, name, verdict in read_records(args.logs):
+        key = (suite, part, name)
         if key not in rows:
             # A check this ledger has never seen enters as DEBT. A green run has
             # observed nothing go red, so merging one must never record a red
@@ -116,16 +129,18 @@ def cmd_merge(args):
     # BOTH as observed red -- a claim about a check nothing attacked, which is
     # precisely what this ledger must not make. It cannot be fixed by keying
     # harder without a synthetic id someone would maintain, so it is reported.
+    # A duplicate WITHIN one part still shares a row -- the part fixed the
+    # convention collisions, not genuine repeats. One survives in the real
+    # corpus, and naming it precisely is the point of keying on the part.
     records = read_records(args.logs)
     counts = {}
-    for suite, name, _ in records:
-        counts[(suite, name)] = counts.get((suite, name), 0) + 1
-    dupes = sorted(k for k, c in counts.items() if c > 1)
-    for suite, name in dupes:
+    for suite, part, name, _ in records:
+        counts[(suite, part, name)] = counts.get((suite, part, name), 0) + 1
+    for suite, part, name in sorted(k for k, c in counts.items() if c > 1):
         print(f"    duplicate check name, so one ledger row covers "
-              f"{counts[(suite, name)]}: {suite}\t{name}")
+              f"{counts[(suite, part, name)]}: {suite}\t{part}\t{name}")
 
-    seen = len({(s, n) for s, n, _ in read_records(args.logs)})
+    seen = len({(s, p_, n) for s, p_, n, _ in records})
     red = sum(1 for v in rows.values() if v[0] != NEVER)
     print(f"  ledger: rows={len(rows)} | seen this run={seen}, "
           f"observed red ever={red}, never={len(rows) - red}")
@@ -146,21 +161,24 @@ def cmd_rename_scan(args):
     thing ignored.
     """
     rows = read_ledger(args.ledger)
-    now = {(s, n) for s, n, _ in read_records(args.logs)}
-    suites = {s for s, _ in now}
-    known = {(s, n) for (s, n) in rows if s in suites}
+    now = {(s, p_, n) for s, p_, n, _ in read_records(args.logs)}
+    parts = {(s, p_) for s, p_, _ in now}
+    known = {k for k in rows if (k[0], k[1]) in parts}
 
     appeared = sorted(now - known)
     vanished = sorted(known - now)
     rc = 0
     if appeared and vanished:
-        # Only pair within a suite, and only report while both sides remain.
-        for (s_a, n_a), (s_v, n_v) in zip(appeared, vanished):
-            if s_a != s_v:
+        # Only pair within a PART. Keying on the part also fixes a blind spot the
+        # name-only key had: a premise moving between parts was indistinguishable
+        # from a rename, and now it is a disappearance and an appearance in two
+        # different parts, which this does not pair.
+        for (s_a, p_a, n_a), (s_v, p_v, n_v) in zip(appeared, vanished):
+            if (s_a, p_a) != (s_v, p_v):
                 continue
-            was = rows.get((s_v, n_v), [NEVER, ""])[0]
+            was = rows.get((s_v, p_v, n_v), [NEVER, ""])[0]
             print(f"    possible rename: {n_v} -> {n_a} "
-                  f"(in {s_a}, history: last red {was})")
+                  f"(in {s_a}/{p_a}, history: last red {was})")
             rc = 1
     print(f"  rename scan: appeared={len(appeared)}, vanished={len(vanished)}")
     return rc
@@ -184,15 +202,15 @@ def _read_budget(path):
 def cmd_gate(args):
     rows = read_ledger(args.ledger)
     budget = _read_budget(args.budget)
-    seen = {(s, n) for s, n, _ in read_records(args.logs)}
+    seen = {(s, p_, n) for s, p_, n, _ in read_records(args.logs)}
 
     # A check the ledger has never heard of is NEW. The allowlist exists so a
     # gate that fails on 3,762 unledgered sites is not what lands -- but a new
     # one must not enter as silent debt either.
     unknown = sorted(seen - set(rows))
     rc = 0
-    for suite, name in unknown:
-        print(f"    not in the ledger: {suite}\t{name}")
+    for suite, part, name in unknown:
+        print(f"    not in the ledger: {suite}\t{part}\t{name}")
         rc = 1
 
     never = sum(1 for v in rows.values() if v[0] == NEVER)
@@ -214,7 +232,7 @@ def cmd_gate(args):
     if args.registered:
         registered = {l.strip() for l in pathlib.Path(args.registered).read_text().split()
                       if l.strip()}
-        covered = {s for s, _ in rows}
+        covered = {k[0] for k in rows}
         uncovered = sorted(registered - covered)
         want_s = budget.get("suites_not_covered")
         print(f"  ledger coverage: registered={len(registered)} | "

@@ -1242,7 +1242,8 @@ run is the deliberate accelerator, not the only source.
 suite <TAB> check name <TAB> last observed red <TAB> mutation
 ```
 
-`last observed red` is a date or the literal `never`. The **mutation column exists from
+`last observed red` is a date or the literal `never`. The row is keyed on the first
+three fields. The **mutation column exists from
 v1 with nothing filling it automatically**, because adding a column later means
 rewriting every entry — and if an entry can record *which* mutation reddened a check,
 the catalogue a mutation gate would need builds itself out of work people already do by
@@ -1279,10 +1280,22 @@ whole thing gets ignored.
 
 ### `test_a_duplicated_check_name_shares_one_row_and_is_reported`
 
-Two checks with the same name in one suite share a ledger row, so one going red marks
-**both** as observed red — a claim about a check nothing attacked. Reported rather than
-prevented, for the same reason as the rename. The real corpus carries four today, which
-is how this was noticed: 609 records reduced to 605 rows.
+Two checks with the same name **in one part** share a ledger row, so one going red marks
+**both** as observed red — a claim about a check nothing attacked.
+
+The key is `(suite, part, name)`, not `(suite, name)`. `harness_selftest` sources 40-odd
+parts into one shell and phrases its premises to be **copied** — *"premise: the pytest
+layer is where **this part** thinks it is"* works verbatim in any of them — so a
+name-only key is a key of check *names*, and the collision count grows with every part
+anyone writes. Measured over a real run of 583 records: 579 distinct `(suite, name)`
+against 582 distinct `(suite, part, name)`. The part is derived from `BASH_SOURCE`
+rather than from a convention, so the next part written the same way is keyed correctly
+without anyone remembering.
+
+One duplicate survives that, and it is a genuine one:
+`340-the-binary-must-be-built-from` asks `premise: the fixture fingerprints at all`
+twice within the same part. That is the kind of thing the ledger can now name precisely
+instead of losing among convention artifacts.
 
 ### `test_the_gate_refuses_a_check_the_ledger_has_never_seen`
 

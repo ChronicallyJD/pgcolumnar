@@ -48,11 +48,11 @@ def _rows(path):
     return [l.split("\t") for l in pathlib.Path(path).read_text().splitlines() if l]
 
 
-GREEN = ("RESULT\tdemo\tfirst check\tPASS\t\n"
-         "RESULT\tdemo\tsecond check\tPASS\t\n"
+GREEN = ("RESULT\tdemo\tpart1\tfirst check\tPASS\t\n"
+         "RESULT\tdemo\tpart1\tsecond check\tPASS\t\n"
          "checks run: 2\n")
-RED = ("RESULT\tdemo\tfirst check\tFAIL\t\n"
-       "RESULT\tdemo\tsecond check\tPASS\t\n"
+RED = ("RESULT\tdemo\tpart1\tfirst check\tFAIL\t\n"
+       "RESULT\tdemo\tpart1\tsecond check\tPASS\t\n"
        "checks run: 2\n")
 
 
@@ -68,7 +68,7 @@ def test_a_green_run_records_debt_and_never_a_red_observation(tmp_path, expect):
     _run("merge", "--ledger", ledger, log)
     rows = _rows(ledger)
     expect.num(len(rows), 2, "merging a green run records both checks")
-    expect.text(",".join(sorted({r[2] for r in rows})), "never",
+    expect.text(",".join(sorted({r[3] for r in rows})), "never",
                 "and records neither as ever having been red")
 
 
@@ -78,7 +78,7 @@ def test_a_red_observation_is_dated_and_survives_a_later_green_run(tmp_path, exp
     _run("merge", "--ledger", ledger, _write(tmp_path, "g.log", GREEN))
     _run("merge", "--ledger", ledger, "--date", "2026-09-10",
          _write(tmp_path, "r.log", RED))
-    by = {r[1]: r[2] for r in _rows(ledger)}
+    by = {r[2]: r[3] for r in _rows(ledger)}
     expect.text(by["first check"], "2026-09-10",
                 "a check observed red gains the date it was seen")
     expect.text(by["second check"], "never",
@@ -86,7 +86,7 @@ def test_a_red_observation_is_dated_and_survives_a_later_green_run(tmp_path, exp
 
     _run("merge", "--ledger", ledger, "--date", "2026-09-11",
          _write(tmp_path, "g2.log", GREEN))
-    expect.text({r[1]: r[2] for r in _rows(ledger)}["first check"], "2026-09-10",
+    expect.text({r[2]: r[3] for r in _rows(ledger)}["first check"], "2026-09-10",
                 "a later green run does not erase an observation")
 
 
@@ -100,14 +100,14 @@ def test_the_mutation_column_exists_from_v1(tmp_path, expect):
     ledger = _write(tmp_path, "l.tsv", "")
     _run("merge", "--ledger", ledger, "--date", "2026-09-10",
          _write(tmp_path, "r.log", RED))
-    expect.num(len([r for r in _rows(ledger) if len(r) != 4]), 0,
+    expect.num(len([r for r in _rows(ledger) if len(r) != 5]), 0,
                "every row carries four fields, the fourth being the mutation")
-    expect.text("[" + {r[1]: r[3] for r in _rows(ledger)}["first check"] + "]", "[]",
+    expect.text("[" + {r[2]: r[4] for r in _rows(ledger)}["first check"] + "]", "[]",
                 "and it is empty when nothing named a mutation")
 
     _run("merge", "--ledger", ledger, "--date", "2026-09-10",
          "--mutation", "SAOP limit 128 -> 0", _write(tmp_path, "r2.log", RED))
-    by = {r[1]: r[3] for r in _rows(ledger)}
+    by = {r[2]: r[4] for r in _rows(ledger)}
     expect.text(by["first check"], "SAOP limit 128 -> 0",
                 "a named mutation is recorded against the check that reddened")
     expect.text("[" + by["second check"] + "]", "[]",
@@ -123,27 +123,27 @@ def test_a_rename_is_reported_rather_than_silently_resetting_history(tmp_path, e
     rename, and reporting one on every new check is noise that gets it ignored.
     """
     ledger = _write(tmp_path, "l.tsv", "")
-    before = ("RESULT\tdemo\tthe old name\tFAIL\t\n"
-              "RESULT\tdemo\ta stable check\tPASS\t\nchecks run: 2\n")
+    before = ("RESULT\tdemo\tpart1\tthe old name\tFAIL\t\n"
+              "RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n")
     _run("merge", "--ledger", ledger, "--date", "2026-09-01",
          _write(tmp_path, "b.log", before))
 
-    after = ("RESULT\tdemo\tthe new name\tPASS\t\n"
-             "RESULT\tdemo\ta stable check\tPASS\t\nchecks run: 2\n")
+    after = ("RESULT\tdemo\tpart1\tthe new name\tPASS\t\n"
+             "RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n")
     out, _ = _run("rename-scan", "--ledger", ledger, _write(tmp_path, "a.log", after))
     expect.num(out.count("possible rename: the old name -> the new name"), 1,
                "a name that appeared while another disappeared is reported")
     expect.num(out.count("a stable check"), 0, "and the stable check is not")
 
     added = after.replace("the new name", "the old name") + ""
-    added = ("RESULT\tdemo\tthe old name\tPASS\t\n"
-             "RESULT\tdemo\ta stable check\tPASS\t\n"
-             "RESULT\tdemo\ta genuinely new check\tPASS\t\nchecks run: 3\n")
+    added = ("RESULT\tdemo\tpart1\tthe old name\tPASS\t\n"
+             "RESULT\tdemo\tpart1\ta stable check\tPASS\t\n"
+             "RESULT\tdemo\tpart1\ta genuinely new check\tPASS\t\nchecks run: 3\n")
     out, _ = _run("rename-scan", "--ledger", ledger, _write(tmp_path, "add.log", added))
     expect.num(out.count("possible rename"), 0,
                "a check merely added is not reported as a rename")
 
-    removed = "RESULT\tdemo\ta stable check\tPASS\t\nchecks run: 1\n"
+    removed = "RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 1\n"
     out, _ = _run("rename-scan", "--ledger", ledger, _write(tmp_path, "rm.log", removed))
     expect.num(out.count("possible rename"), 0,
                "nor is one merely removed")
@@ -159,13 +159,13 @@ def test_a_duplicated_check_name_shares_one_row_and_is_reported(tmp_path, expect
     this was noticed: 609 records reduced to 605 rows.
     """
     ledger = _write(tmp_path, "l.tsv", "")
-    dupe = ("RESULT\tdemo\tthe same name\tPASS\t\n"
-            "RESULT\tdemo\tthe same name\tFAIL\t\n"
-            "RESULT\tdemo\ta unique name\tPASS\t\nchecks run: 3\n")
+    dupe = ("RESULT\tdemo\tpart1\tthe same name\tPASS\t\n"
+            "RESULT\tdemo\tpart1\tthe same name\tFAIL\t\n"
+            "RESULT\tdemo\tpart1\ta unique name\tPASS\t\nchecks run: 3\n")
     out, _ = _run("merge", "--ledger", ledger, "--date", "2026-09-10",
                   _write(tmp_path, "d.log", dupe))
     expect.num(out.count("duplicate check name, so one ledger row covers 2: "
-                         "demo\tthe same name"), 1,
+                         "demo\tpart1\tthe same name"), 1,
                "a duplicated check name is reported by name")
     expect.num(out.count("a unique name"), 0, "and a unique one is not")
     expect.num(len(_rows(ledger)), 2,
@@ -190,10 +190,10 @@ def test_the_gate_refuses_a_check_the_ledger_has_never_seen(tmp_path, expect):
     expect.num(out.count("checks_never_observed_red: 2 exceeds the budget of 1"), 1,
                "and the gate says which number was exceeded, by how much")
 
-    newer = _write(tmp_path, "n.log", GREEN + "RESULT\tdemo\tbrand new\tPASS\t\n")
+    newer = _write(tmp_path, "n.log", GREEN + "RESULT\tdemo\tpart1\tbrand new\tPASS\t\n")
     out, rc = _run("gate", "--ledger", ledger, "--budget", budget, newer)
     expect.num(rc, 1, "a check the ledger has never seen is refused")
-    expect.num(out.count("not in the ledger: demo\tbrand new"), 1,
+    expect.num(out.count("not in the ledger: demo\tpart1\tbrand new"), 1,
                "and it is named, so the author knows which one")
 
 
@@ -207,8 +207,8 @@ def test_the_committed_ledger_and_budget_agree(expect):
     expect.text("yes" if budget.exists() else "no", "yes", "the budget is in the tree")
 
     rows = [l.split("\t") for l in ledger.read_text().splitlines() if l]
-    never = [r for r in rows if r[2] == "never"]
-    red = [r for r in rows if r[2] != "never"]
+    never = [r for r in rows if r[3] == "never"]
+    red = [r for r in rows if r[3] != "never"]
     print(f"  ledger: inputs={len(rows)} | observed red={len(red)}, "
           f"never={len(never)} | sum={len(red) + len(never)}")
     expect.num(len(red) + len(never), len(rows), "the ledger partitions")

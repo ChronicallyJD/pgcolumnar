@@ -35,15 +35,15 @@ _led_run() { python3 "$_led" "$@" 2>&1; }
 # ---- the census comes out of a run, not out of a list -----------------------
 
 cat > "$_lw/green.log" <<'LOG'
-RESULT	demo	first check	PASS	
-RESULT	demo	second check	PASS	
+RESULT	demo	part1	first check	PASS	
+RESULT	demo	part1	second check	PASS	
 checks run: 2
 LOG
 
 check "the census reads a run's records" \
 	"$(_led_run census "$_lw/green.log" | wc -l)" "2"
 check "and names the suite and the check, not just a count" \
-	"$(_led_run census "$_lw/green.log" | head -1)" "demo	first check	PASS"
+	"$(_led_run census "$_lw/green.log" | head -1)" "demo	part1	first check	PASS"
 
 # ---- merging a green run adds the checks as DEBT, not as proven -------------
 #
@@ -56,27 +56,27 @@ _led_run merge --ledger "$_lw/ledger.tsv" "$_lw/green.log" >/dev/null
 check "merging a green run records both checks" \
 	"$(grep -c . "$_lw/ledger.tsv")" "2"
 check "and records neither as ever having been red" \
-	"$(cut -f3 "$_lw/ledger.tsv" | sort -u | tr '\n' ' ')" "never "
+	"$(cut -f4 "$_lw/ledger.tsv" | sort -u | tr '\n' ' ')" "never "
 
 # ---- merging a run that DID go red records the observation ------------------
 
 cat > "$_lw/red.log" <<'LOG'
-RESULT	demo	first check	FAIL	
-RESULT	demo	second check	PASS	
+RESULT	demo	part1	first check	FAIL	
+RESULT	demo	part1	second check	PASS	
 checks run: 2
 LOG
 
 _led_run merge --ledger "$_lw/ledger.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
 check "a check observed red gains the date it was seen" \
-	"$(awk -F'\t' '$2=="first check"{print $3}' "$_lw/ledger.tsv")" "2026-09-10"
+	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/ledger.tsv")" "2026-09-10"
 check "and a check that stayed green keeps its debt" \
-	"$(awk -F'\t' '$2=="second check"{print $3}' "$_lw/ledger.tsv")" "never"
+	"$(awk -F'\t' '$3=="second check"{print $4}' "$_lw/ledger.tsv")" "never"
 
 # An observation is not undone by a later green run. The ledger records that the
 # check WAS seen red, which stays true.
 _led_run merge --ledger "$_lw/ledger.tsv" --date 2026-09-11 "$_lw/green.log" >/dev/null
 check "a later green run does not erase an observation" \
-	"$(awk -F'\t' '$2=="first check"{print $3}' "$_lw/ledger.tsv")" "2026-09-10"
+	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/ledger.tsv")" "2026-09-10"
 
 # ---- the gate: new checks must not be added to the debt silently ------------
 #
@@ -101,9 +101,9 @@ check "and the gate says which number was exceeded, by how much" \
 # allowlist exists for: it is NEW, and it must not enter as silent debt.
 printf 'suites_not_covered 0\nchecks_never_observed_red 1\n' > "$_lw/budget.txt"
 cat > "$_lw/newcheck.log" <<'LOG'
-RESULT	demo	first check	PASS	
-RESULT	demo	second check	PASS	
-RESULT	demo	a brand new check	PASS	
+RESULT	demo	part1	first check	PASS	
+RESULT	demo	part1	second check	PASS	
+RESULT	demo	part1	a brand new check	PASS	
 checks run: 3
 LOG
 check "a check the ledger has never seen is refused, not absorbed" \
@@ -111,7 +111,7 @@ check "a check the ledger has never seen is refused, not absorbed" \
 		&& echo ok || echo refused)" "refused"
 check "and it is named, so the author knows which one" \
 	"$(_led_run gate --ledger "$_lw/ledger.tsv" --budget "$_lw/budget.txt" "$_lw/newcheck.log" 2>&1 \
-		| grep -c 'not in the ledger: demo	a brand new check')" "1"
+		| grep -c 'not in the ledger: demo	part1	a brand new check')" "1"
 
 # ---- the budget may only go DOWN --------------------------------------------
 #
@@ -124,8 +124,8 @@ check "the committed budget names both debts" \
 # ---- inputs == sum(buckets), over the real ledger ---------------------------
 
 _l_total="$(grep -c . "$_ledger" || true)"
-_l_red="$(awk -F'\t' '$3!="never"' "$_ledger" | grep -c . || true)"
-_l_never="$(awk -F'\t' '$3=="never"' "$_ledger" | grep -c . || true)"
+_l_red="$(awk -F'\t' '$4!="never"' "$_ledger" | grep -c . || true)"
+_l_never="$(awk -F'\t' '$4=="never"' "$_ledger" | grep -c . || true)"
 echo "  ledger: inputs=$_l_total | observed red=$_l_red, never=$_l_never | sum=$((_l_red + _l_never))"
 check "the ledger partitions into observed and never" \
 	"$((_l_red + _l_never))" "$_l_total"
@@ -154,17 +154,17 @@ check "the committed budget matches the committed ledger's debt" \
 
 : > "$_lw/ren.tsv"
 cat > "$_lw/before.log" <<'LOG'
-RESULT	demo	the old name	FAIL	
-RESULT	demo	a stable check	PASS	
+RESULT	demo	part1	the old name	FAIL	
+RESULT	demo	part1	a stable check	PASS	
 checks run: 2
 LOG
 _led_run merge --ledger "$_lw/ren.tsv" --date 2026-09-01 "$_lw/before.log" >/dev/null
 check "premise: the check has history before the rename" \
-	"$(awk -F'\t' '$2=="the old name"{print $3}' "$_lw/ren.tsv")" "2026-09-01"
+	"$(awk -F'\t' '$3=="the old name"{print $4}' "$_lw/ren.tsv")" "2026-09-01"
 
 cat > "$_lw/after.log" <<'LOG'
-RESULT	demo	the new name	PASS	
-RESULT	demo	a stable check	PASS	
+RESULT	demo	part1	the new name	PASS	
+RESULT	demo	part1	a stable check	PASS	
 checks run: 2
 LOG
 check "a name that appeared while another disappeared is reported as a rename" \
@@ -177,9 +177,9 @@ check "and the stable check is not reported" \
 # The detector must not fire when a check is simply ADDED. Without this it names
 # a rename on every new check, which is noise that gets it ignored.
 cat > "$_lw/added.log" <<'LOG'
-RESULT	demo	the old name	PASS	
-RESULT	demo	a stable check	PASS	
-RESULT	demo	a genuinely new check	PASS	
+RESULT	demo	part1	the old name	PASS	
+RESULT	demo	part1	a stable check	PASS	
+RESULT	demo	part1	a genuinely new check	PASS	
 checks run: 3
 LOG
 check "a check merely added is not reported as a rename" \
@@ -188,7 +188,7 @@ check "a check merely added is not reported as a rename" \
 
 # Nor when one is simply REMOVED.
 cat > "$_lw/removed.log" <<'LOG'
-RESULT	demo	a stable check	PASS	
+RESULT	demo	part1	a stable check	PASS	
 checks run: 1
 LOG
 check "a check merely removed is not reported as a rename either" \
@@ -209,16 +209,16 @@ check "a check merely removed is not reported as a rename either" \
 : > "$_lw/mut.tsv"
 _led_run merge --ledger "$_lw/mut.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
 check "every ledger row carries four fields, the fourth being the mutation" \
-	"$(awk -F'\t' 'NF!=4' "$_lw/mut.tsv" | grep -c . || true)" "0"
+	"$(awk -F'\t' 'NF!=5' "$_lw/mut.tsv" | grep -c . || true)" "0"
 check "and it is empty when nothing named a mutation" \
-	"$(awk -F'\t' '$2=="first check"{print "[" $4 "]"}' "$_lw/mut.tsv")" "[]"
+	"$(awk -F'\t' '$3=="first check"{print "[" $5 "]"}' "$_lw/mut.tsv")" "[]"
 
 _led_run merge --ledger "$_lw/mut.tsv" --date 2026-09-10 \
 	--mutation 'PGCOLUMNAR_SAOP_ELEMENT_LIMIT 128 -> 0' "$_lw/red.log" >/dev/null
 check "a merge that names its mutation records it against the check that reddened" \
-	"$(awk -F'\t' '$2=="first check"{print $4}' "$_lw/mut.tsv")" "PGCOLUMNAR_SAOP_ELEMENT_LIMIT 128 -> 0"
+	"$(awk -F'\t' '$3=="first check"{print $5}' "$_lw/mut.tsv")" "PGCOLUMNAR_SAOP_ELEMENT_LIMIT 128 -> 0"
 check "and not against one that stayed green" \
-	"$(awk -F'\t' '$2=="second check"{print "[" $4 "]"}' "$_lw/mut.tsv")" "[]"
+	"$(awk -F'\t' '$3=="second check"{print "[" $5 "]"}' "$_lw/mut.tsv")" "[]"
 
 # ---- a duplicated check name shares one ledger row --------------------------
 #
@@ -233,15 +233,15 @@ check "and not against one that stayed green" \
 # 609 records reduced to 605 rows.
 
 cat > "$_lw/dupe.log" <<'LOG'
-RESULT	demo	the same name	PASS	
-RESULT	demo	the same name	FAIL	
-RESULT	demo	a unique name	PASS	
+RESULT	demo	part1	the same name	PASS	
+RESULT	demo	part1	the same name	FAIL	
+RESULT	demo	part1	a unique name	PASS	
 checks run: 3
 LOG
 : > "$_lw/dupe.tsv"
 check "a duplicated check name is reported by name" \
 	"$(_led_run merge --ledger "$_lw/dupe.tsv" --date 2026-09-10 "$_lw/dupe.log" \
-		| grep -c 'duplicate check name, so one ledger row covers 2: demo	the same name')" "1"
+		| grep -c 'duplicate check name, so one ledger row covers 2: demo	part1	the same name')" "1"
 check "and a unique one is not" \
 	"$(_led_run merge --ledger "$_lw/dupe.tsv" --date 2026-09-10 "$_lw/dupe.log" \
 		| grep -c 'a unique name')" "0"
