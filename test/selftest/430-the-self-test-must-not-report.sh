@@ -68,9 +68,27 @@ check "control: and the second, so a good pg_config is not refused" \
 # skip means the guard stops being tested that run without anyone noticing".
 #
 # HEREDOC-AWARE, because the parts generate fixture scripts that legitimately end
-# in `exit 0` and a flat grep reports eleven offences that are not offences.
-# Measured: this sweep sees 2 sites before the fix and 0 after, where a flat
-# `grep -c 'exit 0'` sees 13 either way.
+# in `exit 0`, and a flat grep counts those as offences.
+#
+# THE REAL NUMBERS ARGUE IT BETTER THAN A ROUND ONE. An earlier version of this
+# comment said a flat grep sees "13 either way", which is true of main and false of
+# the branch it ships in: on this head it sees 22, because the fixtures BELOW add ten
+# `exit 0` lines of their own. So the flat count moves for a reason that has nothing
+# to do with the defect, which is the argument:
+#
+#     heredoc-aware sweep    2 before the fix, 0 after
+#     flat grep -c 'exit 0'  13 before, 24 after
+#
+# Reported by @jdatcmd, who checked the number against the tree rather than the
+# sentence.
+#
+# WHICH SPELLINGS THIS SEES, stated because a rule about the literal `0` is not the
+# whole of "a sourced part must not end the driver claiming success". It sees
+# `exit 0` and a BARE `exit`, which ends with the last command's status and is very
+# often 0. It cannot decide `exit $?` or `exit "$rc"`, where the status is computed:
+# flagging those would refuse a part that legitimately exits non-zero. Measured on
+# this head, each of the three is **zero**, so nothing is open -- but the next reader
+# should not assume the class is closed. Raised by @jdatcmd.
 _h934_sweep() {
 	awk '
 		FNR == 1 { hd = "" }
@@ -82,12 +100,17 @@ _h934_sweep() {
 			}
 		}
 		/^[ \t]*exit[ \t]+0[ \t]*$/ { printf "%s:%d\n", FILENAME, FNR }
+		/^[ \t]*exit[ \t]*$/ { printf "%s:%d\n", FILENAME, FNR }
 	' "$@"
 }
 check "premise: the sweep reads every selftest part" \
 	"$([ "$(ls "$PGC_TESTDIR"/selftest/*.sh | wc -l)" -ge 30 ] && echo yes || echo no)" "yes"
 check "premise: and it finds a planted exit 0 outside a heredoc" \
 	"$(printf 'echo hi\nexit 0\n' > "$PGC_WORKDIR/p934.sh"; _h934_sweep "$PGC_WORKDIR/p934.sh" | grep -c .)" "1"
+check "premise: and a BARE exit too, which ends with the last status and is usually 0" \
+	"$(printf 'echo hi\nexit\n' > "$PGC_WORKDIR/p934e.sh"; _h934_sweep "$PGC_WORKDIR/p934e.sh" | grep -c .)" "1"
+check "premise: while a deliberate non-zero exit is not an offence" \
+	"$(printf 'echo hi\nexit 66\n' > "$PGC_WORKDIR/p934f.sh"; _h934_sweep "$PGC_WORKDIR/p934f.sh" | grep -c .)" "0"
 check "premise: while a fixture script ending in exit 0 inside a heredoc is not an offence" \
 	"$({ printf 'cat > /tmp/x <<%sEOF%s\n' "'" "'"; printf 'exit 0\n'; printf 'EOF\n'; } > "$PGC_WORKDIR/p934b.sh"; _h934_sweep "$PGC_WORKDIR/p934b.sh" | grep -c .)" "0"
 # THE LITERAL AND THE CONSTANT MUST AGREE. Part 010 spells 66 rather than

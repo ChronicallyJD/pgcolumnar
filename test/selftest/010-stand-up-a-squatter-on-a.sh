@@ -19,7 +19,7 @@ done
 # `exit` here ends the DRIVER -- and a zero status said "610 checks passed" when the
 # truth was "nothing ran" (#934). 66 is the status lib.sh calls PGC_EXIT_SKIPPED and
 # the runners already pair with a `SKIPPED (ran no checks)` line; it is spelled as a
-# literal because lib.sh arrives in part 020 and this part runs first, and part 410
+# literal because lib.sh arrives in part 020 and this part runs first, and part 430
 # asserts the literal still equals the constant so the two cannot drift.
 if [ "$SQ_PORT" = 0 ]; then
 	echo "SKIP  could not find a free port for the squatter cluster"

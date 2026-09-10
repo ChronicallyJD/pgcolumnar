@@ -365,7 +365,10 @@ true until the next version shipped.
   heredoc-aware sweep requiring that **no** part exits 0 -- closing the class rather
   than the two instances. The sweep has to be heredoc-aware because the parts generate
   fixture scripts that legitimately end in `exit 0`: it sees 2 sites before this change
-  and 0 after, where a flat `grep -c 'exit 0'` sees 13 either way.
+  and 0 after, where a flat `grep -c 'exit 0'` sees 13 before and 24 after -- the flat
+  count moves because the new part's own fixtures add ten, for a reason that has nothing
+  to do with the defect. It sees `exit 0` and a bare `exit`; it cannot decide `exit $?`
+  or `exit "$rc"`, and each of those is zero in the tree today.
 
   After: `rc=2` and a named refusal for a missing `pg_config`, for a path that is not a
   directory, and for one that answers nothing; `604 passed + 0 failed + 0 unrunnable`
