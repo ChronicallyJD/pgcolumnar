@@ -59,9 +59,10 @@ behaviour, the source of that number is named.
 - [11. test_zonemap_boundaries.py: exact boundaries](#11-test_zonemap_boundariespy-exact-boundaries)
 - [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
-- [14. Adding a test](#14-adding-a-test)
-- [15. What this corpus does NOT yet refuse](#15-what-this-corpus-does-not-yet-refuse)
-- [16. Traps this corpus records](#16-traps-this-corpus-records)
+- [14. test_harness_deps.py: the harness must self-test without a database](#14-testharnessdepspy-the-harness-must-self-test-without-a-database)
+- [15. Adding a test](#15-adding-a-test)
+- [16. What this corpus does NOT yet refuse](#16-what-this-corpus-does-not-yet-refuse)
+- [17. Traps this corpus records](#17-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -1012,7 +1013,45 @@ pins the eight counts exactly. Its header records why -- for a CURVE change the
 digest pins upstream catch it first and the integers add nothing, so their real
 domain is a changed READER at an unchanged layout.
 
-## 14. Adding a test
+## 14. test_harness_deps.py: the harness must self-test without a database
+
+`conftest.py` imported psycopg at module scope, and conftest is imported before
+every run, so a **database driver was a hard requirement of the whole corpus** --
+including the 61 tests that never open a connection. With psycopg absent the run
+did not fail a test, it failed to COLLECT:
+
+    ImportError while loading conftest '.../conftest.py'
+    conftest.py:15: in <module>
+        import psycopg
+    E   ModuleNotFoundError: No module named 'psycopg'
+
+Measured: with the import deferred into the two fixtures that connect, **61 of
+142 tests run and pass with no driver installed**; with it at module scope, zero
+do. That coupling is half of why the guard-testing part of this corpus cannot run
+where the gate runs (README.md, "This is not in the gate yet").
+
+| test | asserts |
+| --- | --- |
+| `test_the_guard_half_of_the_corpus_runs_without_a_database_driver` | the no-cluster files collect and pass with `import psycopg` shimmed to raise |
+| `test_a_cluster_test_still_needs_the_driver` | **control**: deferring made the IMPORT lazy, not the database optional |
+| `test_conftest_imports_no_database_driver_at_module_scope` | the regression named in one line, for whoever edits conftest next |
+| `test_the_no_cluster_list_still_names_files_that_exist` | the list is a hazard; it fails loudly rather than covering fewer files after a rename |
+| `test_ci_derives_the_file_list_rather_than_repeating_it` | the CI job asks this module for `NO_CLUSTER` and names no file literally |
+| `test_the_job_installs_no_database_driver` | the job asserts psycopg is absent rather than assuming it |
+
+**THIS IS NOW IN THE GATE.** `.github/workflows/ci.yml` runs a `pytest-guards`
+job: no database, no build, an interpreter and the two pinned runner packages.
+The file list is derived from `NO_CLUSTER` in this module and the pins from
+`requirements-test.txt`, so neither is a second copy that can go stale -- and two
+arms above hold it to that. Measured in the job: 61 tests, ~3 seconds.
+
+A SHIM RATHER THAN AN UNINSTALL. Uninstalling psycopg would test the machine
+rather than the harness, could not run beside anything else, and would leave the
+environment broken if the test died. A module that raises on import, first on the
+path, is the same observation and reversible by construction. Both behavioural
+arms assert the shim actually bites before believing anything it produces.
+
+## 15. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -1039,7 +1078,7 @@ domain is a changed READER at an unchanged layout.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 15. What this corpus does NOT yet refuse
+## 16. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
@@ -1051,7 +1090,7 @@ Read it before adding a test. The gaps most likely to affect a new test are that
 same family satisfies it, and that a write is not required to have written anything.
 Both are named there with the refusal each needs.
 
-## 16. Traps this corpus records
+## 17. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.

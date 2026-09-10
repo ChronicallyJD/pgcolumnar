@@ -63,6 +63,51 @@ jobs:
       - name: shellcheck -S error over the harness
         run: shellcheck -S error -s bash test/*.sh test/selftest/*.sh
 
+  # The pytest harness's own guards, where they can actually run.
+  #
+  # THIS RUNS NO DATABASE AND BUILDS NOTHING. test/pytest/ is 152 tests, and the
+  # majority of them test the HARNESS rather than the product -- they drive pytest
+  # inside pytest to prove a guard refuses what it claims to refuse. Those need an
+  # interpreter and nothing else.
+  #
+  # README.md records why the corpus is not in `SUITES`: pgc_skip treats a missing
+  # dependency as a failure rather than a skip, so registering it there would
+  # redden every job until the driver is installed everywhere. That argument is
+  # about the CLUSTER tests. It never applied to the guard tests, and until
+  # conftest deferred its psycopg import there was no way to separate them --
+  # importing conftest imported the driver, so a run with no driver failed to
+  # COLLECT rather than failing a test.
+  #
+  # THE FILE LIST AND THE PINS ARE BOTH DERIVED, NOT WRITTEN HERE. The list comes
+  # from NO_CLUSTER in test_harness_deps.py and the pins from
+  # requirements-test.txt, because a second copy of either is a thing that goes
+  # stale silently -- which this repository has spent a lot of time proving.
+  pytest-guards:
+    name: pytest (harness guards, no database)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: install pytest, pinned from requirements-test.txt, WITHOUT the driver
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/pgcvenv
+          # Only the two runner packages. psycopg is deliberately absent: these
+          # tests must not need it, and this job is what proves that.
+          PINS="$(grep -E '^(pytest|pytest-xdist)==' test/pytest/requirements-test.txt)"
+          test -n "$PINS"
+          echo "$PINS"
+          /tmp/pgcvenv/bin/pip install --quiet $PINS
+          ! /tmp/pgcvenv/bin/pip show psycopg >/dev/null 2>&1
+      - name: run the guard tests that need no cluster
+        run: |
+          set -euo pipefail
+          cd test/pytest
+          FILES="$(python3 -c 'import sys; sys.path.insert(0, "."); from test_harness_deps import NO_CLUSTER; print(" ".join(NO_CLUSTER))')"
+          test -n "$FILES"
+          echo "running: $FILES"
+          PYTHONPATH=. /tmp/pgcvenv/bin/pytest -q $FILES
+
   # Build against every supported major. Fast, and it is what an API change
   # between majors trips first.
   # Both architectures, because a build preflight is cheap and the project has

@@ -267,6 +267,62 @@ check "control: distinct names in the same corpus report no duplicate" \
 
 unset -f _dcv_dupes
 
+
+# ---- the harness must self-test without a database, and the gate must run it --
+#
+# conftest.py imported psycopg AT MODULE SCOPE, and conftest is imported before
+# every run, so a DATABASE DRIVER was a hard requirement of the whole corpus --
+# including the 61 tests that never open a connection. With psycopg absent the run
+# did not fail a test, it failed to COLLECT.
+#
+# That coupling was half of why README.md says the corpus is "not in the gate
+# yet": pgc_skip treats a missing dependency as a failure rather than a skip, so
+# registering the corpus in SUITES would redden every job. That argument is about
+# the CLUSTER tests, and until the import moved there was no way to separate them.
+#
+# The behavioural proof lives in test/pytest/test_harness_deps.py, which shims
+# `import psycopg` to raise and requires the no-cluster files to pass anyway.
+# THIS half is static and it is the half that runs in the matrix.
+
+_hd_conf="$PGC_TESTDIR/pytest/conftest.py"
+_hd_ci="$PGC_SRCDIR/.github/workflows/ci.yml"
+
+check "premise: the pytest conftest is where this part thinks it is" \
+	"$([ -f "$_hd_conf" ] && echo yes || echo no)" "yes"
+
+check "conftest imports no database driver at module scope" \
+	"$(grep -cE '^(import psycopg|from psycopg)' "$_hd_conf")" "0"
+
+# PREMISE: the pattern can see such an import at all, or "0" is what a broken
+# grep says too.
+printf 'import os\nimport psycopg\n' > "$PGC_WORKDIR/hd-fixture.py"
+check "premise: the pattern recognises a module-scope driver import" \
+	"$(grep -cE '^(import psycopg|from psycopg)' "$PGC_WORKDIR/hd-fixture.py")" "1"
+
+# And it must still be imported SOMEWHERE, or the fixtures cannot connect and the
+# arm above is satisfied by a harness that talks to no database at all.
+check "and the driver is still imported inside the fixtures that connect" \
+	"$([ "$(grep -cE '^\s+import psycopg' "$_hd_conf")" -ge 1 ] && echo yes || echo no)" "yes"
+
+check "premise: the CI workflow is where this part thinks it is" \
+	"$([ -f "$_hd_ci" ] && echo yes || echo no)" "yes"
+
+check "the gate runs the harness guards" \
+	"$([ "$(grep -c 'pytest-guards:' "$_hd_ci")" -ge 1 ] && echo yes || echo no)" "yes"
+
+# DERIVED, NOT REPEATED. A second copy of the file list is the defect this repo
+# spent a day removing from TESTS.md.
+check "and it derives the file list rather than repeating it" \
+	"$([ "$(grep -c 'from test_harness_deps import NO_CLUSTER' "$_hd_ci")" -ge 1 ] \
+		&& echo yes || echo no)" "yes"
+
+# Presence, not a count: the comment block above the job names this file too,
+# and an exact count would be an assertion about the prose as much as the code.
+check "and derives the pins from requirements-test.txt" \
+	"$([ "$(grep -c 'requirements-test.txt' "$_hd_ci")" -ge 1 ] && echo yes || echo no)" "yes"
+
+unset _hd_conf _hd_ci
+
 unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix _dcv_ht
 unset -f _dcv_missing _dcv_count
 
