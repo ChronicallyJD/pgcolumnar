@@ -353,3 +353,114 @@ def test_the_declaration_reader_survives_pipefail_on_a_long_suite(tmp_path, expe
                                capture_output=True, text=True).stdout.strip()
     expect.text(got_short, "yes",
                 "and it agrees on a SHORT file, which is why it survived review")
+
+
+# ---- the population, which the symmetry check cannot see --------------------
+
+
+def test_the_accounted_reader_takes_either_runtime_mechanism(tmp_path, expect):
+    """Two mechanisms exist in the tree, and both are runtime-observable.
+
+    `pgc_summary` prints the accounting line and 239 suites use it. `bench_guards`
+    and `docs_style` keep private counters and print their own `checks run:`; they
+    never source `lib.sh`, so a reader that only knows the first would call them
+    unaccounted, which is false. Both are derived rather than declared, so a suite
+    that adopts either leaves the debt bucket on its own.
+    """
+    lib = _write(tmp_path, "lib.log",
+                 "accounting: 1 passed + 0 failed + 0 unrunnable = 1\nx.sh: PASSED\n")
+    own = _write(tmp_path, "own.log", "checks run: 9\ndocs_style.sh: PASSED\n")
+    neither = _write(tmp_path, "none.log", "some output\nPASSED\n")
+    expect.text(_call("pgc_log_shows_any_accounting", lib)[0].strip(), "yes",
+                "a log carrying lib.sh's accounting line is accounted")
+    expect.text(_call("pgc_log_shows_any_accounting", own)[0].strip(), "yes",
+                "and a log carrying only its own checks-run line is too")
+    expect.text(_call("pgc_log_shows_any_accounting", neither)[0].strip(), "no",
+                "a log carrying neither is not accounted")
+
+
+def test_a_registered_suite_accounted_by_nothing_fails_by_name(tmp_path, expect):
+    """The defect @linuxhikerpm blocked on, stated as its own arm.
+
+    `pgc_reconcile_accounting` takes the declared and observed sets, both derived
+    from the suites themselves, so a registered suite in neither is outside the
+    universe it reconciles -- with all its inputs empty it reports complete
+    symmetry and returns 0, whatever SUITES holds. Treating absence of a
+    declaration as absence from the population preserves the overcount.
+    """
+    reg = _write(tmp_path, "reg", "alpha\n")
+    acct = _write(tmp_path, "acct", "")
+    nd = _write(tmp_path, "nd", "")
+    debt = _write(tmp_path, "debt", "")
+    out, rc = _call("pgc_reconcile_population", reg, acct, nd, debt)
+    expect.num(rc, 1, "a registered suite accounted by nothing fails")
+    expect.num(out.count("registered but accounted by nothing: alpha"), 1,
+               "and is named, which the symmetry check could never do")
+
+    # Each way out must actually let it out, or the bucket is a name for
+    # "always fails" and only the debt file is doing any work.
+    for label, f in (("accounted", acct), ("not dispatched", nd), ("known debt", debt)):
+        pathlib.Path(acct).write_text("")
+        pathlib.Path(nd).write_text("")
+        pathlib.Path(debt).write_text("")
+        pathlib.Path(f).write_text("alpha\n")
+        expect.num(_call("pgc_reconcile_population", reg, acct, nd, debt)[1], 0,
+                   f"a suite that is {label} passes")
+
+
+def test_the_debt_file_excuses_only_what_it_names(tmp_path, expect):
+    """Recording debt by NAME rather than as a count is what makes this a
+    burn-down: a new unaccounted suite must fail while the known ones are excused,
+    and debt that is no longer debt must be reported so it cannot stall."""
+    reg = _write(tmp_path, "reg", "alpha\nbeta\n")
+    acct = _write(tmp_path, "acct", "")
+    nd = _write(tmp_path, "nd", "")
+    debt = _write(tmp_path, "debt", "alpha\n")
+    out, rc = _call("pgc_reconcile_population", reg, acct, nd, debt)
+    expect.num(out.count("registered but accounted by nothing: beta"), 1,
+               "a NEW unaccounted suite fails while the known debt is excused")
+    expect.num(out.count("registered but accounted by nothing: alpha"), 0,
+               "and the excused one is not named as a failure")
+
+    reg = _write(tmp_path, "reg", "alpha\n")
+    acct = _write(tmp_path, "acct", "alpha\n")
+    debt = _write(tmp_path, "debt", "alpha\n")
+    out, _ = _call("pgc_reconcile_population", reg, acct, nd, debt)
+    expect.num(out.count("listed as debt but now accounts: alpha"), 1,
+               "a suite that now accounts but is still listed as debt is reported")
+
+    debt = _write(tmp_path, "debt", "gone\n")
+    out, _ = _call("pgc_reconcile_population", reg, acct, nd, debt)
+    expect.num(out.count("listed as debt but not registered: gone"), 1,
+               "and debt naming a suite that is not registered is reported")
+
+
+def test_the_population_partitions_and_prints_its_identity(tmp_path, expect):
+    """inputs == sum(buckets) over the REGISTERED population -- the identity the
+    symmetry check could not offer, because there a name can genuinely fall
+    outside all four buckets."""
+    reg = _write(tmp_path, "reg", "a\nb\nc\nd\n")
+    acct = _write(tmp_path, "acct", "a\n")
+    nd = _write(tmp_path, "nd", "b\n")
+    debt = _write(tmp_path, "debt", "c\n")
+    out, rc = _call("pgc_reconcile_population", reg, acct, nd, debt)
+    expect.num(out.count("registered=4 | accounted=1, not dispatched=1, "
+                         "known debt=1, unaccounted=1 | sum=4"), 1,
+               "the population partitions and prints inputs == sum(buckets)")
+    expect.num(rc, 1, "and the one outside every excuse still fails")
+
+
+def test_the_debt_file_is_tracked_and_holds_only_registered_suites(expect):
+    """It is a tracked file so that adding a name is a diff a reviewer sees --
+    which is the whole reason it is not a number in the environment."""
+    debt = REPO / "test" / "suites_without_accounting.txt"
+    expect.text("yes" if debt.exists() else "no", "yes", "the debt file is in the tree")
+    names = [l.strip() for l in debt.read_text().splitlines()
+             if l.strip() and not l.startswith("#")]
+    expect.at_least(len(names), 1, "premise: it names some debt to check")
+
+    listed = subprocess.run(["bash", str(RUNNER), "--list-suites"],
+                            capture_output=True, text=True).stdout.split()
+    strays = sorted(set(names) - set(listed))
+    print(f"  debt={len(names)} registered={len(listed)} strays={strays}")
+    expect.num(len(strays), 0, "every name in the debt file is a registered suite")

@@ -498,3 +498,125 @@ check "the grep -q shape is the one that gets this wrong under pipefail" \
 check "and it agrees with the real reader on a SHORT file, which is why it survived review" \
 	"$(bash "$_grepq_twin_sh" "$_acc/declares.sh")" \
 	"$(pgc_suite_declares_accounting "$_acc/declares.sh")"
+
+# ---- the POPULATION, which the symmetry check above cannot see --------------
+#
+# pgc_reconcile_accounting reconciles the DECLARED set against the OBSERVED one.
+# Both are derived from the suites themselves, and the two directions catch
+# opposite mistakes -- but the registered set is not one of its inputs, so a
+# registered suite in NEITHER set is outside the universe being reconciled.
+# Driven from the function: with all three files empty it prints
+# `inputs=0 | both=0 ... sum=0` and returns 0, whatever SUITES holds.
+#
+# Reported by @linuxhikerpm, who put it structurally: treating absence of a
+# declaration as absence from the population preserves the overcount. The title
+# of this change claims to reconcile registered suites against accounted ones,
+# and that claim needs the registered set as an input.
+#
+# So the population is its own check, over its own four buckets. A suite is
+# ACCOUNTED when its log carries evidence it counted its checks -- either
+# lib.sh's accounting line, or its own `checks run:` line, which is what
+# bench_guards and docs_style print from private counters. Runtime-observable in
+# both cases, and derived rather than declared, so a suite that adopts either
+# mechanism leaves the debt bucket on its own.
+
+check "premise: the runner defines the population reconciliation" \
+	"$(grep -c '^pgc_reconcile_population()' "$_rv")" "1"
+check "premise: and the accounted reader that feeds it" \
+	"$(grep -c '^pgc_log_shows_any_accounting()' "$_rv")" "1"
+
+eval "$(sed -n '/^pgc_log_shows_any_accounting()/,/^}/p' "$_rv")"
+eval "$(sed -n '/^pgc_reconcile_population()/,/^}/p' "$_rv")"
+check "premise: the population reconciliation is callable" \
+	"$(type -t pgc_reconcile_population)" "function"
+
+# ---- the accounted reader takes EITHER mechanism ----------------------------
+
+printf 'accounting: 1 passed + 0 failed + 0 unrunnable = 1\nx.sh: PASSED\n' > "$_acc/lib.log"
+check "a log carrying lib.sh's accounting line is accounted" \
+	"$(pgc_log_shows_any_accounting "$_acc/lib.log")" "yes"
+
+printf 'checks run: 9\ndocs_style.sh: PASSED\n' > "$_acc/self.log"
+check "and a log carrying only its OWN checks-run line is accounted too" \
+	"$(pgc_log_shows_any_accounting "$_acc/self.log")" "yes"
+
+printf 'some output\nPASSED\n' > "$_acc/none.log"
+check "a log carrying neither is not accounted" \
+	"$(pgc_log_shows_any_accounting "$_acc/none.log")" "no"
+
+# ---- the red arm @linuxhikerpm asked for, exactly as asked ------------------
+
+_reg_f="$_acc/registered"; _acct_f="$_acc/accounted"; _debt_f="$_acc/debt"
+printf 'alpha\n' > "$_reg_f"; : > "$_acct_f"; : > "$_notdisp"; : > "$_debt_f"
+check "a registered suite that is accounted by nothing FAILS" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" >/dev/null 2>&1 \
+		&& echo ok || echo unaccounted)" "unaccounted"
+check "and it is named, which the symmetry check could never do" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" 2>&1 \
+		| grep -c '^[[:space:]]*registered but accounted by nothing: alpha$')" "1"
+
+# Each of the three ways out must actually let it out, or the bucket is a name
+# for "always fails" and the debt file is the only thing doing any work.
+printf 'alpha\n' > "$_acct_f"; : > "$_notdisp"; : > "$_debt_f"
+check "a suite that accounted passes" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" >/dev/null 2>&1 \
+		&& echo ok || echo unaccounted)" "ok"
+: > "$_acct_f"; printf 'alpha\n' > "$_notdisp"
+check "a suite the driver never dispatched passes" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" >/dev/null 2>&1 \
+		&& echo ok || echo unaccounted)" "ok"
+: > "$_notdisp"; printf 'alpha\n' > "$_debt_f"
+check "a suite recorded as known debt passes" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" >/dev/null 2>&1 \
+		&& echo ok || echo unaccounted)" "ok"
+
+# The debt file excuses ONLY what it names. A new unaccounted suite must fail
+# even while the known ten are excused -- that is the whole point of recording
+# them by name rather than as a count.
+printf 'alpha\nbeta\n' > "$_reg_f"; : > "$_acct_f"; printf 'alpha\n' > "$_debt_f"
+check "a NEW unaccounted suite fails even while the known debt is excused" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" 2>&1 \
+		| grep -c '^[[:space:]]*registered but accounted by nothing: beta$')" "1"
+check "and the excused one is not named as a failure" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" 2>&1 \
+		| grep -c '^[[:space:]]*registered but accounted by nothing: alpha$')" "0"
+
+# Debt that no longer exists is debt that should have been removed. A name in the
+# file that is not registered, or that now accounts, means the file is stale --
+# and a stale debt file is how a burn-down stops burning down.
+printf 'alpha\n' > "$_reg_f"; printf 'alpha\n' > "$_acct_f"; printf 'alpha\n' > "$_debt_f"
+check "a suite that now accounts but is still listed as debt is reported" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" 2>&1 \
+		| grep -c '^[[:space:]]*listed as debt but now accounts: alpha$')" "1"
+
+printf 'alpha\n' > "$_reg_f"; printf 'alpha\n' > "$_acct_f"; printf 'gone\n' > "$_debt_f"
+check "and debt naming a suite that is not registered is reported too" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" 2>&1 \
+		| grep -c '^[[:space:]]*listed as debt but not registered: gone$')" "1"
+
+# inputs == sum(buckets) over the REGISTERED population, which is the identity
+# the symmetry check could not offer: a name can genuinely fall outside all four.
+printf 'a\nb\nc\nd\n' > "$_reg_f"
+printf 'a\n' > "$_acct_f"; printf 'b\n' > "$_notdisp"; printf 'c\n' > "$_debt_f"
+check "the population partitions, and prints inputs == sum(buckets)" \
+	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" 2>&1 \
+		| grep -c 'registered=4 .*accounted=1, not dispatched=1, known debt=1, unaccounted=1 | sum=4')" "1"
+
+# ---- and the RUNNER must call it, with the real registered set --------------
+
+check "the runner calls the population reconciliation" \
+	"$(grep -c '[^_[:alnum:]]pgc_reconcile_population "' "$_rv")" "1"
+# The property, not a count of a substring: the registered file must be written
+# from the SUITES array itself. The first version of this arm asserted the name
+# appeared twice, which is a fact about how many times a variable is spelled --
+# it fails when the code is refactored and passes when the file is filled from
+# the wrong source.
+check "and the registered file is written from the SUITES array itself" \
+	"$(grep -cF 'printf '"'"'%s\n'"'"' "${SUITES[@]}" >"$_acc_registered"' "$_rv")" "1"
+check "and a failed population reconciliation fails the major" \
+	"$(grep -A4 'pgc_reconcile_population "\$_acc_registered"' "$_rv" | grep -c 'verfail=1')" "1"
+
+# The debt file is tracked, so a change to it is a diff a reviewer sees -- which
+# is the whole reason it is a file and not a number in the environment.
+check "the debt file is in the tree" \
+	"$([ -f "$PGC_TESTDIR/suites_without_accounting.txt" ] && echo yes || echo no)" "yes"
