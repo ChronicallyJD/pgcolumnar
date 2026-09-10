@@ -305,6 +305,22 @@ def _resolve_against(path, spec):
         "as the prior")
 
 
+def _behind(path, ref):
+    """" (N commits behind HEAD)" when the prior lags, "" when it does not.
+
+    A reader can see WHICH ref was compared against. Without this they cannot see
+    that it is 446 commits stale, which is the difference between knowing the
+    comparison happened and knowing what it was worth.
+    """
+    repo = pathlib.Path(path).resolve().parent
+    r = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{ref}..HEAD"],
+                       capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip().isdigit():
+        return " (distance from HEAD unknown)"
+    n = int(r.stdout.strip())
+    return "" if n == 0 else f" ({n} commit{'s' if n != 1 else ''} behind HEAD)"
+
+
 def _committed_budget(path, ref):
     """The budget as of `ref`. Raises rather than returning None.
 
@@ -410,13 +426,25 @@ def cmd_gate(args):
     # without this that sentence is prose and raising the number passes.
     if args.against:
         ref = _resolve_against(args.budget, args.against)
+        # HOW FAR BEHIND THE PRIOR IS, printed beside it.
+        #
+        # `main@{upstream}` is the per-clone answer to "which main is mine", and
+        # in a contributor's setup it resolves to their FORK -- OffgridwithJD's is
+        # 446 commits behind upstream. Naming the ref told a reader WHICH prior
+        # was used; it did not tell them what the comparison was worth. The
+        # direction still fails open: an older main carries a higher ceiling, so a
+        # raise passes whenever the stale prior is high enough.
+        #
+        # There is no better ref to pick that does not guess, so the weakness is
+        # made visible instead. It costs nothing when the number is 0.
+        shown = f"{ref}{_behind(args.budget, ref)}"
         p_want = _committed_budget(args.budget, ref)["suites_not_covered"]
         if want > p_want:
             print(f"    suites_not_covered was raised from {p_want} to {want} "
-                  f"(against {ref}): the ceiling may only fall")
+                  f"(against {shown}): the ceiling may only fall")
             rc = 1
         else:
-            print(f"    ceiling against {ref}: {p_want} -> {want}, which does not rise")
+            print(f"    ceiling against {shown}: {p_want} -> {want}, which does not rise")
     return rc
 
 

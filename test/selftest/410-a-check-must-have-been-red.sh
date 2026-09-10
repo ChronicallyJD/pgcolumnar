@@ -432,3 +432,41 @@ check "the suites job fetches the PR base for the ceiling comparison" \
 check "and only when there is a base, so a push build does not fail on it" \
 	"$(grep -A1 'fetch the PR base, for the ledger ceiling comparison' "$_ci" \
 		| grep -c "github.base_ref != ''")" "1"
+
+# ---- and how far behind the prior is, printed beside it ---------------------
+#
+# `main@{upstream}` is the per-clone answer to "which main is mine", and in a
+# contributor's setup it resolves to their FORK. OffgridwithJD measured theirs 446
+# commits behind upstream -- and `git push -u origin main` is what sets that
+# config, so `auto` outside CI lands on exactly the ref the hardcoded version did.
+# The route changed; the destination did not.
+#
+# There is no better ref to pick that does not guess, so the weakness is made
+# VISIBLE rather than removed. Naming the ref told a reader WHICH prior was used;
+# it did not tell them what the comparison was worth. The direction still fails
+# open: an older main carries a higher ceiling, so a raise passes whenever the
+# stale prior is high enough.
+#
+# Their suggestion, and it costs nothing when the number is 0.
+
+_dist="$_lw/dist"; rm -rf "$_dist"; mkdir -p "$_dist"
+( cd "$_dist" && git init -q . && git config user.email t@t && git config user.name t
+  printf 'suites_not_covered 7\n' > b.txt && git add b.txt && git commit -qm base
+  git branch -q oldbase
+  for i in 1 2 3; do echo "x$i" > f; git add f; git commit -qm "c$i"; done ) >/dev/null 2>&1
+printf 's\tp\ta\tnever\t-\n' > "$_dist/led"
+printf 'RESULT\ts\tp\ta\tPASS\t\n' > "$_dist/log"
+printf 's\n' > "$_dist/reg"
+
+check "premise: the scratch prior really is three commits behind" \
+	"$(cd "$_dist" && git rev-list --count oldbase..HEAD)" "3"
+check "a stale prior is named WITH its distance from HEAD" \
+	"$(cd "$_dist" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against oldbase log 2>&1 | grep -c 'ceiling against oldbase (3 commits behind HEAD)')" "1"
+check "and a level prior carries no distance, so zero is silent" \
+	"$(cd "$_dist" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against HEAD log 2>&1 | grep -c 'ceiling against HEAD: ')" "1"
+check "the distance travels with a refusal too, not only with a pass" \
+	"$(cd "$_dist" && sed -i 's/^suites_not_covered 7$/suites_not_covered 99/' b.txt
+	   python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against oldbase log 2>&1 | grep -c 'against oldbase (3 commits behind HEAD)')" "1"

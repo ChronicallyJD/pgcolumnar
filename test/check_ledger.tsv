@@ -617,8 +617,10 @@ harness_selftest	410-a-check-must-have-been-red	a real refusal is a different st
 harness_selftest	410-a-check-must-have-been-red	a rename in one part survives an addition in another	never	-
 harness_selftest	410-a-check-must-have-been-red	a run whose checks are all ledgered passes the gate	never	-
 harness_selftest	410-a-check-must-have-been-red	a second mutation ACCUMULATES rather than replacing the first	never	-
+harness_selftest	410-a-check-must-have-been-red	a stale prior is named WITH its distance from HEAD	never	-
 harness_selftest	410-a-check-must-have-been-red	an absolute budget path resolves against git rather than shrugging	never	-
 harness_selftest	410-a-check-must-have-been-red	an empty log is one too, because there is nothing to reconcile	never	-
+harness_selftest	410-a-check-must-have-been-red	and a level prior carries no distance, so zero is silent	never	-
 harness_selftest	410-a-check-must-have-been-red	and a raise against that base ref is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	and a record missing its verdict	never	-
 harness_selftest	410-a-check-must-have-been-red	and a refused gate fails the major	never	-
@@ -663,6 +665,7 @@ harness_selftest	410-a-check-must-have-been-red	premise: the ledger itself is a 
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger tool exists	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the raised copy really does carry a higher ceiling	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the real budget is inside a git repository	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the scratch prior really is three commits behind	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the scratch repo has a committed ceiling and no upstream	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the scratch repo has a prior ceiling committed	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the workflow file is where this part thinks it is	never	-
@@ -672,6 +675,7 @@ harness_selftest	410-a-check-must-have-been-red	regenerating the ledger lets the
 harness_selftest	410-a-check-must-have-been-red	the budget names a ceiling and a census, and says which is which	never	-
 harness_selftest	410-a-check-must-have-been-red	the ceiling refuses being exceeded	never	-
 harness_selftest	410-a-check-must-have-been-red	the committed census matches the committed ledger	never	-
+harness_selftest	410-a-check-must-have-been-red	the distance travels with a refusal too, not only with a pass	never	-
 harness_selftest	410-a-check-must-have-been-red	the gate refuses to run without the registered suite list	never	-
 harness_selftest	410-a-check-must-have-been-red	the ledger partitions into observed and never	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner asks the tool to resolve the prior rather than naming one	never	-
