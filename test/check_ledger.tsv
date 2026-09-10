@@ -615,6 +615,9 @@ harness_selftest	410-a-check-must-have-been-red	a later green run does not erase
 harness_selftest	410-a-check-must-have-been-red	a name that appeared while another disappeared is reported as a rename	never	-
 harness_selftest	410-a-check-must-have-been-red	a named mutation is recorded against the check that reddened	never	-
 harness_selftest	410-a-check-must-have-been-red	a real refusal is a different status from an integrity failure	never	-
+harness_selftest	410-a-check-must-have-been-red	a ref that does not resolve is an integrity failure, not a bootstrap	never	-
+harness_selftest	410-a-check-must-have-been-red	a ref that exists with the budget still compares	never	-
+harness_selftest	410-a-check-must-have-been-red	a ref that exists without the budget is still the bootstrap case	never	-
 harness_selftest	410-a-check-must-have-been-red	a refusal keeps the regenerate-the-ledger wording	never	-
 harness_selftest	410-a-check-must-have-been-red	a rename in one part survives an addition in another	never	-
 harness_selftest	410-a-check-must-have-been-red	a run whose checks are all ledgered passes the gate	never	-
@@ -630,10 +633,13 @@ harness_selftest	410-a-check-must-have-been-red	and an empty mutation is a place
 harness_selftest	410-a-check-must-have-been-red	and it entered as debt, not as an observation nothing made	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is a different sentence from the refusal, not the same one twice	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is named, so the author knows which one	never	-
+harness_selftest	410-a-check-must-have-been-red	and it is that case that says the change introduces the file	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is the new one that is named, not the one already ledgered	never	-
 harness_selftest	410-a-check-must-have-been-red	and it runs before the build directory is removed, which is the only place it can	never	-
 harness_selftest	410-a-check-must-have-been-red	and it says the change introduces the file rather than raising anything	never	-
+harness_selftest	410-a-check-must-have-been-red	and it says the ref does not resolve, rather than claiming the file is new	never	-
 harness_selftest	410-a-check-must-have-been-red	and it says why, rather than falling back to something weaker	never	-
+harness_selftest	410-a-check-must-have-been-red	and never says a change introduces a file at a ref that is not there	never	-
 harness_selftest	410-a-check-must-have-been-red	and none of them ends in a tab	never	-
 harness_selftest	410-a-check-must-have-been-red	and not against one that stayed green	never	-
 harness_selftest	410-a-check-must-have-been-red	and one that stayed green keeps its debt	never	-
@@ -660,11 +666,13 @@ harness_selftest	410-a-check-must-have-been-red	nor is one merely removed	never	
 harness_selftest	410-a-check-must-have-been-red	once the suite is covered, a new check in it IS refused	never	-
 harness_selftest	410-a-check-must-have-been-red	one --mutation cannot be attributed across several runs at once	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: and it is a file git has never seen, which is the case that used to fail open	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and the nobudget branch does not, which is the bootstrap shape	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the budget is a tracked file too	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the budget was restored byte-exact	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the check has history before the rename	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the fixture log names checks the real ledger already knows	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the gate's status block was found in the runner	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the hasbudget branch carries the budget	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger is not empty, so the partition means something	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger itself is a tracked file, not a variable	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger tool exists	never	-

@@ -352,6 +352,25 @@ def _committed_budget(path, ref):
         rel = abspath.relative_to(pathlib.Path(top).resolve())
     except ValueError as e:
         raise LedgerError(f"{path} resolves outside its own repository at {top}") from e
+
+    # DOES THE REF EXIST, asked before anything is read from it. This check used to
+    # live inside the `auto` resolver, so it covered the production call site and
+    # nothing else: an EXPLICIT ref that did not resolve fell through to the
+    # file-absent branch and was reported as the bootstrap case -- rc=0, with a
+    # message asserting "this change introduces it" about a ref that does not
+    # exist, one clause after saying the distance from HEAD was unknown. The code
+    # knew it could not resolve the ref and contradicted itself in one sentence.
+    #
+    # Resolving belongs here, where every caller passes through, so that the
+    # file-absent branch below describes only what it claims: a file missing at a
+    # ref that IS there. Reported by OffgridwithJD, who scoped it precisely --
+    # unreachable from the runner, which always passes `auto`, and a trap for the
+    # harness arms and anyone driving the tool by hand.
+    if subprocess.run(["git", "-C", top, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"],
+                      capture_output=True, text=True).returncode != 0:
+        raise LedgerError(
+            f"--against {ref} was given, but that ref does not resolve here, so the prior "
+            "ceiling cannot be read")
     # A FILE THAT DOES NOT EXIST AT THE PRIOR HAS NO CEILING TO VIOLATE. This
     # returns None and the caller notes it, rather than erroring, and the
     # distinction is the whole of it: introducing the budget is not raising it.

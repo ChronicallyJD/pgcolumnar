@@ -513,3 +513,58 @@ check "a clean status says nothing and does not fail the major" \
 	"$(printf '%s' "$_ledcase" | grep -cE '^[[:space:]]+0\)[[:space:]]*;;[[:space:]]*$')" "1"
 check "both failure arms fail the major" \
 	"$(printf '%s' "$_ledcase" | grep -c 'verfail=1')" "2"
+
+# ---- an unresolvable ref is not the bootstrap case --------------------------
+#
+# The three states are the point of this part, and one path had collapsed two of
+# them. The ref-resolution check lived inside the `auto` resolver, so it covered
+# the production call site and nothing else: an EXPLICIT ref that did not resolve
+# fell through to the file-absent branch and was reported as rc=0, with a message
+# asserting "this change introduces it" about a ref that does not exist -- one
+# clause after saying the distance from HEAD was unknown. The code knew it could
+# not resolve the ref and contradicted itself inside one sentence.
+#
+# Unreachable from the runner, which always passes `auto`. A trap for these arms,
+# for anyone driving the tool by hand, and for whoever later passes a concrete ref
+# because `auto` was inconvenient. Scoped exactly that way by OffgridwithJD, who
+# checked the production path first rather than leading with the headline.
+
+_rr="$_lw/refres"; rm -rf "$_rr"; mkdir -p "$_rr"
+( cd "$_rr" && git init -q . && git config user.email t@t && git config user.name t
+  printf 'suites_not_covered 7\n' > b.txt && git add b.txt && git commit -qm base
+  git branch -q hasbudget
+  git rm -q b.txt && git commit -qm "a commit without the budget"
+  git branch -q nobudget
+  git checkout -q hasbudget ) >/dev/null 2>&1
+printf 's\tp\ta\tnever\t-\n' > "$_rr/led"
+printf 'RESULT\ts\tp\ta\tPASS\t\n' > "$_rr/log"
+printf 's\n' > "$_rr/reg"
+
+check "premise: the hasbudget branch carries the budget" \
+	"$(cd "$_rr" && git show hasbudget:b.txt >/dev/null 2>&1 && echo yes || echo no)" "yes"
+check "premise: and the nobudget branch does not, which is the bootstrap shape" \
+	"$(cd "$_rr" && git show nobudget:b.txt >/dev/null 2>&1 && echo yes || echo no)" "no"
+
+check "a ref that does not resolve is an integrity failure, not a bootstrap" \
+	"$(cd "$_rr" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against refs/heads/no-such-ref-xyz log >/dev/null 2>&1; echo $?)" "2"
+check "and it says the ref does not resolve, rather than claiming the file is new" \
+	"$(cd "$_rr" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against refs/heads/no-such-ref-xyz log 2>&1 | grep -c 'that ref does not resolve here')" "1"
+check "and never says a change introduces a file at a ref that is not there" \
+	"$(cd "$_rr" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against refs/heads/no-such-ref-xyz log 2>&1 | grep -c 'this change introduces it')" "0"
+
+# The bootstrap case must still be the bootstrap case: a ref that EXISTS, without
+# the file. Without this arm the fix above is satisfied by refusing everything.
+check "a ref that exists without the budget is still the bootstrap case" \
+	"$(cd "$_rr" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against nobudget log >/dev/null 2>&1; echo $?)" "0"
+check "and it is that case that says the change introduces the file" \
+	"$(cd "$_rr" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against nobudget log 2>&1 | grep -c 'this change introduces it')" "1"
+
+# And a ref that exists WITH the file still compares, so the third state is intact.
+check "a ref that exists with the budget still compares" \
+	"$(cd "$_rr" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
+		--against hasbudget log 2>&1 | grep -c 'ceiling against hasbudget')" "1"
