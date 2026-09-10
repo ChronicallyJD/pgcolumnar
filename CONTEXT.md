@@ -194,28 +194,47 @@ that merely resembles the other side -- writing a fake `lib.sh` into a `tmp_path
 expressed by driving the other side, that is a signal it belongs to one harness
 alone: say which, and say why, rather than reaching across.
 
-**The debt this starts with, measured on 2026-09-10** rather than assumed, with
-comments and docstrings stripped so the count is of executable references:
+**The counting rule, so the inventory can be re-derived.** A **reference** is an
+executable line that names a file belonging to the other harness *as it exists in
+this tree* -- sourcing it, importing it, running it, or reading its text. Three
+things are not references, in the order they get confused:
 
-- python that drives shell, 13 executable sites in 2 files:
-  `test_suite_accounting.py` 12 (the real `lib.sh` and `run_all_versions.sh`) and
-  `pgc_cluster.py:357` 1 (sources the real `test/lib.sh`). A third arrives with
-  PR #923: `test_check_results_are_machine_readable.py`, sourcing `./lib.sh`.
-- shell whose subject is python, 27 executable lines in 7 files: `lib.sh` 5,
-  `selftest/380` 8, `selftest/350` 5, `selftest/040` 3, `selftest/360` 3,
-  `selftest/370` 2, `selftest/030` 1.
+1. prose. Comments, docstrings and help strings may name the other harness freely.
+2. a file the test **builds itself** under a `tmp_path`, even with the same name.
+3. a word that merely looks like a filename. `sharedir` is not a `.sh` file.
 
-Not counted, because the rule permits them: `test_build_refusal.py` writes a fake
-`lib.sh` into a `tmp_path` and drives that, which is a fixture rather than a
-reference, and `conftest.py` names `lib.sh` only in a help string and a comment.
+**Count files, not lines.** A line total moves with any refactor and with the
+exact pattern used, and three different patterns gave three different totals when
+this was first counted. The file is the stable unit, so each file below is named
+with the mechanism that makes it a reference -- which is also what has to change
+for it to stop being one.
 
-None of that is fixed by this paragraph. It is written down so the next change to
-any of those files knows which direction it is expected to move, and so the count
-is falsifiable rather than a vague sense that some coupling exists.
+**The debt this starts with, on 2026-09-10: 4 python files and 7 shell files.**
 
-When you sweep for this yourself, do not write the pattern as `[a-z_]+\.sh`: it
-matches `sharedir`, and reported `pg_config --sharedir` calls as violations the
-first time this was counted.
+Python that reaches into shell:
+
+- `test_build_refusal.py` -- sources the real `test/lib.sh` in three helpers
+  (`_sh`, `_sh_fp`, `_sh_fp_as`), behind 39 call sites. The largest of these.
+- `test_suite_accounting.py` -- reads `run_all_versions.sh`'s text, sources the
+  real `lib.sh` from a suite it writes, and executes the real runner.
+- `pgc_cluster.py` -- sources the real `test/lib.sh`.
+- `test_check_results_are_machine_readable.py` -- sources `./lib.sh`. Arrives
+  with PR #923; not on `main` yet.
+
+Shell whose subject is python: `lib.sh`, and `selftest/030`, `040`, `350`, `360`,
+`370`, `380`.
+
+**`test_build_refusal.py` is the example worth studying, because it does both.**
+It writes a fake `test/lib.sh` into a `tmp_path` and drives that -- rule 2, not a
+reference -- and it *also* sources the real one three times. The first draft of
+this section read the fake tree, called the file "not debt", and used it as the
+illustration of what the rule permits. It is in fact the largest single item in
+the list. Reported by @OffgridwithJD, who checked the inventory instead of
+believing it. Judge a file by what it executes, not by the fixture it builds.
+
+None of that is fixed by this section. It records which direction those files are
+expected to move, and makes the inventory falsifiable rather than a vague sense
+that some coupling exists.
 
 **A sequencing note that will stop being true.** As of 2026-09-09 the pytest
 harness is PR #897 and is not on `main`, so this rule cannot be satisfied for a
