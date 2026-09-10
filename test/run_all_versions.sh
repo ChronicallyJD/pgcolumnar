@@ -893,9 +893,20 @@ pgc_suite_declares_accounting() {	# pgc_suite_declares_accounting FILE -> yes|no
 	# not declaring accounting inside the selftest and as declaring it outside.
 	#
 	# grep -c reads to EOF, so sed never sees a closed pipe.
+	# An ABSENT file is its own answer, not "does not declare accounting".
+	# Conflating them classifies a registered suite whose .sh has vanished as
+	# exempt, and the reconciliation then reads clean -- a suite disappearing
+	# from the matrix, inside the check whose whole subject is suites that go
+	# missing from the accounting. Reported by OffgridwithJD reviewing #922.
 	local _f="$1" _n
-	[ -f "$_f" ] || { echo no; return 0; }
-	_n="$(sed 's/#.*$//' "$_f" \
+	[ -f "$_f" ] || { echo absent; return 0; }
+	# Strip a `#` only where the shell would treat one as starting a comment:
+	# at the start of a line, or after whitespace. `sed 's/#.*$//'` strips from
+	# ANY hash, so a `#` inside a quoted string earlier on the line would hide a
+	# pgc_summary call after it. Measured across all 251 registered suites: three
+	# carry a line with both, and in every one the `#` starts the line, so no
+	# suite is misread today. The arm in selftest 390 keeps that true.
+	_n="$(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$_f" \
 		| grep -cE '(^|[^_[:alnum:]])pgc_summary([^_[:alnum:]]|$)' || true)"
 	if [ "${_n:-0}" -gt 0 ]; then
 		echo yes
@@ -1086,12 +1097,20 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	: >"$_acc_declared"
 	: >"$_acc_observed"
 	[ -f "$_acc_notdisp" ] || : >"$_acc_notdisp"
+	_acc_absent=0
 	for s in "${SUITES[@]}"; do
-		[ "$(pgc_suite_declares_accounting "$builddir/test/${s}.sh")" = yes ] \
-			&& printf '%s\n' "$s" >>"$_acc_declared"
+		case "$(pgc_suite_declares_accounting "$builddir/test/${s}.sh")" in
+			yes)	printf '%s\n' "$s" >>"$_acc_declared" ;;
+			absent)	echo "    registered but has no file: $s.sh"
+				_acc_absent=$((_acc_absent + 1)) ;;
+		esac
 		[ "$(pgc_log_shows_accounting "$builddir/${s}.log")" = yes ] \
 			&& printf '%s\n' "$s" >>"$_acc_observed"
 	done
+	if [ "$_acc_absent" != 0 ]; then
+		echo "  $_acc_absent registered suite(s) on PG$major have no file, which is not a pass"
+		verfail=1
+	fi
 	if ! pgc_reconcile_accounting "$_acc_declared" "$_acc_observed" "$_acc_notdisp"; then
 		echo "  PG$major cannot account for every registered suite, which is not a pass"
 		verfail=1

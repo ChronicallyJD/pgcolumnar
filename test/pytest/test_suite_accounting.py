@@ -78,8 +78,23 @@ def test_a_suite_that_calls_pgc_summary_declares_accounting(tmp_path, expect):
                 "a comment mentioning it is not a declaration")
     expect.text(_call("pgc_suite_declares_accounting", longer)[0].strip(), "no",
                 "a longer name containing it is not a declaration")
+    # An ABSENT file is its own answer. Reported by OffgridwithJD reviewing #922:
+    # folding it into "no" classifies a registered suite whose .sh has vanished as
+    # exempt, and the reconciliation then reads clean.
     expect.text(_call("pgc_suite_declares_accounting", str(tmp_path / "gone.sh"))[0].strip(),
-                "no", "an absent file declares nothing rather than erroring")
+                "absent", "an absent file is reported absent, not exempt")
+
+    # The stripper follows the shell's rule -- a hash starts a comment at line
+    # start or after whitespace -- so a hash inside a word cannot hide the call.
+    inword = _write(tmp_path, "inword.sh", ". lib.sh\nX=a#b; pgc_summary\n")
+    trailing = _write(tmp_path, "trailing.sh", ". lib.sh\npgc_summary  # trailing\n")
+    indented = _write(tmp_path, "indented.sh", ". lib.sh\n  # pgc_summary here only\nexit 0\n")
+    expect.text(_call("pgc_suite_declares_accounting", inword)[0].strip(), "yes",
+                "a hash inside a word does not hide the call after it")
+    expect.text(_call("pgc_suite_declares_accounting", trailing)[0].strip(), "yes",
+                "a trailing comment after the call does not hide it")
+    expect.text(_call("pgc_suite_declares_accounting", indented)[0].strip(), "no",
+                "an indented comment is still a comment")
 
 
 # ---- the observation reader -------------------------------------------------

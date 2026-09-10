@@ -77,8 +77,52 @@ printf '. "$(dirname "$0")/lib.sh"\npgc_summary_of_something\n' > "$_acc/prefix.
 check "a longer name containing pgc_summary is not a declaration" \
 	"$(pgc_suite_declares_accounting "$_acc/prefix.sh")" "no"
 
-check "a file that does not exist declares nothing rather than erroring" \
-	"$(pgc_suite_declares_accounting "$_acc/absent.sh")" "no"
+# An ABSENT file is its own answer. Reported by OffgridwithJD reviewing #922:
+# folding it into "no" classifies a registered suite whose .sh has vanished as
+# exempt, and the reconciliation then reads clean -- a suite disappearing from
+# the matrix, inside the check whose subject is suites going missing from the
+# accounting.
+check "a file that does not exist is reported absent, not exempt" \
+	"$(pgc_suite_declares_accounting "$_acc/absent.sh")" "absent"
+check "and absent is distinguishable from a present file that does not declare" \
+	"$([ "$(pgc_suite_declares_accounting "$_acc/absent.sh")" \
+		= "$(pgc_suite_declares_accounting "$_acc/silent.sh")" ] && echo same || echo different)" \
+	"different"
+
+# ---- the comment stripper follows the SHELL's rule -------------------------
+#
+# `sed 's/#.*$//'` strips from ANY hash, so a `#` inside a quoted string earlier
+# on the line hides a pgc_summary call after it. Also reported by OffgridwithJD.
+# The stripper now only treats a hash at line start or after whitespace as a
+# comment, which is what the shell does.
+printf '. "$(dirname "$0")/lib.sh"\nX=a#b; pgc_summary\n' > "$_acc/hashinword.sh"
+check "a hash inside a word does not hide the call after it" \
+	"$(pgc_suite_declares_accounting "$_acc/hashinword.sh")" "yes"
+
+printf '. "$(dirname "$0")/lib.sh"\npgc_summary  # and a trailing comment\n' > "$_acc/trailing.sh"
+check "a trailing comment after the call does not hide it" \
+	"$(pgc_suite_declares_accounting "$_acc/trailing.sh")" "yes"
+
+printf '. "$(dirname "$0")/lib.sh"\n  # pgc_summary is only mentioned here\nexit 0\n' > "$_acc/indented.sh"
+check "an indented comment is still a comment" \
+	"$(pgc_suite_declares_accounting "$_acc/indented.sh")" "no"
+
+# The residual case the shell rule does NOT cover: a hash after whitespace INSIDE
+# a quoted string. Measured over all 251 registered suites -- three carry a line
+# with both a hash and pgc_summary, and in every one the hash starts the line. So
+# no suite is misread today, and this arm keeps that true rather than leaving it
+# to be rediscovered.
+_hashline=0
+while IFS= read -r _hs; do
+	[ -f "$PGC_TESTDIR/${_hs}.sh" ] || continue
+	if grep -nE '(^|[^_[:alnum:]])pgc_summary([^_[:alnum:]]|$)' "$PGC_TESTDIR/${_hs}.sh" \
+		| grep -qE '^[0-9]+:[^#]*[^[:space:]]#'; then
+		_hashline=$((_hashline + 1))
+		echo "    a hash precedes a pgc_summary call in $_hs.sh"
+	fi
+done < <(listed_suites)
+check "no registered suite has a hash before a pgc_summary call on the same line" \
+	"$_hashline" "0"
 
 # ---- the observation reader ------------------------------------------------
 #
@@ -276,22 +320,26 @@ check "and the real function reconciles the same input, so the arm is not noise"
 # correctness, and pinning it here would make this arm a second copy of a
 # hand-maintained list -- which is the thing the whole design removes.
 
-_reg=0; _decl_n=0; _exempt_n=0
+# THREE buckets, not two. Folding "absent" into "does not declare" is the
+# conflation the reader was just fixed for, and repeating it here would leave the
+# real population the one place it still happened.
+_reg=0; _decl_n=0; _exempt_n=0; _absent_n=0
 while IFS= read -r _s; do
 	_reg=$((_reg + 1))
-	if [ "$(pgc_suite_declares_accounting "$PGC_TESTDIR/${_s}.sh")" = yes ]; then
-		_decl_n=$((_decl_n + 1))
-	else
-		_exempt_n=$((_exempt_n + 1))
-	fi
+	case "$(pgc_suite_declares_accounting "$PGC_TESTDIR/${_s}.sh")" in
+		yes)	_decl_n=$((_decl_n + 1)) ;;
+		absent)	_absent_n=$((_absent_n + 1)); echo "    registered but has no file: $_s.sh" ;;
+		*)	_exempt_n=$((_exempt_n + 1)) ;;
+	esac
 done < <(listed_suites)
 
-echo "  registered=$_reg | declares accounting=$_decl_n, does not=$_exempt_n | sum=$((_decl_n + _exempt_n))"
+echo "  registered=$_reg | declares accounting=$_decl_n, does not=$_exempt_n, absent=$_absent_n | sum=$((_decl_n + _exempt_n + _absent_n))"
 
 check "premise: the registered list is not empty, so the partition means something" \
 	"$([ "$_reg" -gt 0 ] && echo yes || echo no)" "yes"
 check "the partition over the real suite list adds up" \
-	"$((_decl_n + _exempt_n))" "$_reg"
+	"$((_decl_n + _exempt_n + _absent_n))" "$_reg"
+check "every registered suite has a file" "$_absent_n" "0"
 
 # Both buckets must be occupied, or the reader is answering the same way for
 # everything and the arms above would pass just as happily.
