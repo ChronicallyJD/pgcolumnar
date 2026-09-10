@@ -193,3 +193,62 @@ def test_a_run_that_both_deselects_and_loses_a_test_still_fails(pytester, expect
                                 "--max-worker-restart=0")
     expect.run_failed(result, "a lost test is still caught when others were deselected")
     result.stdout.fnmatch_lines(["*never reported*"])
+
+
+# ---- WHERE a guard runs decides what the run reports -------------------------
+#
+# `guard-as-teardown-fixture-still-reports-passed` (VACUITY_MODES.md 3.7). A guard
+# implemented as a fixture teardown cannot fail the test it guards: pytest has
+# already recorded the call phase as passed, so the refusal arrives as a separate
+# ERROR on the same node-id and the test's own outcome stays `passed`. Anything
+# counting passes -- `--pgc-expect-tests`, a CI summary, a human reading "N passed"
+# -- sees a pass.
+#
+# This layer's own vacuity guard is in a `pytest_runtest_call` wrapper, which is the
+# right place, and these two arms are why that stops being an accident. Measured,
+# the same AssertionError raised from each place:
+#
+#     from a pytest_runtest_call wrapper   1 failed
+#     from a fixture teardown              1 passed, 1 error
+#
+# The second arm is the control. Without it the first passes whatever phase the
+# guard is in, because "a vacuous test fails" is true of a correctly-placed guard
+# and of no guard at all plus an unrelated failure.
+
+
+def test_the_vacuity_guard_fails_the_test_rather_than_erroring_beside_it(pytester, expect):
+    """A test that concludes nothing must be FAILED, not passed-with-an-error."""
+    pytester.makepyfile(
+        """
+        def test_asserts_nothing(expect):
+            pass
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a test that concludes nothing is failed, not errored",
+                    passed=0, failed=1, errors=0)
+
+
+def test_a_guard_in_a_teardown_would_report_a_pass_which_is_why_it_is_not_there(pytester, expect):
+    """The control, and the mode stated as a measurement rather than a warning.
+
+    The body asserts something, so the vacuity guard is satisfied; the refusal comes
+    from the teardown. pytest reports the test PASSED and adds an error, which is the
+    shape that makes a guard in a teardown unable to fail what it guards.
+    """
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.fixture
+        def guard_in_teardown():
+            yield
+            raise AssertionError("a guard placed in a teardown instead")
+
+        def test_body(guard_in_teardown, expect):
+            expect.num(1, 1, "the body itself is fine")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a teardown refusal leaves the test reported as passed",
+                    passed=1, failed=0, errors=1)

@@ -160,6 +160,30 @@ true until the next version shipped.
 
 ### Fixed
 
+- The vacuity guard's PLACEMENT is now a checked property, because a guard in a
+  teardown cannot fail the test it guards (#432).
+
+  Measured, the same `AssertionError` raised from two places: from a
+  `pytest_runtest_call` wrapper the run reports `1 failed`; from a fixture teardown it
+  reports `1 passed, 1 error`. pytest has already recorded the call phase as passed, so
+  a teardown refusal arrives as a separate error on the same node-id and the test's own
+  outcome stays `passed`. Anything counting passes -- `--pgc-expect-tests`, a CI
+  summary, a human reading "N passed" -- sees a pass.
+
+  This layer's guard was already in the call-phase wrapper, so nothing was broken. What
+  was missing is that nothing said so: moving it into the `expect` fixture's teardown
+  was a plausible-looking refactor that would have turned every vacuous test from
+  `failed` into `passed` with an error beside it. Two arms in `test_runshape.py` pin the
+  placement, and the second is the control -- without it the first passes whatever phase
+  the guard is in, because "a vacuous test fails" is equally true of a correct guard and
+  of no guard at all next to an unrelated failure. Proved by moving the guard into the
+  teardown: the first arm reddens.
+
+  `guard-as-teardown-fixture-still-reports-passed` is NARROWED rather than closed, and
+  `VACUITY_MODES.md` 3.7 says which half. The half closed is this layer's own guard
+  placement. The half still open is the general shape: a guard anyone adds later in a
+  teardown still cannot fail its test, and nothing refuses that.
+
 - `ALTER TABLE ... RENAME COLUMN` now carries the new name into
   `pgcolumnar.projection_declaration`, for the named relation and for every
   inheritance descendant, including a `PARTITION OF` child (#888).
