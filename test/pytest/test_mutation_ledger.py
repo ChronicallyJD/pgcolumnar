@@ -2,43 +2,46 @@
 
 Nothing recorded whether a check had ever been red. That is the gap that let 39
 checks across 35 suites ship unable to fail, three of them inside the suite whose
-whole purpose is to stop exactly that. The gate answered *did anything print FAIL*
-and had never answered *could anything print FAIL*.
+whole purpose is to stop exactly that.
 
-**What this ledger claims, and what it does not.** It records that a named check was
-OBSERVED RED in a recorded run. It does not claim the check is proven able to fail:
-that is a stronger statement, it needs a named mutation applied deliberately, and
-conflating the two would put a claim in the ledger that nothing measured -- the
-`defeated: 0` shape from `VACUITY_MODES` section 1, a number that reads as evidence
-and is not.
+**What this records.** That a named check *was observed red in a recorded run*. Not
+that it is proven able to fail: that needs a named mutation applied deliberately, and
+conflating them would put a claim in the ledger nothing measured.
 
-So v1 fills the observed column honestly and leaves the rest as debt, counted. A
-ledger whose entries all read `never` is a measurement of how much of the corpus has
-never been attacked, and that measurement is worth having on day one.
+**The first design deadlocked.** Bounding `checks_never_observed_red` means every
+added check breaks the gate, because a new check enters as `never` -- so the only way
+to land one was to raise a number the design said may only fall. It shipped at 614
+rows, 614 never, ceiling 614. It is now a CENSUS, asserted to match the ledger. The
+CEILING is `suites_not_covered`, which adding a check does not move, and which the
+gate refuses to see raised.
 
-**What fills it.** Not only deliberate mutation runs. Every real CI red fills it,
-every flake, every bisect -- and those arrive whether anyone remembers or not. A
-mutation run is the deliberate accelerator, not the only source.
+**What the gate refuses** is a check the committed ledger has never seen, in a suite
+the ledger covers. Regenerating the ledger is the intended fix and a reviewable diff.
 
-These tests drive the real tool, for the same reason the other two files drive the
-real shell: a Python twin of a Python tool would agree with itself.
+These tests drive the real tool, for the same reason the other files drive the real
+shell: a Python twin of a Python tool would agree with itself.
 """
 
 import pathlib
 import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-LEDGER_TOOL = REPO / "test" / "pgc_ledger.py"
+TOOL = REPO / "test" / "pgc_ledger.py"
 RUNNER = REPO / "test" / "run_all_versions.sh"
 
+GREEN = ("RESULT\tdemo\tpart1\tfirst check\tPASS\t\n"
+         "RESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n")
+RED = ("RESULT\tdemo\tpart1\tfirst check\tFAIL\t\n"
+       "RESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n")
 
-def _run(*args):
-    r = subprocess.run(["python3", str(LEDGER_TOOL), *args],
-                       capture_output=True, text=True)
+
+def _run(*args, cwd=None):
+    r = subprocess.run(["python3", str(TOOL), *args],
+                       capture_output=True, text=True, cwd=cwd)
     return r.stdout + r.stderr, r.returncode
 
 
-def _write(tmp_path, name, text):
+def _w(tmp_path, name, text):
     p = tmp_path / name
     p.write_text(text)
     return str(p)
@@ -48,159 +51,221 @@ def _rows(path):
     return [l.split("\t") for l in pathlib.Path(path).read_text().splitlines() if l]
 
 
-GREEN = ("RESULT\tdemo\tpart1\tfirst check\tPASS\t\n"
-         "RESULT\tdemo\tpart1\tsecond check\tPASS\t\n"
-         "checks run: 2\n")
-RED = ("RESULT\tdemo\tpart1\tfirst check\tFAIL\t\n"
-       "RESULT\tdemo\tpart1\tsecond check\tPASS\t\n"
-       "checks run: 2\n")
+def test_bad_input_is_an_integrity_failure_not_a_clean_run(tmp_path, expect):
+    """Every one of these returned rc=0 before.
+
+    `read_records` ignored unreadable files, empty ones and short records, so a gate
+    over a NONEXISTENT log reported success. An integrity failure that reads as a
+    clean run is worse than no gate, because it certifies. Reported by @linuxhikerpm.
+    """
+    ledger = _w(tmp_path, "l.tsv", "")
+    budget = _w(tmp_path, "b.txt", "suites_not_covered 0\n")
+    reg = _w(tmp_path, "reg", "demo\n")
+    empty = _w(tmp_path, "empty.log", "")
+    short = _w(tmp_path, "short.log", "RESULT\tdemo\tpart1\tname\n")
+
+    for label, log in (("nonexistent", str(tmp_path / "nope.log")),
+                       ("empty", empty), ("malformed", short)):
+        out, rc = _run("gate", "--ledger", ledger, "--budget", budget,
+                       "--registered", reg, log)
+        expect.num(rc, 2, f"a {label} log is an integrity failure")
+        expect.num(out.count("ledger integrity failure"), 1,
+                   f"and the {label} log says what was wrong with it")
+
+    # It must stay distinguishable from a real refusal, or fail-closed just renames
+    # every outcome to the same thing.
+    good = _w(tmp_path, "g.log", GREEN)
+    expect.num(_run("gate", "--ledger", ledger, "--budget", budget,
+                    "--registered", reg, good)[1], 1,
+               "a real refusal is a different status from an integrity failure")
+
+    # --registered is required: skipping it silently is how a gate reports success
+    # for a question it never asked.
+    expect.num(_run("gate", "--ledger", ledger, "--budget", budget, good)[1], 2,
+               "the gate refuses to run without the registered suite list")
 
 
 def test_a_green_run_records_debt_and_never_a_red_observation(tmp_path, expect):
-    """The arm that matters most.
-
-    A green run has seen nothing go red, so merging one must never record a red
-    observation -- otherwise an ordinary CI run retires the debt the ledger exists
-    to count.
-    """
-    ledger = _write(tmp_path, "l.tsv", "")
-    log = _write(tmp_path, "green.log", GREEN)
-    _run("merge", "--ledger", ledger, log)
+    """A green run has seen nothing go red, so merging one must never record a red
+    observation -- otherwise an ordinary CI run retires the debt it exists to count."""
+    ledger = _w(tmp_path, "l.tsv", "")
+    _run("merge", "--ledger", ledger, _w(tmp_path, "g.log", GREEN))
     rows = _rows(ledger)
     expect.num(len(rows), 2, "merging a green run records both checks")
     expect.text(",".join(sorted({r[3] for r in rows})), "never",
                 "and records neither as ever having been red")
+    expect.num(len([r for r in rows if len(r) != 5]), 0, "every row has five fields")
+    expect.num(pathlib.Path(ledger).read_text().count("\t\n"), 0,
+               "and no row ends in a tab, which was 614 of them")
 
 
-def test_a_red_observation_is_dated_and_survives_a_later_green_run(tmp_path, expect):
-    """The ledger records that a check WAS seen red, which stays true."""
-    ledger = _write(tmp_path, "l.tsv", "")
-    _run("merge", "--ledger", ledger, _write(tmp_path, "g.log", GREEN))
-    _run("merge", "--ledger", ledger, "--date", "2026-09-10",
-         _write(tmp_path, "r.log", RED))
-    by = {r[2]: r[3] for r in _rows(ledger)}
-    expect.text(by["first check"], "2026-09-10",
-                "a check observed red gains the date it was seen")
-    expect.text(by["second check"], "never",
-                "and one that stayed green keeps its debt")
+def test_the_mutation_column_accumulates_rather_than_overwriting(tmp_path, expect):
+    """Last-write-wins records the most recent attack rather than the catalogue the
+    column exists to become, which defeats its purpose rather than limiting it.
 
-    _run("merge", "--ledger", ledger, "--date", "2026-09-11",
-         _write(tmp_path, "g2.log", GREEN))
-    expect.text({r[2]: r[3] for r in _rows(ledger)}["first check"], "2026-09-10",
-                "a later green run does not erase an observation")
-
-
-def test_the_mutation_column_exists_from_v1(tmp_path, expect):
-    """Present with nothing filling it automatically, because adding a column later
-    means rewriting every entry.
-
-    If an entry can record WHICH mutation reddened a check, the catalogue a mutation
-    gate would need builds itself out of work people already do by hand.
+    And one `--mutation` copied across several logs attributes a deliberate change to
+    failures it had nothing to do with. Both reported by @linuxhikerpm.
     """
-    ledger = _write(tmp_path, "l.tsv", "")
-    _run("merge", "--ledger", ledger, "--date", "2026-09-10",
-         _write(tmp_path, "r.log", RED))
-    expect.num(len([r for r in _rows(ledger) if len(r) != 5]), 0,
-               "every row carries four fields, the fourth being the mutation")
-    expect.text("[" + {r[2]: r[4] for r in _rows(ledger)}["first check"] + "]", "[]",
-                "and it is empty when nothing named a mutation")
-
-    _run("merge", "--ledger", ledger, "--date", "2026-09-10",
-         "--mutation", "SAOP limit 128 -> 0", _write(tmp_path, "r2.log", RED))
+    ledger = _w(tmp_path, "l.tsv", "")
+    red = _w(tmp_path, "r.log", RED)
+    _run("merge", "--ledger", ledger, "--date", "D", "--mutation", "SAOP 128 -> 0", red)
     by = {r[2]: r[4] for r in _rows(ledger)}
-    expect.text(by["first check"], "SAOP limit 128 -> 0",
+    expect.text(by["first check"], "SAOP 128 -> 0",
                 "a named mutation is recorded against the check that reddened")
-    expect.text("[" + by["second check"] + "]", "[]",
-                "and not against one that stayed green")
+    expect.text(by["second check"], "-", "and not against one that stayed green")
+
+    _run("merge", "--ledger", ledger, "--date", "D", "--mutation", "bloom neutered", red)
+    expect.text({r[2]: r[4] for r in _rows(ledger)}["first check"],
+                "SAOP 128 -> 0;bloom neutered",
+                "a second mutation accumulates rather than replacing the first")
+
+    expect.num(_run("merge", "--ledger", ledger, "--date", "D", "--mutation", "X",
+                    red, _w(tmp_path, "g.log", GREEN))[1], 2,
+               "one mutation cannot be attributed across several runs at once")
 
 
-def test_a_rename_is_reported_rather_than_silently_resetting_history(tmp_path, expect):
-    """Keyed by the display string, a rename loses history and reads exactly like a
-    brand-new check that has never been red -- the one state this ledger exists to
-    distinguish. It is detected and named instead.
+def test_two_runs_of_a_check_are_not_a_duplicate_of_it(tmp_path, expect):
+    """Merging the logs first cannot tell "the same check in two runs" from "the same
+    name twice in one run", and reported the first as the second."""
+    ledger = _w(tmp_path, "l.tsv", "")
+    g = _w(tmp_path, "g.log", GREEN)
+    out, _ = _run("merge", "--ledger", ledger, "--date", "D", g, g)
+    expect.num(out.count("duplicate"), 0,
+               "the same check in two logs is two runs, not a duplicate")
 
-    Both directions are required: a check merely added, or merely removed, is not a
-    rename, and reporting one on every new check is noise that gets it ignored.
+    twice = _w(tmp_path, "twice.log",
+               "RESULT\tdemo\tpart1\tsame\tPASS\t\n"
+               "RESULT\tdemo\tpart1\tsame\tFAIL\t\nchecks run: 2\n")
+    out, _ = _run("merge", "--ledger", _w(tmp_path, "l2.tsv", ""), "--date", "D", twice)
+    expect.num(out.count("duplicate check name in one run, so one ledger row covers 2: "
+                         "demo\tpart1\tsame"), 1,
+               "the same name twice in ONE log is a duplicate, and is named")
+
+
+def test_renames_are_grouped_by_part_and_scanned_against_one_run(tmp_path, expect):
+    """A global positional pairing misses a real rename whenever unrelated movement in
+    another part shifts the ordering.
+
+    And given a before-log and an after-log together, the vanished name is present in
+    the union and nothing appears to have gone -- a scan that silently finds nothing is
+    worse than one that refuses.
     """
-    ledger = _write(tmp_path, "l.tsv", "")
-    before = ("RESULT\tdemo\tpart1\tthe old name\tFAIL\t\n"
-              "RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n")
-    _run("merge", "--ledger", ledger, "--date", "2026-09-01",
-         _write(tmp_path, "b.log", before))
+    ledger = _w(tmp_path, "l.tsv", "")
+    before = _w(tmp_path, "b.log",
+                "RESULT\tdemo\tpartA\told A\tFAIL\t\n"
+                "RESULT\tdemo\tpartB\tstable B\tPASS\t\nchecks run: 2\n")
+    after = _w(tmp_path, "a.log",
+               "RESULT\tdemo\tpartA\tnew A\tPASS\t\n"
+               "RESULT\tdemo\tpartB\tstable B\tPASS\t\n"
+               "RESULT\tdemo\tpartB\tadded B\tPASS\t\nchecks run: 3\n")
+    _run("merge", "--ledger", ledger, "--date", "2026-09-01", before)
 
-    after = ("RESULT\tdemo\tpart1\tthe new name\tPASS\t\n"
-             "RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n")
-    out, _ = _run("rename-scan", "--ledger", ledger, _write(tmp_path, "a.log", after))
-    expect.num(out.count("possible rename: the old name -> the new name"), 1,
-               "a name that appeared while another disappeared is reported")
-    expect.num(out.count("a stable check"), 0, "and the stable check is not")
+    out, rc = _run("rename-scan", "--ledger", ledger, after)
+    expect.num(out.count("possible rename: old A -> new A"), 1,
+               "a rename in one part survives an addition in another")
+    expect.num(out.count("last red 2026-09-01"), 1,
+               "and the history it is about to lose travels with it")
+    expect.num(out.count("added B"), 0,
+               "the addition in the other part is not called a rename")
+    expect.num(rc, 1, "and a detected rename is reported as a nonzero status")
 
-    added = after.replace("the new name", "the old name") + ""
-    added = ("RESULT\tdemo\tpart1\tthe old name\tPASS\t\n"
-             "RESULT\tdemo\tpart1\ta stable check\tPASS\t\n"
-             "RESULT\tdemo\tpart1\ta genuinely new check\tPASS\t\nchecks run: 3\n")
-    out, _ = _run("rename-scan", "--ledger", ledger, _write(tmp_path, "add.log", added))
-    expect.num(out.count("possible rename"), 0,
-               "a check merely added is not reported as a rename")
-
-    removed = "RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 1\n"
-    out, _ = _run("rename-scan", "--ledger", ledger, _write(tmp_path, "rm.log", removed))
-    expect.num(out.count("possible rename"), 0,
-               "nor is one merely removed")
+    expect.num(_run("rename-scan", "--ledger", ledger, before, after)[1], 2,
+               "a before-log and an after-log together are refused, not silently empty")
 
 
-def test_a_duplicated_check_name_shares_one_row_and_is_reported(tmp_path, expect):
-    """Two checks with the same name in one suite share a ledger row, so one going
-    red marks BOTH as observed red -- a claim about a check nothing attacked, which
-    is exactly what this ledger must not make.
+def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect):
+    """The suite restriction is the MEANING of `suites_not_covered`, not a softening.
 
-    It cannot be fixed by keying harder without a synthetic id someone would
-    maintain, so it is reported. The real corpus carries four today, which is how
-    this was noticed: 609 records reduced to 605 rows.
+    Without it the gate refuses every check of all 250 uncovered suites and reddens the
+    whole matrix on its first run -- a gate somebody turns off within the week, which is
+    the failure this issue family exists to prevent. It tightens on its own as suites
+    are seeded.
     """
-    ledger = _write(tmp_path, "l.tsv", "")
-    dupe = ("RESULT\tdemo\tpart1\tthe same name\tPASS\t\n"
-            "RESULT\tdemo\tpart1\tthe same name\tFAIL\t\n"
-            "RESULT\tdemo\tpart1\ta unique name\tPASS\t\nchecks run: 3\n")
-    out, _ = _run("merge", "--ledger", ledger, "--date", "2026-09-10",
-                  _write(tmp_path, "d.log", dupe))
-    expect.num(out.count("duplicate check name, so one ledger row covers 2: "
-                         "demo\tpart1\tthe same name"), 1,
-               "a duplicated check name is reported by name")
-    expect.num(out.count("a unique name"), 0, "and a unique one is not")
-    expect.num(len(_rows(ledger)), 2,
-               "the two collapse to one row, which is the loss being reported")
+    ledger = _w(tmp_path, "l.tsv", "")
+    reg = _w(tmp_path, "reg", "demo\nother\n")
+    _run("merge", "--ledger", ledger, "--date", "D", _w(tmp_path, "g.log", GREEN))
+
+    other = _w(tmp_path, "o.log", "RESULT\tother\tpartX\tsomething\tPASS\t\nchecks run: 1\n")
+    b1 = _w(tmp_path, "b1.txt", "suites_not_covered 1\n")
+    out, rc = _run("gate", "--ledger", ledger, "--budget", b1, "--registered", reg, other)
+    expect.num(rc, 0, "a check in an uncovered suite is not refused")
+    expect.num(out.count("not covered=1"), 1, "but that suite is counted as debt")
+
+    _run("merge", "--ledger", ledger, "--date", "D", other)
+    other2 = _w(tmp_path, "o2.log",
+                "RESULT\tother\tpartX\tsomething\tPASS\t\n"
+                "RESULT\tother\tpartX\tnewly added\tPASS\t\nchecks run: 2\n")
+    b0 = _w(tmp_path, "b0.txt", "suites_not_covered 0\n")
+    out, rc = _run("gate", "--ledger", ledger, "--budget", b0, "--registered", reg, other2)
+    expect.num(rc, 1, "once the suite is covered, a new check in it IS refused")
+    expect.num(out.count("not in the ledger: other\tpartX\tnewly added"), 1,
+               "and it is the new one that is named")
+    expect.num(out.count("Regenerate it with"), 1,
+               "and the message says how to fix it, because that is the intended action")
+
+    # THE DEADLOCK THAT SHIPPED, as its own arm: adding a check must not require an
+    # edit the design forbids.
+    _run("merge", "--ledger", ledger, "--date", "D", other2)
+    expect.num(_run("gate", "--ledger", ledger, "--budget", b0,
+                    "--registered", reg, other2)[1], 0,
+               "regenerating the ledger lets the new check through")
+    expect.text({r[2]: r[3] for r in _rows(ledger)}["newly added"], "never",
+                "and it entered as debt, not as an observation nothing made")
 
 
-def test_the_gate_refuses_a_check_the_ledger_has_never_seen(tmp_path, expect):
-    """A gate that fails on 3,762 unledgered sites is one somebody disables under
-    deadline, and then we are back at PGC_SKIP_TIMING with extra steps. So the
-    budget grandfathers what exists -- but a NEW check must not enter as silent
-    debt either."""
-    ledger = _write(tmp_path, "l.tsv", "")
-    _run("merge", "--ledger", ledger, _write(tmp_path, "g.log", GREEN))
-    budget = _write(tmp_path, "b.txt", "checks_never_observed_red 2\n")
-    log = _write(tmp_path, "g2.log", GREEN)
-    expect.num(_run("gate", "--ledger", ledger, "--budget", budget, log)[1], 0,
-               "a run whose debt is within budget passes")
+def test_the_ceiling_may_only_fall_and_that_is_enforced(tmp_path, expect):
+    """The tracked file says the ceiling may only fall. Without a mechanism that
+    sentence is prose, and raising the number passed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["git", "init", "-q", "."], ["git", "config", "user.email", "t@t"],
+                ["git", "config", "user.name", "t"]):
+        subprocess.run(cmd, cwd=repo, capture_output=True)
+    (repo / "b.txt").write_text("suites_not_covered 5\n")
+    subprocess.run(["git", "add", "b.txt"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, capture_output=True)
 
-    over = _write(tmp_path, "b2.txt", "checks_never_observed_red 1\n")
-    out, rc = _run("gate", "--ledger", ledger, "--budget", over, log)
-    expect.num(rc, 1, "and one over budget does not")
-    expect.num(out.count("checks_never_observed_red: 2 exceeds the budget of 1"), 1,
-               "and the gate says which number was exceeded, by how much")
+    prior = subprocess.run(["git", "show", "HEAD:b.txt"], cwd=repo,
+                           capture_output=True, text=True).stdout
+    expect.num(prior.count("suites_not_covered 5"), 1,
+               "premise: the scratch repo has a prior ceiling committed")
 
-    newer = _write(tmp_path, "n.log", GREEN + "RESULT\tdemo\tpart1\tbrand new\tPASS\t\n")
-    out, rc = _run("gate", "--ledger", ledger, "--budget", budget, newer)
-    expect.num(rc, 1, "a check the ledger has never seen is refused")
-    expect.num(out.count("not in the ledger: demo\tpart1\tbrand new"), 1,
-               "and it is named, so the author knows which one")
+    ledger = _w(tmp_path, "l.tsv", "")
+    reg = _w(tmp_path, "reg", "demo\n")
+    _run("merge", "--ledger", ledger, "--date", "D", _w(tmp_path, "g.log", GREEN))
+    log = _w(tmp_path, "g2.log", GREEN)
+
+    (repo / "b.txt").write_text("suites_not_covered 9\n")
+    out, rc = _run("gate", "--ledger", ledger, "--budget", "b.txt",
+                   "--registered", reg, "--against", "HEAD", log, cwd=repo)
+    expect.num(rc, 1, "raising the ceiling above its committed value is refused")
+    expect.num(out.count("was raised from 5 to 9"), 1, "and the refusal names both values")
+
+    (repo / "b.txt").write_text("suites_not_covered 3\n")
+    expect.num(_run("gate", "--ledger", ledger, "--budget", "b.txt",
+                    "--registered", reg, "--against", "HEAD", log, cwd=repo)[1], 0,
+               "lowering it is allowed, which is the direction the burn-down goes")
+
+
+def test_the_runner_invokes_the_gate_before_it_removes_the_logs(expect):
+    """A gate nothing runs is a comment -- selftest 350's phrasing about its own
+    subject. Nothing in the repository called this tool: zero references in `.github/`,
+    zero in the runner. Reported by @linuxhikerpm and by OffgridwithJD independently.
+    """
+    text = RUNNER.read_text().splitlines()
+    call = [i for i, l in enumerate(text) if 'pgc_ledger.py" gate' in l]
+    teardown = [i for i, l in enumerate(text) if 'rm -rf "$builddir"' in l]
+    expect.num(len(call), 1, "the runner invokes the ledger gate exactly once")
+    expect.at_least(len(teardown), 1, "premise: the runner removes the build directory")
+    expect.text("before" if call[0] < teardown[-1] else "after", "before",
+                "and it runs before the logs are removed, the only place it can")
+    window = "\n".join(text[call[0]:call[0] + 8])
+    expect.num(window.count("verfail=1"), 1, "and a refused gate fails the major")
 
 
 def test_the_committed_ledger_and_budget_agree(expect):
-    """Both are tracked files, so a change to either is a diff a reviewer sees. If
-    they disagree, one of them was edited by hand -- the failure this whole design
-    refuses."""
+    """Both are tracked, so a change to either is a diff a reviewer sees. If they
+    disagree, one was edited by hand -- the failure this design refuses."""
     ledger = REPO / "test" / "check_ledger.tsv"
     budget = REPO / "test" / "check_ledger_budget.txt"
     expect.text("yes" if ledger.exists() else "no", "yes", "the ledger is in the tree")
@@ -209,21 +274,21 @@ def test_the_committed_ledger_and_budget_agree(expect):
     rows = [l.split("\t") for l in ledger.read_text().splitlines() if l]
     never = [r for r in rows if r[3] == "never"]
     red = [r for r in rows if r[3] != "never"]
-    print(f"  ledger: inputs={len(rows)} | observed red={len(red)}, "
-          f"never={len(never)} | sum={len(red) + len(never)}")
+    print(f"  ledger: inputs={len(rows)} | observed red={len(red)}, never={len(never)}")
     expect.num(len(red) + len(never), len(rows), "the ledger partitions")
-    expect.at_least(len(rows), 1, "premise: it is not empty")
+    expect.num(len([r for r in rows if len(r) != 5]), 0, "every committed row has five fields")
+    expect.num(ledger.read_text().count("\t\n"), 0, "and none ends in a tab")
 
     nums = {}
     for line in budget.read_text().splitlines():
-        parts = line.split()
-        if len(parts) == 2 and parts[1].isdigit() and not line.startswith("#"):
-            nums[parts[0]] = int(parts[1])
+        p = line.split()
+        if len(p) == 2 and p[1].isdigit() and not line.startswith("#"):
+            nums[p[0]] = int(p[1])
     expect.num(nums.get("checks_never_observed_red", -1), len(never),
-               "the committed budget matches the committed ledger's debt")
+               "the committed census matches the committed ledger")
 
     listed = subprocess.run(["bash", str(RUNNER), "--list-suites"],
                             capture_output=True, text=True).stdout.split()
     covered = {r[0] for r in rows}
     expect.num(nums.get("suites_not_covered", -1), len(set(listed) - covered),
-               "and the coverage debt matches the suites with no rows")
+               "and the ceiling matches the suites with no rows")

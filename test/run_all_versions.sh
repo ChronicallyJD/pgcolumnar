@@ -1304,6 +1304,45 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		verfail=1
 	fi
 
+	# THE LEDGER GATE (#918). Every suite's log is here and the build directory is
+	# about to be removed, so this is the only place a matrix run can feed it.
+	#
+	# The gate runs against the COMMITTED ledger: a check it has never seen is
+	# named and refused, which is the allowlist the issue asks for. Regenerating
+	# the ledger is the intended fix and a reviewable diff, so this cannot
+	# deadlock the way a ceiling on `never` rows did.
+	#
+	# CI verifies; humans commit. A ledger that CI rewrote by itself would be a
+	# file nobody reads changing under everybody.
+	#
+	# Only logs that CARRY records are passed. The twelve suites outside lib.sh's
+	# accounting produce none, and the tool fails closed on an empty input --
+	# correctly, since a caller asking it to reconcile nothing is a caller with a
+	# bug.
+	_led_logs=""
+	for s in "${SUITES[@]}"; do
+		[ -s "$builddir/${s}.log" ] || continue
+		[ "$(grep -c '^RESULT	' "$builddir/${s}.log" || true)" != 0 ] \
+			&& _led_logs="$_led_logs $builddir/${s}.log"
+	done
+	if [ -z "$_led_logs" ]; then
+		echo "  no suite emitted a check record on PG$major, so the ledger has nothing to gate"
+		verfail=1
+	elif [ ! -f "$builddir/test/check_ledger.tsv" ]; then
+		echo "  the ledger is missing from the tree under test, which is not a pass"
+		verfail=1
+	else
+		# shellcheck disable=SC2086
+		if ! python3 "$builddir/test/pgc_ledger.py" gate \
+			--ledger "$builddir/test/check_ledger.tsv" \
+			--budget "$builddir/test/check_ledger_budget.txt" \
+			--registered "$_acc_registered" \
+			$_led_logs; then
+			echo "  PG$major has a check the ledger has never seen, which is not a pass"
+			verfail=1
+		fi
+	fi
+
 	# How many of the suites counted as having RUN actually accounted for their
 	# checks (#916). Ten registered suites exit 0 having never called pgc_summary;
 	# counting them among the suites that ran is the overcount #447 added this

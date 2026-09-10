@@ -18,6 +18,44 @@ true until the next version shipped.
 
 ### Added
 
+- A ledger of which checks have ever been seen red, and under what (#918).
+
+  Nothing recorded it. That is the gap that let 39 checks across 35 suites ship
+  unable to fail, three of them inside the suite whose whole purpose is to stop
+  exactly that: the gate answered "did anything print FAIL" and had never
+  answered "could anything print FAIL".
+
+  It records that a named check WAS OBSERVED RED in a recorded run. It does not
+  claim the check is proven able to fail, which needs a named mutation applied
+  deliberately; conflating the two would put a claim in the ledger that nothing
+  measured. It is fed by every real failure, not only by deliberate mutation
+  runs.
+
+  `run_all_versions.sh` runs the gate before it removes the build directory,
+  which is the only place a matrix run can reach every suite's log. What the gate
+  refuses is a check the committed ledger has never seen, in a suite the ledger
+  covers. Regenerating the ledger is the intended fix and a reviewable diff.
+
+  The two tracked numbers are different kinds of thing, and the first design
+  treated both as ceilings and deadlocked. `checks_never_observed_red` is a
+  CENSUS: every new check enters as `never`, so bounding it means every added
+  check breaks the gate and the only way to land one is to raise a number the
+  design says may only fall. It shipped that way once, at 614 rows, 614 never,
+  ceiling 614. `suites_not_covered` IS a ceiling, because adding a check to a
+  covered suite does not move it, and the gate refuses to see it raised above its
+  previously committed value rather than leaving that to review.
+
+  The row is keyed on suite, part and check name. The part matters because
+  `harness_selftest` sources 40-odd parts into one shell and phrases its premises
+  to be copied, so a name-only key is a key of check NAMES: 583 records give 579
+  distinct pairs against 582 distinct triples. A rename is detected and named
+  rather than silently resetting a check's history to `never`, and the mutation
+  column accumulates a set rather than keeping only the most recent attack.
+
+  Bad input fails closed. An unreadable log, an empty one, and a record missing
+  its verdict each returned success before, which is worse than no gate because
+  it certifies.
+
 - Exact zone-map boundary coverage now lives in matching shell and pytest tests
   (#831).
 

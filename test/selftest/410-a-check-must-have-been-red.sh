@@ -1,22 +1,25 @@
 # ---- a check must have been seen red, or be counted as debt -----------------
 #
-# Nothing records whether a check has ever been red. That is the gap that let 39
+# Nothing recorded whether a check had ever been red. That is the gap that let 39
 # checks across 35 suites ship unable to fail, three of them inside this very
-# suite. The gate answers "did anything print FAIL" and has never answered "could
-# anything print FAIL".
+# suite. The gate answered "did anything print FAIL" and had never answered
+# "could anything print FAIL".
 #
-# An audit fixes today; only a ledger keeps it fixed. And a ledger somebody
-# maintains is a hand-maintained count, which this repository has spent a day
-# proving the cost of: nine collisions on one written number, both sides wrong
-# every time. So the ledger is DERIVED FROM RUNS. The only hand-written numbers
-# are the two budgets, and they may only go down.
+# WHAT THIS RECORDS, AND WHAT IT DOES NOT. It records that a named check WAS
+# OBSERVED RED in a recorded run. It does NOT claim the check is proven able to
+# fail: that needs a named mutation applied deliberately, and conflating the two
+# would put a claim in the ledger that nothing measured.
 #
-# WHAT THIS LEDGER CLAIMS, AND WHAT IT DOES NOT. It records that a named check
-# WAS OBSERVED RED in a recorded run. It does NOT claim the check is proven able
-# to fail: that is a stronger statement, it needs a named mutation applied
-# deliberately, and conflating the two would put a claim in the ledger that
-# nothing measured. v1 fills the observed column honestly and leaves the rest as
-# debt, counted.
+# THE FIRST DESIGN DEADLOCKED AND THE SECOND DOES NOT. Bounding
+# `checks_never_observed_red` means every added check breaks the gate, because a
+# new check enters as `never` -- so the only way to land one was to raise a number
+# the design said may only fall. It shipped at 614 rows, 614 never, ceiling 614.
+# It is now a CENSUS, asserted to match the ledger; the CEILING is
+# `suites_not_covered`, which adding a check does not move.
+#
+# WHAT THE GATE REFUSES is a check the committed ledger has never seen. Existing
+# checks are grandfathered; a new one is named, and regenerating the ledger is the
+# INTENDED fix rather than a forbidden edit.
 # ---------------------------------------------------------------------------
 
 _led="$PGC_TESTDIR/pgc_ledger.py"
@@ -31,219 +34,251 @@ check "premise: the budget is a tracked file too" \
 
 _lw="$PGC_WORKDIR/ledger"; mkdir -p "$_lw"
 _led_run() { python3 "$_led" "$@" 2>&1; }
+_led_rc()  { python3 "$_led" "$@" >/dev/null 2>&1; echo $?; }
 
-# ---- the census comes out of a run, not out of a list -----------------------
+printf 'RESULT\tdemo\tpart1\tfirst check\tPASS\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n' > "$_lw/green.log"
+printf 'RESULT\tdemo\tpart1\tfirst check\tFAIL\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n' > "$_lw/red.log"
+printf 'demo\n' > "$_lw/registered"
+printf 'suites_not_covered 0\n' > "$_lw/budget.txt"
 
-cat > "$_lw/green.log" <<'LOG'
-RESULT	demo	part1	first check	PASS	
-RESULT	demo	part1	second check	PASS	
-checks run: 2
-LOG
-
-check "the census reads a run's records" \
-	"$(_led_run census "$_lw/green.log" | wc -l)" "2"
-check "and names the suite and the check, not just a count" \
-	"$(_led_run census "$_lw/green.log" | head -1)" "demo	part1	first check	PASS"
-
-# ---- merging a green run adds the checks as DEBT, not as proven -------------
+# ---- fail closed. Every one of these returned rc=0 before -------------------
 #
-# The arm that matters. A green run has seen nothing go red, so merging one must
-# never record a red observation. Anything else would let an ordinary CI run
-# retire the debt it exists to count.
+# read_records ignored unreadable files, empty ones and short records, so a gate
+# over a NONEXISTENT log reported success. An integrity failure that reads as a
+# clean run is worse than no gate, because it certifies. Reported by @linuxhikerpm.
+
+: > "$_lw/empty.log"
+printf 'RESULT\tdemo\tpart1\tname\n' > "$_lw/short.log"
+: > "$_lw/l.tsv"
+check "a gate over a nonexistent log is an integrity failure, not a pass" \
+	"$(_led_rc gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" --registered "$_lw/registered" "$_lw/nope.log")" "2"
+check "an empty log is one too, because there is nothing to reconcile" \
+	"$(_led_rc gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" --registered "$_lw/registered" "$_lw/empty.log")" "2"
+check "and a record missing its verdict" \
+	"$(_led_rc gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" --registered "$_lw/registered" "$_lw/short.log")" "2"
+check "each says what was wrong with the input" \
+	"$(_led_run gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" --registered "$_lw/registered" "$_lw/short.log" \
+		| grep -c 'a record needs suite, part, name and verdict')" "1"
+
+# The three must be distinguishable from a REAL refusal, or fail-closed just
+# renames every outcome.
+check "a real refusal is a different status from an integrity failure" \
+	"$(_led_rc gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" --registered "$_lw/registered" "$_lw/green.log")" "1"
+
+# --registered is required. Skipping it silently is how a gate reports success
+# for a question it never asked.
+check "the gate refuses to run without the registered suite list" \
+	"$(_led_rc gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" "$_lw/green.log")" "2"
+
+# ---- the census: a green run records debt and never a red observation -------
 
 : > "$_lw/ledger.tsv"
-_led_run merge --ledger "$_lw/ledger.tsv" "$_lw/green.log" >/dev/null
-check "merging a green run records both checks" \
-	"$(grep -c . "$_lw/ledger.tsv")" "2"
+_led_run merge --ledger "$_lw/ledger.tsv" --date 2026-09-10 "$_lw/green.log" >/dev/null
+check "merging a green run records both checks" "$(grep -c . "$_lw/ledger.tsv")" "2"
 check "and records neither as ever having been red" \
 	"$(cut -f4 "$_lw/ledger.tsv" | sort -u | tr '\n' ' ')" "never "
-
-# ---- merging a run that DID go red records the observation ------------------
-
-cat > "$_lw/red.log" <<'LOG'
-RESULT	demo	part1	first check	FAIL	
-RESULT	demo	part1	second check	PASS	
-checks run: 2
-LOG
+check "every row has five fields and no trailing tab" \
+	"$(awk -F'\t' 'NF!=5' "$_lw/ledger.tsv" | grep -c . || true)" "0"
+check "and an empty mutation is a placeholder, not an empty last field" \
+	"$(grep -cP '\t$' "$_lw/ledger.tsv" || true)" "0"
 
 _led_run merge --ledger "$_lw/ledger.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
 check "a check observed red gains the date it was seen" \
 	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/ledger.tsv")" "2026-09-10"
-check "and a check that stayed green keeps its debt" \
+check "and one that stayed green keeps its debt" \
 	"$(awk -F'\t' '$3=="second check"{print $4}' "$_lw/ledger.tsv")" "never"
-
-# An observation is not undone by a later green run. The ledger records that the
-# check WAS seen red, which stays true.
 _led_run merge --ledger "$_lw/ledger.tsv" --date 2026-09-11 "$_lw/green.log" >/dev/null
 check "a later green run does not erase an observation" \
 	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/ledger.tsv")" "2026-09-10"
 
-# ---- the gate: new checks must not be added to the debt silently ------------
+# ---- the mutation column ACCUMULATES ----------------------------------------
 #
-# A gate that fails on 3,762 unledgered checks is a gate somebody disables under
-# deadline, and then we are back at PGC_SKIP_TIMING with extra steps. So the
-# budget grandfathers what exists and refuses to grow.
+# Last-write-wins records the most recent attack rather than the catalogue the
+# column exists to become, which defeats its stated purpose rather than limiting
+# it. And one --mutation value copied across several logs attributes a deliberate
+# change to failures it had nothing to do with. Both reported by @linuxhikerpm.
 
-printf 'suites_not_covered 0\nchecks_never_observed_red 1\n' > "$_lw/budget.txt"
-check "a run whose debt is within budget passes the gate" \
-	"$(_led_run gate --ledger "$_lw/ledger.tsv" --budget "$_lw/budget.txt" "$_lw/green.log" >/dev/null 2>&1 \
-		&& echo ok || echo over)" "ok"
+: > "$_lw/mut.tsv"
+_led_run merge --ledger "$_lw/mut.tsv" --date D --mutation 'SAOP limit 128 -> 0' "$_lw/red.log" >/dev/null
+check "a named mutation is recorded against the check that reddened" \
+	"$(awk -F'\t' '$3=="first check"{print $5}' "$_lw/mut.tsv")" "SAOP limit 128 -> 0"
+check "and not against one that stayed green" \
+	"$(awk -F'\t' '$3=="second check"{print $5}' "$_lw/mut.tsv")" "-"
+_led_run merge --ledger "$_lw/mut.tsv" --date D --mutation 'bloom neutered' "$_lw/red.log" >/dev/null
+check "a second mutation ACCUMULATES rather than replacing the first" \
+	"$(awk -F'\t' '$3=="first check"{print $5}' "$_lw/mut.tsv")" "SAOP limit 128 -> 0;bloom neutered"
+check "one --mutation cannot be attributed across several runs at once" \
+	"$(_led_rc merge --ledger "$_lw/mut.tsv" --date D --mutation X "$_lw/red.log" "$_lw/green.log")" "2"
 
-printf 'suites_not_covered 0\nchecks_never_observed_red 0\n' > "$_lw/budget.txt"
-check "and one over budget does not" \
-	"$(_led_run gate --ledger "$_lw/ledger.tsv" --budget "$_lw/budget.txt" "$_lw/green.log" >/dev/null 2>&1 \
-		&& echo ok || echo over)" "over"
-check "and the gate says which number was exceeded, by how much" \
-	"$(_led_run gate --ledger "$_lw/ledger.tsv" --budget "$_lw/budget.txt" "$_lw/green.log" 2>&1 \
-		| grep -c 'checks_never_observed_red: 1 exceeds the budget of 0')" "1"
+# ---- two runs of a check are not a duplicate of it --------------------------
+#
+# Merging the logs first cannot tell "the same check in two runs" from "the same
+# name twice in one run", and reported the first as the second.
 
-# A check the run produced that the ledger has never heard of is the case the
-# allowlist exists for: it is NEW, and it must not enter as silent debt.
-printf 'suites_not_covered 0\nchecks_never_observed_red 1\n' > "$_lw/budget.txt"
-cat > "$_lw/newcheck.log" <<'LOG'
-RESULT	demo	part1	first check	PASS	
-RESULT	demo	part1	second check	PASS	
-RESULT	demo	part1	a brand new check	PASS	
-checks run: 3
-LOG
-check "a check the ledger has never seen is refused, not absorbed" \
-	"$(_led_run gate --ledger "$_lw/ledger.tsv" --budget "$_lw/budget.txt" "$_lw/newcheck.log" >/dev/null 2>&1 \
-		&& echo ok || echo refused)" "refused"
+: > "$_lw/dup.tsv"
+check "the same check in two logs is two runs, not a duplicate" \
+	"$(_led_run merge --ledger "$_lw/dup.tsv" --date D "$_lw/green.log" "$_lw/green.log" | grep -c 'duplicate')" "0"
+printf 'RESULT\tdemo\tpart1\tsame\tPASS\t\nRESULT\tdemo\tpart1\tsame\tFAIL\t\nchecks run: 2\n' > "$_lw/twice.log"
+: > "$_lw/dup2.tsv"
+check "the same name twice in ONE log is a duplicate, and is named" \
+	"$(_led_run merge --ledger "$_lw/dup2.tsv" --date D "$_lw/twice.log" \
+		| grep -c 'duplicate check name in one run, so one ledger row covers 2: demo	part1	same')" "1"
+
+# ---- renames, grouped by part and scanned against ONE run -------------------
+#
+# A global positional pairing misses a real rename whenever unrelated movement in
+# another part shifts the ordering. And given a before-log and an after-log
+# together, the vanished name is present in the union and nothing appears to have
+# gone -- a scan that silently finds nothing is worse than one that refuses.
+
+: > "$_lw/ren.tsv"
+printf 'RESULT\tdemo\tpart1\tthe old name\tFAIL\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n' > "$_lw/before.log"
+printf 'RESULT\tdemo\tpart1\tthe new name\tPASS\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n' > "$_lw/after.log"
+_led_run merge --ledger "$_lw/ren.tsv" --date 2026-09-01 "$_lw/before.log" >/dev/null
+check "premise: the check has history before the rename" \
+	"$(awk -F'\t' '$3=="the old name"{print $4}' "$_lw/ren.tsv")" "2026-09-01"
+check "a name that appeared while another disappeared is reported as a rename" \
+	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/after.log" \
+		| grep -c 'possible rename: the old name -> the new name')" "1"
+check "and the history it is about to lose travels with it" \
+	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/after.log" | grep -c 'last red 2026-09-01')" "1"
+check "the stable check is not reported" \
+	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/after.log" | grep -c 'a stable check')" "0"
+check "a before-log and an after-log together are refused, not silently empty" \
+	"$(_led_rc rename-scan --ledger "$_lw/ren.tsv" "$_lw/before.log" "$_lw/after.log")" "2"
+
+# Movement in ANOTHER part must not consume this part's pairing. That is what a
+# global positional zip gets wrong, and it fails silently.
+: > "$_lw/ren2.tsv"
+printf 'RESULT\tdemo\tpartA\told A\tPASS\t\nRESULT\tdemo\tpartB\tstable B\tPASS\t\nchecks run: 2\n' > "$_lw/b2.log"
+printf 'RESULT\tdemo\tpartA\tnew A\tPASS\t\nRESULT\tdemo\tpartB\tstable B\tPASS\t\nRESULT\tdemo\tpartB\tadded B\tPASS\t\nchecks run: 3\n' > "$_lw/a2.log"
+_led_run merge --ledger "$_lw/ren2.tsv" --date D "$_lw/b2.log" >/dev/null
+check "a rename in one part survives an addition in another" \
+	"$(_led_run rename-scan --ledger "$_lw/ren2.tsv" "$_lw/a2.log" \
+		| grep -c 'possible rename: old A -> new A')" "1"
+check "and the addition in the other part is not called a rename" \
+	"$(_led_run rename-scan --ledger "$_lw/ren2.tsv" "$_lw/a2.log" | grep -c 'added B')" "0"
+
+# A check merely added, or merely removed, is not a rename.
+printf 'RESULT\tdemo\tpart1\tthe old name\tPASS\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nRESULT\tdemo\tpart1\tbrand new\tPASS\t\nchecks run: 3\n' > "$_lw/added.log"
+check "a check merely added is not reported as a rename" \
+	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/added.log" | grep -c 'possible rename')" "0"
+printf 'RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 1\n' > "$_lw/removed.log"
+check "nor is one merely removed" \
+	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/removed.log" | grep -c 'possible rename')" "0"
+
+# ---- the gate refuses a check the ledger has never seen ---------------------
+
+: > "$_lw/g.tsv"
+_led_run merge --ledger "$_lw/g.tsv" --date D "$_lw/green.log" >/dev/null
+printf 'suites_not_covered 0\n' > "$_lw/gb.txt"
+check "a run whose checks are all ledgered passes the gate" \
+	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb.txt" --registered "$_lw/registered" "$_lw/green.log")" "0"
+printf 'RESULT\tdemo\tpart1\tfirst check\tPASS\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t\nRESULT\tdemo\tpart1\tbrand new\tPASS\t\nchecks run: 3\n' > "$_lw/new.log"
+check "a check the ledger has never seen is refused" \
+	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb.txt" --registered "$_lw/registered" "$_lw/new.log")" "1"
 check "and it is named, so the author knows which one" \
-	"$(_led_run gate --ledger "$_lw/ledger.tsv" --budget "$_lw/budget.txt" "$_lw/newcheck.log" 2>&1 \
-		| grep -c 'not in the ledger: demo	part1	a brand new check')" "1"
+	"$(_led_run gate --ledger "$_lw/g.tsv" --budget "$_lw/gb.txt" --registered "$_lw/registered" "$_lw/new.log" \
+		| grep -c 'not in the ledger: demo	part1	brand new')" "1"
+check "and the message says how to fix it, because regenerating is the intended action" \
+	"$(_led_run gate --ledger "$_lw/g.tsv" --budget "$_lw/gb.txt" --registered "$_lw/registered" "$_lw/new.log" \
+		| grep -c 'Regenerate it with')" "1"
 
-# ---- the budget may only go DOWN --------------------------------------------
+# THE DEADLOCK THAT SHIPPED, as its own arm. Adding a check must not require an
+# edit the design forbids.
+_led_run merge --ledger "$_lw/g.tsv" --date D "$_lw/new.log" >/dev/null
+check "regenerating the ledger lets the new check through" \
+	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb.txt" --registered "$_lw/registered" "$_lw/new.log")" "0"
+check "and it entered as debt, not as an observation nothing made" \
+	"$(awk -F'\t' '$3=="brand new"{print $4}' "$_lw/g.tsv")" "never"
+
+# ---- the ceiling is monotone, mechanically ----------------------------------
 #
-# Both numbers are debt. A change that raises either is a change that adds debt,
-# and it must be visible in a diff as exactly that rather than as a passing gate.
+# The file says the ceiling may only fall. Without this the sentence is prose:
+# raising the number passed. Measured against a prior value from git rather than
+# taken on trust.
 
-check "the committed budget names both debts" \
-	"$(grep -cE '^(suites_not_covered|checks_never_observed_red) [0-9]+$' "$_budget")" "2"
+check "the ceiling refuses being exceeded" \
+	"$(printf 'suites_not_covered 0\n' > "$_lw/gb0.txt"
+	   printf 'other\ndemo\n' > "$_lw/reg2"
+	   _led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb0.txt" --registered "$_lw/reg2" "$_lw/new.log")" "1"
 
-# ---- inputs == sum(buckets), over the real ledger ---------------------------
+_lg="$_lw/repo"; rm -rf "$_lg"; mkdir -p "$_lg"
+( cd "$_lg" && git init -q . && git config user.email t@t && git config user.name t
+  printf 'suites_not_covered 5\n' > b.txt && git add b.txt && git commit -qm base ) >/dev/null 2>&1
+check "premise: the scratch repo has a prior ceiling committed" \
+	"$(cd "$_lg" && git show HEAD:b.txt | grep -c 'suites_not_covered 5')" "1"
+printf 'suites_not_covered 9\n' > "$_lg/b.txt"
+check "raising the ceiling above its committed value is refused" \
+	"$(cd "$_lg" && _led_rc gate --ledger "$_lw/g.tsv" --budget b.txt \
+		--registered "$_lw/registered" --against HEAD "$_lw/new.log")" "1"
+check "and the refusal names both values" \
+	"$(cd "$_lg" && _led_run gate --ledger "$_lw/g.tsv" --budget b.txt \
+		--registered "$_lw/registered" --against HEAD "$_lw/new.log" \
+		| grep -c 'was raised from 5 to 9')" "1"
+printf 'suites_not_covered 3\n' > "$_lg/b.txt"
+check "lowering it is allowed, which is the direction the burn-down goes" \
+	"$(cd "$_lg" && _led_rc gate --ledger "$_lw/g.tsv" --budget b.txt \
+		--registered "$_lw/registered" --against HEAD "$_lw/new.log")" "0"
+
+# ---- and the RUNNER must invoke it ------------------------------------------
+#
+# A gate nothing runs is a comment, which is selftest 350's phrasing about its own
+# subject. Nothing in the repository called this tool: zero references in
+# .github/, zero in the runner. Reported by @linuxhikerpm and by OffgridwithJD
+# independently.
+
+check "the runner invokes the ledger gate" \
+	"$(grep -c 'pgc_ledger.py" gate' "$_rv")" "1"
+check "and it runs before the build directory is removed, which is the only place it can" \
+	"$([ "$(grep -n 'pgc_ledger.py" gate' "$_rv" | cut -d: -f1)" -lt \
+	    "$(grep -n 'rm -rf "\$builddir"' "$_rv" | tail -1 | cut -d: -f1)" ] && echo before || echo after)" "before"
+check "and a refused gate fails the major" \
+	"$(grep -A8 'pgc_ledger.py" gate' "$_rv" | grep -c 'verfail=1')" "1"
+
+# ---- the committed files agree ----------------------------------------------
 
 _l_total="$(grep -c . "$_ledger" || true)"
 _l_red="$(awk -F'\t' '$4!="never"' "$_ledger" | grep -c . || true)"
 _l_never="$(awk -F'\t' '$4=="never"' "$_ledger" | grep -c . || true)"
 echo "  ledger: inputs=$_l_total | observed red=$_l_red, never=$_l_never | sum=$((_l_red + _l_never))"
-check "the ledger partitions into observed and never" \
-	"$((_l_red + _l_never))" "$_l_total"
+check "the ledger partitions into observed and never" "$((_l_red + _l_never))" "$_l_total"
 check "premise: the ledger is not empty, so the partition means something" \
 	"$([ "$_l_total" -gt 0 ] && echo yes || echo no)" "yes"
-
-# The committed budget must match the committed ledger. If it does not, one of
-# the two was edited by hand -- which is the failure this whole design refuses.
-check "the committed budget matches the committed ledger's debt" \
+check "every committed row has five fields" \
+	"$(awk -F'\t' 'NF!=5' "$_ledger" | grep -c . || true)" "0"
+check "and none of them ends in a tab" "$(grep -cP '\t$' "$_ledger" || true)" "0"
+check "the committed census matches the committed ledger" \
 	"$(sed -n 's/^checks_never_observed_red //p' "$_budget")" "$_l_never"
+check "the budget names a ceiling and a census, and says which is which" \
+	"$(grep -cE '^(suites_not_covered|checks_never_observed_red) [0-9]+$' "$_budget")" "2"
 
-# ---- a rename is not a new check, and must not look like one ----------------
+# ---- the gate cannot refuse a check in a suite it has never seen -------------
 #
-# The ledger is keyed by check NAME, and check names in this harness are prose --
-# they are renamed freely, which is most of why #917 exists. So a rename loses
-# the check's history and reads exactly like a brand-new check that has never
-# been red, which is the ONE state the ledger exists to distinguish.
+# The suite restriction is the MEANING of suites_not_covered, not a softening of
+# the refusal. Without it the gate refuses every check of all 250 uncovered
+# suites and reddens the whole matrix on its first run -- a gate somebody turns
+# off within the week, which is the failure this issue family exists to prevent.
 #
-# Raised by OffgridwithJD, who also named the detector: a name appearing with no
-# history in the same run another disappears is a rename, and the ledger should
-# SAY so rather than quietly resetting a count to `never`. It is the same
-# both-directions set comparison as the suite reconciliation, over check names.
-#
-# The alternative -- a synthetic stable id -- would have to be maintained, and
-# this repository removed a hand-maintained list today for that exact reason.
+# It tightens on its own as suites are seeded, and the ceiling forces that
+# direction.
 
-: > "$_lw/ren.tsv"
-cat > "$_lw/before.log" <<'LOG'
-RESULT	demo	part1	the old name	FAIL	
-RESULT	demo	part1	a stable check	PASS	
-checks run: 2
-LOG
-_led_run merge --ledger "$_lw/ren.tsv" --date 2026-09-01 "$_lw/before.log" >/dev/null
-check "premise: the check has history before the rename" \
-	"$(awk -F'\t' '$3=="the old name"{print $4}' "$_lw/ren.tsv")" "2026-09-01"
+printf 'RESULT\tother\tpartX\tsomething\tPASS\t\nchecks run: 1\n' > "$_lw/othersuite.log"
+printf 'demo\nother\n' > "$_lw/reg_both"
+printf 'suites_not_covered 1\n' > "$_lw/gb1.txt"
+check "a check in an UNCOVERED suite is not refused" \
+	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb1.txt" --registered "$_lw/reg_both" "$_lw/othersuite.log")" "0"
+check "but that suite is counted as not covered, which is the debt" \
+	"$(_led_run gate --ledger "$_lw/g.tsv" --budget "$_lw/gb1.txt" --registered "$_lw/reg_both" "$_lw/othersuite.log" \
+		| grep -c 'not covered=1')" "1"
 
-cat > "$_lw/after.log" <<'LOG'
-RESULT	demo	part1	the new name	PASS	
-RESULT	demo	part1	a stable check	PASS	
-checks run: 2
-LOG
-check "a name that appeared while another disappeared is reported as a rename" \
-	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/after.log" 2>&1 \
-		| grep -c 'possible rename: the old name -> the new name')" "1"
-check "and the stable check is not reported" \
-	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/after.log" 2>&1 \
-		| grep -c 'a stable check')" "0"
-
-# The detector must not fire when a check is simply ADDED. Without this it names
-# a rename on every new check, which is noise that gets it ignored.
-cat > "$_lw/added.log" <<'LOG'
-RESULT	demo	part1	the old name	PASS	
-RESULT	demo	part1	a stable check	PASS	
-RESULT	demo	part1	a genuinely new check	PASS	
-checks run: 3
-LOG
-check "a check merely added is not reported as a rename" \
-	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/added.log" 2>&1 \
-		| grep -c 'possible rename')" "0"
-
-# Nor when one is simply REMOVED.
-cat > "$_lw/removed.log" <<'LOG'
-RESULT	demo	part1	a stable check	PASS	
-checks run: 1
-LOG
-check "a check merely removed is not reported as a rename either" \
-	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/removed.log" 2>&1 \
-		| grep -c 'possible rename')" "0"
-
-# ---- the mutation field, present from v1 even though nothing fills it -------
-#
-# If an entry can record WHICH mutation reddened a check, the mutation catalogue
-# builds itself out of work people already do by hand -- the vacuity branches are
-# writing nine to eleven per change tonight, each chosen to revert one property.
-# OffgridwithJD's point, and the reason the column exists now: adding it later
-# means rewriting every entry.
-#
-# NOTHING FILLS IT AUTOMATICALLY YET, and the arms say so rather than implying a
-# capability that does not exist.
-
-: > "$_lw/mut.tsv"
-_led_run merge --ledger "$_lw/mut.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
-check "every ledger row carries four fields, the fourth being the mutation" \
-	"$(awk -F'\t' 'NF!=5' "$_lw/mut.tsv" | grep -c . || true)" "0"
-check "and it is empty when nothing named a mutation" \
-	"$(awk -F'\t' '$3=="first check"{print "[" $5 "]"}' "$_lw/mut.tsv")" "[]"
-
-_led_run merge --ledger "$_lw/mut.tsv" --date 2026-09-10 \
-	--mutation 'PGCOLUMNAR_SAOP_ELEMENT_LIMIT 128 -> 0' "$_lw/red.log" >/dev/null
-check "a merge that names its mutation records it against the check that reddened" \
-	"$(awk -F'\t' '$3=="first check"{print $5}' "$_lw/mut.tsv")" "PGCOLUMNAR_SAOP_ELEMENT_LIMIT 128 -> 0"
-check "and not against one that stayed green" \
-	"$(awk -F'\t' '$3=="second check"{print "[" $5 "]"}' "$_lw/mut.tsv")" "[]"
-
-# ---- a duplicated check name shares one ledger row --------------------------
-#
-# The ledger is keyed by (suite, name). Two checks with the same name in one
-# suite therefore share a row, so ONE of them going red marks BOTH as observed
-# red -- a claim about a check nothing attacked, which is exactly what this
-# ledger must not make.
-#
-# It cannot be fixed by keying harder without a synthetic id someone would have
-# to maintain. So it is REPORTED, and the number is printed rather than assumed:
-# the selftest corpus carries some today, which is how this was noticed at all --
-# 609 records reduced to 605 rows.
-
-cat > "$_lw/dupe.log" <<'LOG'
-RESULT	demo	part1	the same name	PASS	
-RESULT	demo	part1	the same name	FAIL	
-RESULT	demo	part1	a unique name	PASS	
-checks run: 3
-LOG
-: > "$_lw/dupe.tsv"
-check "a duplicated check name is reported by name" \
-	"$(_led_run merge --ledger "$_lw/dupe.tsv" --date 2026-09-10 "$_lw/dupe.log" \
-		| grep -c 'duplicate check name, so one ledger row covers 2: demo	part1	the same name')" "1"
-check "and a unique one is not" \
-	"$(_led_run merge --ledger "$_lw/dupe.tsv" --date 2026-09-10 "$_lw/dupe.log" \
-		| grep -c 'a unique name')" "0"
-check "the two collapse to one row, which is the loss being reported" \
-	"$(grep -c . "$_lw/dupe.tsv")" "2"
+# And once the suite IS covered, a new check in it is refused again -- the
+# restriction tightens rather than exempting the suite forever.
+_led_run merge --ledger "$_lw/g.tsv" --date D "$_lw/othersuite.log" >/dev/null
+printf 'RESULT\tother\tpartX\tsomething\tPASS\t\nRESULT\tother\tpartX\tnewly added\tPASS\t\nchecks run: 2\n' > "$_lw/other2.log"
+printf 'suites_not_covered 0\n' > "$_lw/gb2.txt"
+check "once the suite is covered, a new check in it IS refused" \
+	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb2.txt" --registered "$_lw/reg_both" "$_lw/other2.log")" "1"
+check "and it is the new one that is named, not the one already ledgered" \
+	"$(_led_run gate --ledger "$_lw/g.tsv" --budget "$_lw/gb2.txt" --registered "$_lw/reg_both" "$_lw/other2.log" \
+		| grep -c 'not in the ledger: other	partX	newly added')" "1"

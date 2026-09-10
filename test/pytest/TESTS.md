@@ -1212,117 +1212,86 @@ reconciliation.
 
 ## 16. test_mutation_ledger.py: which checks have ever been red
 
-Nothing recorded whether a check had ever been red. That is the gap that let **39
-checks across 35 suites** ship unable to fail, three of them inside the suite whose
-whole purpose is to stop exactly that. The gate answered *did anything print FAIL* and
-had never answered *could anything print FAIL*.
+Nothing recorded whether a check had ever been red. That is the gap that let **39 checks
+across 35 suites** ship unable to fail, three of them inside the suite whose whole
+purpose is to stop exactly that.
 
-### What this ledger claims, and what it does not
+It records that a named check **was observed red in a recorded run**. Not that it is
+proven able to fail: that needs a named mutation applied deliberately, and conflating
+the two would put a claim in the ledger nothing measured.
 
-It records that a named check **was observed red in a recorded run**. It does **not**
-claim the check is proven able to fail — that is a stronger statement, it needs a named
-mutation applied deliberately, and conflating the two would put a claim in the ledger
-that nothing measured. That is the `defeated: 0` shape from `VACUITY_MODES` section 1: a
-number that reads as evidence and is not.
+### The first design deadlocked, and the fix is the distinction
 
-So v1 fills the observed column honestly and leaves the rest as debt, counted. **Every
-entry currently reads `never`**, and that is the finding rather than an embarrassment: a
-ledger of all-`never` is a measurement of how much of the corpus has never been
-attacked.
+Bounding `checks_never_observed_red` means **every added check breaks the gate**, because
+a new check enters as `never` — so the only way to land one was to raise a number the
+design said may only fall. It shipped at 614 rows, 614 `never`, ceiling 614.
 
-### What fills it
+| number | kind | why |
+| --- | --- | --- |
+| `suites_not_covered` | **ceiling**, monotone | adding a check to a covered suite does not move it |
+| `checks_never_observed_red` | **census**, asserted | every new check enters as `never`, so bounding it deadlocks |
 
-Not only deliberate mutation runs. Every real CI red fills it, every flake, every
-bisect — and those arrive whether anyone remembers to run something or not. A mutation
-run is the deliberate accelerator, not the only source.
+What the gate refuses is a check the committed ledger has never seen, **in a suite the
+ledger covers**. Regenerating the ledger is the intended fix and a reviewable diff.
 
-### The format
+The format is five tab-separated columns keyed on the first three:
+`suite`, `part`, `check name`, `last observed red`, `mutations` — the last a `-` or a
+`;`-separated **set**, accumulated rather than overwritten.
 
-```
-suite <TAB> check name <TAB> last observed red <TAB> mutation
-```
+`run_all_versions.sh` invokes the gate before it removes the build directory, which is
+the only place a matrix run can reach every suite's log.
 
-`last observed red` is a date or the literal `never`. The row is keyed on the first
-three fields. The **mutation column exists from
-v1 with nothing filling it automatically**, because adding a column later means
-rewriting every entry — and if an entry can record *which* mutation reddened a check,
-the catalogue a mutation gate would need builds itself out of work people already do by
-hand.
+### `test_bad_input_is_an_integrity_failure_not_a_clean_run`
 
-Two tracked files carry the debt, `test/check_ledger.tsv` and
-`test/check_ledger_budget.txt`, so a change to either is a diff a reviewer sees.
-`PGC_SKIP_TIMING` is the precedent for why it is not an environment variable: set in two
-workflow files, it suppressed whole suites for months and no diff ever showed it.
+A nonexistent log, an empty one and a record missing its verdict all returned **rc=0**.
+An integrity failure that reads as a clean run is worse than no gate, because it
+certifies. They now return 2, distinguishable from a real refusal at 1, and
+`--registered` is required rather than silently skipped.
 
 ### `test_a_green_run_records_debt_and_never_a_red_observation`
 
-The arm that matters most. A green run has seen nothing go red, so merging one must
-never record a red observation — otherwise an ordinary CI run retires the debt the
-ledger exists to count.
+A green run has observed nothing go red, so merging one must never record a red
+observation — otherwise an ordinary CI run retires the debt the ledger exists to count.
 
-### `test_a_red_observation_is_dated_and_survives_a_later_green_run`
+### `test_the_mutation_column_accumulates_rather_than_overwriting`
 
-The ledger records that a check **was** seen red, which stays true.
+Last-write-wins records the most recent attack rather than the catalogue the column
+exists to become. One `--mutation` copied across several logs attributes a deliberate
+change to failures it had nothing to do with, and is refused.
 
-### `test_the_mutation_column_exists_from_v1`
+### `test_two_runs_of_a_check_are_not_a_duplicate_of_it`
 
-Empty when nothing named a mutation; recorded against the check that reddened and not
-against one that stayed green.
+Merging logs first cannot tell *the same check in two runs* from *the same name twice in
+one run*, and reported the first as the second.
 
-### `test_a_rename_is_reported_rather_than_silently_resetting_history`
+### `test_renames_are_grouped_by_part_and_scanned_against_one_run`
 
-Keyed by the display string, a rename loses the check's history and reads exactly like a
-brand-new check that has never been red — the one state this ledger exists to
-distinguish. It cannot be prevented without a synthetic id someone would have to
-maintain, so it is **detected**: a name that appeared while another disappeared is
-named. Both directions are required, or every new check is reported as a rename and the
-whole thing gets ignored.
+A global positional pairing misses a real rename whenever unrelated movement in another
+part shifts the ordering. Given a before-log and an after-log together the vanished name
+is present in the union, so the scan **refuses** rather than silently finding nothing.
 
-### `test_a_duplicated_check_name_shares_one_row_and_is_reported`
+### `test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers`
 
-Two checks with the same name **in one part** share a ledger row, so one going red marks
-**both** as observed red — a claim about a check nothing attacked.
+The suite restriction is the *meaning* of `suites_not_covered`, not a softening: without
+it the gate refuses every check of all 250 uncovered suites and reddens the whole matrix
+on its first run. It tightens on its own as suites are seeded, and the deadlock that
+shipped is pinned as its own arm — regenerating the ledger lets a new check through.
 
-The key is `(suite, part, name)`, not `(suite, name)`. `harness_selftest` sources 40-odd
-parts into one shell and phrases its premises to be **copied** — *"premise: the pytest
-layer is where **this part** thinks it is"* works verbatim in any of them — so a
-name-only key is a key of check *names*, and the collision count grows with every part
-anyone writes. Measured over a real run of 583 records: 579 distinct `(suite, name)`
-against 582 distinct `(suite, part, name)`. The part is derived from `BASH_SOURCE`
-rather than from a convention, so the next part written the same way is keyed correctly
-without anyone remembering.
+### `test_the_ceiling_may_only_fall_and_that_is_enforced`
 
-One duplicate survived that, and inspecting it showed it was worse than a repeat: at
-`340:268` and `340:894`, `premise: the fixture fingerprints at all` was asked once of the
-**source-partition fixture** and once of the **locale sweep** — two different questions
-about two different code paths, wearing one sentence. A shared row there is not merely
-imprecise: one failing would mark the other's premise as observed red.
+The tracked file says the ceiling may only fall. Without a mechanism that is prose, and
+raising the number passed. The gate compares against the previously committed value.
 
-Both now name their subject, `premise: the partition fixture fingerprints at all` and
-`premise: every locale produced a fingerprint`, and the corpus has **zero** collisions:
-614 records, 614 distinct keys.
+### `test_the_runner_invokes_the_gate_before_it_removes_the_logs`
 
-That rename is also the detector's first test on real data rather than fixtures. Run
-against the ledger seeded before it:
-
-```
-possible rename: premise: the fixture fingerprints at all
-              -> premise: every locale produced a fingerprint
-   (in harness_selftest/340-the-binary-must-be-built-from, history: last red never)
-rename scan: appeared=2, vanished=1
-```
-
-### `test_the_gate_refuses_a_check_the_ledger_has_never_seen`
-
-A gate that fails on 3,762 unledgered sites is one somebody disables under deadline, and
-then we are back at `PGC_SKIP_TIMING` with extra steps. The budget grandfathers what
-exists; a new check must not enter as silent debt.
+A gate nothing runs is a comment. Nothing in the repository called this tool: zero
+references in `.github/`, zero in the runner.
 
 ### `test_the_committed_ledger_and_budget_agree`
 
-If they disagree, one was edited by hand. `suites_not_covered` is counted separately so
-that "we ledger 605 checks" cannot read as "we ledger the corpus" — 250 of 251 suites
-have no rows at all.
+If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so the
+gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
+which falls as suites are seeded.
 
 ## 17. Adding a test
 

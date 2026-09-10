@@ -1,28 +1,37 @@
-# How much of the check corpus has never been seen red -- DEBT, in a tracked
-# file so a change to it is a diff a reviewer sees.
+# The ledger's debt, in a tracked file so a change to it is a diff a reviewer
+# sees. An environment variable would not be: PGC_SKIP_TIMING is the precedent,
+# set in two workflow files, suppressing whole suites for months with no diff
+# ever showing it.
 #
-# An environment variable would not be. PGC_SKIP_TIMING is the precedent: set in
-# two workflow files, it suppressed whole suites for months and no diff ever
-# showed it.
+# THE TWO NUMBERS ARE DIFFERENT KINDS OF THING. The first version of this file
+# treated both as ceilings and deadlocked, so the distinction is written down.
 #
-# BOTH NUMBERS MAY ONLY GO DOWN. A change that raises either is a change that
-# adds debt, and it must read as exactly that in review rather than as a passing
-# gate.
-#
-# checks_never_observed_red
-#   Checks in test/check_ledger.tsv that no recorded run has ever seen go red.
-#   It does NOT mean they cannot fail -- that is a stronger claim needing a named
-#   mutation, and this ledger does not make it. It means nothing has attacked
-#   them yet, which is worth knowing on its own.
-#
-#   It drains from the project's actual failures as well as from deliberate
-#   mutation runs: every real CI red, every flake, every bisect fills the ledger,
-#   and those arrive whether anyone remembers to run something or not.
-#
-# suites_not_covered
+# suites_not_covered -- A CEILING, and monotone.
 #   Registered suites with no rows in the ledger at all. Their checks are
-#   invisible to everything above: the gate cannot refuse a new check in a suite
-#   it has never seen. Counted separately so that "we ledger 605 checks" cannot
-#   read as "we ledger the corpus".
-checks_never_observed_red 614
+#   invisible to the gate: it cannot refuse a new check in a suite it has never
+#   seen. It falls as suites are seeded, and it MAY ONLY FALL -- the gate compares
+#   this value against the previously committed one and refuses an increase, so
+#   widening the debt is an edit a reviewer sees AND a gate refuses.
+#
+#   Adding a check to a suite that is already covered does not move it, which is
+#   what makes it safe to bound.
 suites_not_covered 250
+#
+# checks_never_observed_red -- A CENSUS. NOT a ceiling, and it must not become
+#   one.
+#   Every new check enters the ledger as `never`, so bounding this number means
+#   every added check breaks the gate, and the only way to land one is to raise a
+#   number the design says may only fall. That is a deadlock rather than a budget,
+#   and the first version of this file shipped it: 614 rows, 614 never, ceiling
+#   614.
+#
+#   It is reported by the gate on every run and falls as checks are attacked. What
+#   the gate REFUSES is a check the ledger has never seen, which regenerating the
+#   ledger fixes -- a reviewable one-line diff, and the intended action rather
+#   than a forbidden one.
+#
+#   The number here is ASSERTED to match the committed ledger, in both harnesses.
+#   Without that it is a hand-maintained count that drifts, which is the failure
+#   this repository has spent a day proving. It is not a ceiling; it is a
+#   measurement that must be true.
+checks_never_observed_red 638
