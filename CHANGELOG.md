@@ -369,7 +369,7 @@ true until the next version shipped.
 
   The other 29 sites already compared numerically and were never affected.
 
-  `test/selftest/420-a-count-grep-never-produced.sh` holds the arms and a heredoc-aware
+  `test/selftest/440-a-count-grep-never-produced.sh` holds the arms and a heredoc-aware
   sweep requiring zero string comparisons on a `grep -c`, so the class is closed rather
   than the 20 instances. The sweep skips comments as well as heredocs: a flat grep
   counts the paragraph that documents the idiom, which is how a guard comes to flag its

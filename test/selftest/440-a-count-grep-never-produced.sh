@@ -47,7 +47,7 @@ check "premise: while a valid pattern prints a number" \
 
 # ---- and the shape cannot come back ------------------------------------------
 #
-# HEREDOC-AWARE, like the exit-0 sweep in part 410: the suites generate fixture
+# HEREDOC-AWARE, like the exit-0 sweep in part 430 (#934): the suites generate fixture
 # scripts, and a forbidden idiom inside a generated script is the fixture rather than
 # an offence. Measured: 20 sites before this change and 0 after.
 _c929_sweep() {
