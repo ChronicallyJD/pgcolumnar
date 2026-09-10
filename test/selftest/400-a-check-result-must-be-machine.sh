@@ -282,3 +282,91 @@ _allskip() {
 }
 check "a suite that skipped every check did not pass" \
 	"$(_allskip)" ": SKIPPED (ran no checks)"
+
+# ---- a check inside a pipeline loses its count, and the message must say so --
+#
+# `printf ... | while read n; do check "$n" a a; done` runs the loop body in a
+# SUBSHELL, so the counter bump dies with it while the outcome and the record are
+# both printed to the parent's stdout. Driven:
+#
+#     four checks print PASS, four RESULT lines appear, PGC_CHECKS=2
+#
+# pgc_reconcile_records catches it -- that is what it is for -- but it reported
+# `records=3 but the log states checks run: 1`, which is the BOOKKEEPING rather
+# than the cause. A reader who has not met this before has no way from that line
+# to the pipeline. Raised by OffgridwithJD.
+#
+# Latent today: four piped loops in the tree, none with a check inside. So the
+# sweep below reports zero, and a fixture proves it can fire -- a rule whose only
+# evidence is that the corpus is currently clean is not a rule.
+
+eval "$(sed -n '/^pgc_reconcile_records()/,/^}/p' "$_rv")"
+_pl="$PGC_WORKDIR/piped.log"
+printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nRESULT\ts\tp\tc\tPASS\t\nchecks run: 1\n' > "$_pl"
+check "more records than counted checks names the cause, not just the arithmetic" \
+	"$(pgc_reconcile_records "$_pl" 2>&1 | grep -c 'a check ran in a subshell')" "1"
+check "and still reports the two numbers" \
+	"$(pgc_reconcile_records "$_pl" 2>&1 | grep -c 'records=3 .*checks run: 1')" "1"
+
+# Fewer records than checks is the OPPOSITE fault -- a counted check that emitted
+# no record -- and must not be described as a subshell.
+printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 3\n' > "$_pl"
+check "fewer records than counted checks is not described as a subshell" \
+	"$(pgc_reconcile_records "$_pl" 2>&1 | grep -c 'a check ran in a subshell')" "0"
+check "and names its own cause instead" \
+	"$(pgc_reconcile_records "$_pl" 2>&1 | grep -c 'counted without emitting a record')" "1"
+
+# ---- and the shape is swept, the way selftest 080 sweeps its cousin ----------
+
+_pipeloop_sites() {	# _pipeloop_sites FILE... -> file:line of a check inside a piped loop
+	# Two refinements, both from measuring rather than reading. Requiring the
+	# closing `done` to be alone on its line left the scanner inside a loop for
+	# the rest of any file whose loop ended `done)"` -- 27 hits against a true
+	# zero. And a loop written entirely on ONE line, inside a command
+	# substitution, opened a block that never closed, flagging every later check.
+	#
+	# So: open only on a line that opens the loop and does NOT close it, and close
+	# on a `done` token wherever it sits. Comments are stripped first, because the
+	# rule's own explanation necessarily spells the shape out.
+	awk '
+		FNR == 1 { inloop = 0 }
+		{ line = $0; sub(/^[[:space:]]*#.*/, "", line) }
+		line ~ /\|[[:space:]]*(while|for)[[:space:]]/ && line ~ /(^|[[:space:];])do([[:space:]]|$)/ \
+			&& line !~ /(^|[[:space:]();])done([[:space:]();]|$)/ { inloop = 1; next }
+		inloop && line ~ /(^|[[:space:]();])done([[:space:]();]|$)/ { inloop = 0; next }
+		inloop && line ~ /(^|[^_[:alnum:]])(check|check_num|check_text|check_ratio|check_unrunnable|pgc_pass|pgc_fail)[[:space:]]/ {
+			print FILENAME ":" FNR
+		}
+	' "$@"
+}
+
+_pl_fx="$PGC_WORKDIR/plfx"; mkdir -p "$_pl_fx"
+_pl_call="$(printf '%s "$n" a a' check)"
+{ printf 'printf "a\\nb\\n" | while IFS= read -r n; do\n'; printf '\t%s\n' "$_pl_call"; printf 'done\n'; } \
+	> "$_pl_fx/bad.sh"
+{ printf 'while IFS= read -r n; do\n'; printf '\t%s\n' "$_pl_call"; printf 'done < <(printf "a\\nb\\n")\n'; } \
+	> "$_pl_fx/good.sh"
+{ printf 'printf "a\\nb\\n" | while IFS= read -r n; do\n'; printf '\techo "$n"\n'; printf 'done\n'; } \
+	> "$_pl_fx/nocheck.sh"
+
+check "premise: the fixtures carry the shapes this sweep is about" \
+	"$(grep -lc 'while IFS= read' "$_pl_fx"/*.sh | grep -c .)" "3"
+check "the sweep finds a check inside a PIPED loop" \
+	"$(_pipeloop_sites "$_pl_fx/bad.sh" | grep -c .)" "1"
+check "and not one inside a process-substitution loop, which keeps its shell" \
+	"$(_pipeloop_sites "$_pl_fx/good.sh" | grep -c .)" "0"
+check "and not a piped loop with no check in it" \
+	"$(_pipeloop_sites "$_pl_fx/nocheck.sh" | grep -c .)" "0"
+
+# A loop written entirely on one line inside a command substitution opens and
+# closes in the same place. The first version of this sweep opened a block there
+# and never closed it, flagging every check after it -- which is how twelve of
+# its twenty-seven false hits were in this very file.
+{ printf 'x="$(printf "a\\n" | while IFS= read -r n; do echo "$n"; done)"\n'
+  printf '%s\n' "$_pl_call"; } > "$_pl_fx/oneline.sh"
+check "and not a check after a one-line piped loop that already closed" \
+	"$(_pipeloop_sites "$_pl_fx/oneline.sh" | grep -c .)" "0"
+
+_pl_hits="$(_pipeloop_sites "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh 2>/dev/null | grep -c . || true)"
+[ "${_pl_hits:-0}" = 0 ] || _pipeloop_sites "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh | sed 's/^/    /'
+check "no suite calls a check inside a piped loop" "${_pl_hits:-0}" "0"

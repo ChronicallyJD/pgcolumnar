@@ -963,6 +963,20 @@ pgc_reconcile_records() {	# pgc_reconcile_records LOGFILE -> 0 ok, 1 mismatch
 	fi
 	if [ "$_records" != "$_stated" ]; then
 		echo "    records=$_records but the log states checks run: $_stated"
+		# NAME THE CAUSE, not just the arithmetic. The two directions have
+		# different causes and a reader who has not met either has no route from
+		# a pair of numbers to the defect. Raised by OffgridwithJD.
+		if [ "$_records" -gt "$_stated" ]; then
+			echo "      $((_records - _stated)) check(s) reported an outcome the count never saw:"
+			echo "      a check ran in a subshell, so its counter bump died with it while its"
+			echo "      outcome and record still reached the log. The usual shape is a check"
+			# The example is ASSEMBLED, not written out: spelling the shape here
+			# made the sweep in selftest 400 flag this very line.
+			printf '      inside a piped loop -- `cmd %s while read x; do check ...; done`.\n' '|'
+		else
+			echo "      $((_stated - _records)) check(s) were counted without emitting a record:"
+			echo "      something bumped PGC_CHECKS without going through pgc_record."
+		fi
 		return 1
 	fi
 	return 0
@@ -979,6 +993,17 @@ pgc_log_shows_any_accounting() {	# pgc_log_shows_any_accounting LOGFILE -> yes|n
 	# Both are runtime-observable and derived rather than declared, so a suite
 	# that adopts either mechanism leaves the debt bucket on its own -- which is
 	# the property that keeps the debt file from becoming a permission slip.
+	# A HALF-MERGE WOULD BE CONFUSING RATHER THAN LOUD, and it is worth knowing
+	# which way. The `checks run:` alternative below answers YES to an accounting
+	# line of ANY shape, so it MASKS a change to that line: if the producer ever
+	# moved without this file, the population reconciliation would stay green
+	# while pgc_log_shows_accounting broke and the accounting reconciliation
+	# reddened. Two checks disagreeing about the same log is a worse signal than
+	# either failing.
+	#
+	# It cannot happen inside one tree -- producer and both readers move in the
+	# same commit -- so this is a note about what to look for, not a defect.
+	# Raised by OffgridwithJD while verifying the four-term shape change.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
 	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+$' "$_log" || true)" != 0 ] \
