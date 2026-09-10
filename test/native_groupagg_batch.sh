@@ -362,9 +362,9 @@ check_text "parallel: and they equal the heap mirror" \
 	"$(q "SELECT k, count(*), sum(v) FROM gbb_h GROUP BY k ORDER BY k" | md5sum)"
 # And the premise those two need: the parallel arm really did run in parallel.
 # Without it both arms are the same serial plan and the comparison is vacuous.
+gbb_par_plan="$(PGOPTIONS="$PAR_OPTS" q "$ANALYZE_PFX $Q_PAR")"
 check_text "parallel: premise: the value arm's own plan launches workers" \
-	"$(PGOPTIONS="$PAR_OPTS" q "$ANALYZE_PFX $Q_PAR" |
-	   grep -qiE 'Workers Launched: [1-9]' && echo yes || echo no)" yes
+	"$(grep -qiE 'Workers Launched: [1-9]' <<<"$gbb_par_plan" && echo yes || echo no)" yes
 
 # ---- a column added after some row groups: predicted yes, ran no ------------
 # Same shape as #602 on the ungrouped node. The old row groups have no chunk for

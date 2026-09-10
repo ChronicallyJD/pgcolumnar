@@ -75,6 +75,7 @@ NO_CLUSTER = [
     # list IS this list actually runs them. This file cannot be in the list: it
     # hands cluster-bound file names to pytest, so it needs what they need.
     "test_harness_deps_classifier.py",
+    "test_writes_wrote_rows.py",
     # Landed on main in #930 while this branch was in review, and the arm below named
     # it: cluster-free, not driver-dependent, so the job can run it and the
     # declaration has to say so. The third time this arm has caught a merge-order

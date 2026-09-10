@@ -53,6 +53,55 @@ true until the next version shipped.
   names the cause rather than the arithmetic: more records than counted is a check
   that ran in a subshell, fewer is a counter bumped outside `pgc_record`.
 
+- A write that wrote no rows no longer passes as a fixture that built something
+  (#432).
+
+  `INSERT ... SELECT ... WHERE false` writes nothing and raises nothing. psycopg
+  reports `INSERT 0 0` with a `rowcount` of 0, and nobody in the pytest corpus read
+  either field -- so the fixture a test meant to build did not exist, and every
+  assertion below it compared two empty things. That is `insert-wrote-no-rows` in
+  `test/pytest/VACUITY_MODES.md`, which now lists it as refused rather than as a gap.
+
+  THE COMMAND TAG DECIDES, NOT THE ROW COUNT. `SELECT 0` and `INSERT 0 0` both carry
+  `rowcount == 0`, so a guard keyed on the count alone would refuse every test whose
+  last statement was a SELECT over an empty result. `statusmessage` is the server's
+  own tag, so this guard never parses SQL. Measured on PG 18 against a pgcolumnar
+  table: DDL reports `CREATE TABLE`, `SET` or `TRUNCATE TABLE` with `rowcount` -1, an
+  `INSERT ... WHERE false` reports `INSERT 0 0` with 0, and `UPDATE 0` and `DELETE 0`
+  likewise.
+
+  A deliberate zero stays writable. A DELETE that must match nothing is a real
+  negative control, and `expect.wrote(cur, 0, name)` says so: it compares the count
+  and marks the write as named. An unnamed zero fails the test, and naming a count
+  does not excuse a wrong one. The refusal runs in the CALL phase rather than a
+  teardown fixture, because #931 measured that a teardown guard reports the test it
+  guards as PASSED and fails separately.
+
+  TWO PROPERTIES, TWO FILES, PROVEN SEPARATELY. The classifier and the refusal live
+  in `test/pytest/test_writes_wrote_rows.py`, which needs no database: a stub cursor
+  carrying the two measured fields exercises them exactly. Whether the connection the
+  tests actually use is watched is a different claim that no driver-free arm can make,
+  and `test_the_connection_the_tests_use_is_watched` makes it through a real
+  `INSERT ... WHERE false`, on both `conn.execute` and a cursor the connection handed
+  out -- 24 sites and 42 sites in the corpus respectively, so a proxy watching only
+  the connection would leave most of it unwatched.
+
+  The split is load-bearing, measured rather than asserted. Unwiring the connection
+  proxy in `conftest.py` and changing nothing else leaves the driver-free file at 10
+  passed and reds the wiring arm alone. That is #917's defect in miniature -- its
+  pytest twin tested a function's body and left the runner's CALL to it uncovered, so
+  removing the call kept that half green -- and it is why these arms are in two files.
+
+  Prove-by-removal, five mutations, each applied by exact string match and the file
+  asserted to still parse: no refusal -> 2 arms red; the command tag ignored -> 2 red
+  and the wiring arm red; every statement treated as a write -> 4 red; the connection
+  not wrapped -> 0 driver-free red and the wiring arm red; the acknowledgement not
+  recorded -> 1 red. Control: 10 passed driver-free, 9 passed with a cluster.
+
+  Full corpus with a cluster: 246 passed, and none of the 12 write sites already in
+  the corpus reddened -- the false-positive budget this guard needed before it could
+  ship.
+
 - A broad `pytest.raises` must name a SQLSTATE, and the block must hold one
   statement (#432).
 
@@ -417,6 +466,68 @@ true until the next version shipped.
   correction is recorded in the document rather than quietly replacing the sentence,
   because a map that names the wrong gap is worse than one that admits it does not
   know.
+
+- The sweep that forbids piping a captured string into `grep -q` now joins a
+  pipeline split across two lines, and the six suites that had split one are
+  fixed (#486).
+
+  The sweep read one physical line at a time. `producer |` on one line with
+  `grep -q PATTERN` on the next was therefore invisible to it: the producer's line
+  holds no reader, and the reader's line holds no producer. Six live sites were
+  written that way -- three in `test/vector_agg_rescan_memory.sh`, one each in
+  `test/unique_conc.sh`, `test/native_groupagg_batch.sh` and
+  `bench/run_clickbench.sh`. Every one of them answers a premise that decides
+  whether a whole arm measures what it claims to, and the failure direction is the
+  expensive one: the pipeline reports the thing it was looking for as ABSENT, so a
+  plan that contains the vectorized aggregate reads as a planner regression.
+
+  `test/unique_conc.sh` is the one to read. The comment directly above it explains
+  this exact trap, and captures the output into a variable for that reason. The
+  next line pipes that variable into `grep -q` anyway.
+
+  The sweep now builds logical lines before it matches, and applies one pattern to
+  both the physical and the joined stream. Three behaviours of bash were measured
+  rather than assumed: a pending `|` skips blank and comment lines, a `\` joins the
+  next physical line with no skipping, and a comment never continues at all. Two
+  premises the joiner rests on are asserted instead of coded around -- no line
+  opens a heredoc and also continues, and no `\` continuation is followed by a
+  blank or a comment -- so if either stops being true the gate says so rather than
+  reading past it.
+
+  One false positive is accepted, and a fixture pins it: a double-quoted string
+  continued across a line break, whose first line ends in a bare `|`, reads as a
+  pipeline once the two lines are joined. It fails loud, where the blindness it
+  replaces failed silent. A second latent defect went with it -- the physical
+  stream now passes `-H`, because `grep -n` omits the filename when it reads a
+  single file and the heredoc exemption keys on `file:line`.
+
+  A COMMENT NAMING A HEREDOC USED TO EXEMPT THE REST OF THE FILE. The exemption
+  scanner matched the opener anywhere on a line and left heredoc mode only on a line
+  equal to the tag, so a COMMENT that merely named the idiom switched the rule off for
+  everything after it. @linuxhikerpm measured it: with a genuine two-line violation
+  restored this part went red, and adding one comment line 24 lines above it -- changing
+  nothing else -- took it back to 37 passed while the violation was still there byte for
+  byte. This change is where that becomes load-bearing, because it deletes the filename
+  exclusion and rests the argument on the exemption being DERIVED rather than listed.
+
+  Two conditions now, each measured. An opener is recognised only on a NON-COMMENT line,
+  and only when a later line EQUALS its tag -- one with no terminator exempts nothing.
+  The second condition is what stops a TRAILING comment doing the same thing, and it
+  retires the old per-file reset: an unterminated candidate can no longer leak into the
+  next file. Proved by restoring the violation, adding the comment, and staying red; and
+  by writing `cat <<'X' |` plainly in this file's own prose, which used to take its
+  exempt-line count from 6 to 187 and now changes nothing.
+
+  AND BOTH NEW PREMISE ARMS WERE NUMERATOR-ONLY. They reported zero whether or not their
+  detector worked: replacing the heredoc-opener pattern with one that cannot match left
+  the arm green, and so did making the continuation detector never arm. The denominators
+  are printed and asserted now -- 179 openers and 5,533 continuations -- which is the
+  inputs == sum(buckets) rule the rest of this directory applies. An earlier draft of
+  this entry claimed "if either stops being true the gate says so"; that was the half
+  which was not true.
+
+  Planting any one of the six sites back in its old form takes the rule red and
+  names the file and the line.
 
 - TESTS.md's contents list no longer carries a link that goes nowhere, and the
   corpus gate now checks every one of them.

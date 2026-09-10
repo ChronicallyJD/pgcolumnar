@@ -815,12 +815,15 @@ run_one() {  # run_one <arm> <sql>
 # difference in the table means nothing about that node unless it engaged, and on
 # this dataset it usually does not (#369).
 grouped_engaged() {  # grouped_engaged <arm> <sql>
-	local arm="$1" tbl
+	local arm="$1" tbl plan
 	tbl=$(arm_table "$arm")
-	env "$BINDIR/psql" -h /tmp -p "$CB_PORT" -U postgres -d clickbench -X -At \
+	# Captured, then read from a here-string (#486). A plan this size is well past
+	# the point where the writer loses the race, and the answer this helper returns
+	# decides whether a whole arm's numbers are reported as the grouped node's.
+	plan="$(env "$BINDIR/psql" -h /tmp -p "$CB_PORT" -U postgres -d clickbench -X -At \
 		-c "$(arm_settings "$arm")" \
-		-c "EXPLAIN (COSTS OFF) ${2//FROM hits/FROM $tbl}" 2>&1 |
-		grep -qi 'Vectorized Group Keys' && echo yes || echo no
+		-c "EXPLAIN (COSTS OFF) ${2//FROM hits/FROM $tbl}" 2>&1)" || true
+	grep -qi 'Vectorized Group Keys' <<<"$plan" && echo yes || echo no
 }
 
 declare -A COLD HOT ERRS WARMSPREAD

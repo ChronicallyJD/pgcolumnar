@@ -270,8 +270,7 @@ send s2 "SET application_name='cc_s2';"
 # message was there, which turns this into a check that can never pass.
 bucket_set_err="$(ctl_qe 'SET pgcolumnar.unique_lock_buckets = 1;')"
 check "the bucket count cannot be changed per session" \
-	"$(echo "$bucket_set_err" |
-		grep -qE 'ERROR:.*cannot be changed' && echo OK || echo "NO ERROR")" "OK"
+	"$(grep -qE 'ERROR:.*cannot be changed' <<<"$bucket_set_err" && echo OK || echo "NO ERROR")" "OK"
 check "the cluster runs the bucket count the suite needs" \
 	"$(ctl_q 'SHOW pgcolumnar.unique_lock_buckets;')" "100003"
 
