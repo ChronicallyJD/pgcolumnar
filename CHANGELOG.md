@@ -310,6 +310,79 @@ true until the next version shipped.
   placement. The half still open is the general shape: a guard anyone adds later in a
   teardown still cannot fail its test, and nothing refuses that.
 
+- A failed query is no longer comparable with another failed query (#432).
+
+  `error-swallowed-to-empty`: two queries raise, a helper turns each into the same
+  value, and they compare equal. The test is green and has asserted nothing about
+  either query. `test/lib.sh` closed this by PRODUCING the sentinel with a sequence
+  number per failure -- `res="QUERY_ERROR.$seq"` -- so two failures can never compare
+  equal.
+
+  The pytest port had the constant `QUERY_ERROR = "QUERY_ERROR"`, a comment claiming it
+  was "unique per occurrence" -- which is false of a constant -- and a refusal in
+  exactly one assertion. Measured before the fix, with a sentinel on both sides:
+  `expect.hash` refused; `expect.text`, `expect.rows`, `expect.row_set` and
+  `expect.ordered_rows` all PASSED. Four of the five comparisons accepted two failed
+  queries as agreement. `expect.num`, `expect.at_least` and `expect.rowcount` refused
+  already, by their type guards rather than by anything about sentinels.
+
+  There is now one refusal, called by every comparison, so an assertion added later
+  inherits it instead of being the next hole -- which is how this survived: `hash` had
+  a refusal and the four written after it did not. It matches the prefix at any depth,
+  because a sentinel arrives as a CELL inside a row as often as it arrives as a whole
+  side. `row_set` refuses BEFORE it maps its rows through `repr`, since
+  `repr(("QUERY_ERROR.1",))` does not start with the prefix: delegating an assertion
+  does not delegate its refusals when the delegation transforms the data.
+
+  `query_error()` produces a value unique per occurrence, for the paths that compare
+  without the layer -- a helper comparing by hand, which is what the two existing
+  hand-rolled sentinels in `test_hilbert_locality.py` do. The refusal is the mechanism;
+  the producer is the second line. One of those two sentinels is produced by
+  `coalesce(...)` inside SQL and cannot use the Python producer, which is why the
+  refusal has to be the mechanism rather than the other way round.
+
+  Each refusal is proved load-bearing: removing it from one assertion at a time makes
+  the arm name that assertion and no other, five times out of five. The mutations are
+  only distinguishable with `__pycache__` cleared between runs -- the five deleted
+  lines are byte-identical, so three of the five leave the file the same size and
+  Python reuses the stale bytecode, which made two of the refusals look like they did
+  not bite.
+
+  THREE DEFECTS @jdatcmd FOUND IN THE FIRST VERSION, each reproduced before it was fixed.
+
+  The HATCH WAS OPEN and the arm that said otherwise was tautological: it rewrote
+  `pgc_vacuity.QUERY_ERROR` and THEN minted its sentinels with `query_error()`, which
+  read that same global -- producer and matcher moved together, so the refusal matched
+  whatever the prefix had just been set to. The faithful hatch mints while armed and
+  rewrites afterwards, which is what a corpus file does, and against the first version
+  that COMPARED two sentinels instead of refusing them. End to end it reported
+  `1 passed` over two failed queries. The prefix is now bound in a DEFAULT ARGUMENT,
+  evaluated once when the function is defined and never read from the module namespace
+  again, so rewriting the global changes neither what is minted nor what is refused.
+  `ZZZ_NOT_A_PREFIX` is in the arm's spellings deliberately: `'Q'` cannot disarm a
+  prefix-reading matcher, because `'QUERY_ERROR.1'.startswith('Q')` is true.
+
+  `ordering_observable` WAS MADE WEAKER BY THE PRODUCER, and this is the one place the
+  change regressed the layer. It takes `(forward, reverse)` rather than `(got, want)`,
+  so it sat outside the refusal and outside the derivation that finds comparisons. With
+  the old shared constant two failed readings were IDENTICAL and it went red -- loudly.
+  With unique sentinels they differ, so it passed and greenlit every ordered assertion
+  resting on the premise. The refusal is now the first thing it does, the derivation
+  recognises `(forward, reverse)`, and an arm pins both.
+
+  And `TESTS.md` stated the split twice in one sentence while only the first half was
+  gated: 26 refused and "the other 47" sums to 73 against the 72 the inventory names.
+  `selftest/350`'s regex matches the half a change naturally updates. Both halves are
+  now read by an arm in the corpus's own docs guard, against the inventory's count of
+  the ids it names rather than a number typed twice.
+
+  `VACUITY_MODES.md` said "the port has the sentinel constant but nothing produces it",
+  and that was wrong in both halves: two sites did produce sentinels by hand, and the
+  thing actually missing was the refusal in four of the five comparisons. The
+  correction is recorded in the document rather than quietly replacing the sentence,
+  because a map that names the wrong gap is worse than one that admits it does not
+  know.
+
 - TESTS.md's contents list no longer carries a link that goes nowhere, and the
   corpus gate now checks every one of them.
 
