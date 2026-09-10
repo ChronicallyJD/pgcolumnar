@@ -71,6 +71,10 @@ NO_CLUSTER = [
     # Landed on main in #922 after this list was written, and the arm above caught
     # it: the property says it needs no database, so the declaration must say so too.
     "test_suite_accounting.py",
+    # The classifier's own controls, split out of this file so the job whose file
+    # list IS this list actually runs them. This file cannot be in the list: it
+    # hands cluster-bound file names to pytest, so it needs what they need.
+    "test_harness_deps_classifier.py",
 ]
 
 
@@ -166,24 +170,122 @@ def _is_fixture(fn):
     return False
 
 
+def _fixture_name(fn):
+    """The name a test REQUESTS this fixture by: the alias when it has one.
+
+    `@pytest.fixture(name="conn")` makes the function requestable as `conn` and NOT
+    as its own name. Recording the def's name therefore did two wrong things at
+    once: it missed the dependency a test declares, and it invented a fixture name
+    nothing can request. Reported by @linuxhikerpm.
+    """
+    for dec in fn.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        f = dec.func
+        if (isinstance(f, ast.Attribute) and f.attr == "fixture") or \
+           (isinstance(f, ast.Name) and f.id == "fixture"):
+            for kw in dec.keywords:
+                if kw.arg == "name" and isinstance(kw.value, ast.Constant) \
+                   and isinstance(kw.value.value, str):
+                    return kw.value.value
+    return fn.name
+
+
+def _usefixtures(fn):
+    """Fixture names pulled in by `@pytest.mark.usefixtures(...)`.
+
+    A dependency with NO PARAMETER, so a walk over the signature cannot see it.
+    This is the form a test uses precisely when it wants the fixture's effect and
+    not its value -- which is exactly when it is a cluster it wants.
+    """
+    out = []
+    for dec in fn.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        f = dec.func
+        if (isinstance(f, ast.Attribute) and f.attr == "usefixtures") or \
+           (isinstance(f, ast.Name) and f.id == "usefixtures"):
+            out += [a.value for a in dec.args
+                    if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+    return out
+
+
+def _params(fn):
+    """Every parameter pytest will try to resolve as a fixture.
+
+    POSITIONAL-ONLY, POSITIONAL, AND KEYWORD-ONLY. pytest resolves a keyword-only
+    parameter as a fixture exactly as it resolves a positional one; reading only
+    `args.args` classified `def test_x(*, pgc_conn)` as needing nothing at all.
+
+    `self` and `cls` are dropped: they are bound by Python, not by pytest, and a
+    fixture cannot be requested under either name.
+    """
+    a = fn.args
+    names = ([q.arg for q in getattr(a, "posonlyargs", [])]
+             + [q.arg for q in a.args]
+             + [q.arg for q in a.kwonlyargs])
+    return [n for n in names if n not in ("self", "cls")]
+
+
+def _collectable(tree):
+    """(qualifier, def) for every def pytest can collect or resolve.
+
+    MODULE LEVEL AND CLASS BODIES. pytest collects `test_*` methods of a class and
+    resolves their fixtures identically, so a walk over `tree.body` alone
+    classified `class TestX: def test_y(self, pgc_conn)` as needing no database.
+    Every class is walked rather than only `Test*`-named ones: a classifier that
+    guesses the collection convention is one convention change from being wrong,
+    and counting a non-collected method is conservative in the safe direction.
+    """
+    def walk(node, prefix):
+        for n in node.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                yield prefix, n
+            elif isinstance(n, ast.ClassDef):
+                yield from walk(n, prefix + n.name + ".")
+    return list(walk(tree, ""))
+
+
 def _defs(tree):
-    """{name: (kind, params, body)} for every module-level def.
+    """{key: (kind, params, body)} for every def pytest can collect or resolve.
 
     kind is "fixture", "test" or "helper". Only the first two can pull a fixture
     in: pytest resolves parameter names for those, and a helper's parameter is
     just a parameter -- so a helper taking `conn` named after a fixture must not
-    make its file cluster-bound."""
+    make its file cluster-bound.
+
+    A FIXTURE IS KEYED BY ITS REQUESTABLE NAME, because that is the name another
+    def names to depend on it, and the closure below matches keys against
+    parameters. Tests and helpers are keyed by their qualified name instead: those
+    names are never requested, and two classes may both define `test_x`, which a
+    bare-name key would collapse into one -- silently dropping a def from the walk.
+    """
     out = {}
-    for n in tree.body:
-        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
+    for prefix, n in _collectable(tree):
         if _is_fixture(n):
-            kind = "fixture"
+            kind, key = "fixture", _fixture_name(n)
         elif n.name.startswith("test_"):
-            kind = "test"
+            kind, key = "test", prefix + n.name
         else:
-            kind = "helper"
-        out[n.name] = (kind, [a.arg for a in n.args.args], _own_body(n))
+            kind, key = "helper", prefix + n.name
+        out[key] = (kind, _params(n) + _usefixtures(n), _own_body(n))
+    return out
+
+
+def dynamic_requests(tree):
+    """Call sites of `request.getfixturevalue(...)`, which no AST can resolve.
+
+    The name is computed at run time, so a static classifier cannot know which
+    fixture is pulled -- and the honest answer is not to ban the form but to stop
+    claiming a file that uses it needs no database. `partition` treats such a file
+    as cluster-bound, which is wrong only in the direction that costs a little CI
+    time rather than the direction that reports a green gate for tests nothing ran.
+    """
+    out = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+           and n.func.attr == "getfixturevalue":
+            out.append(n.lineno)
     return out
 
 
@@ -268,7 +370,12 @@ def partition(directory=None):
         # kills it there.
         uses = any(kind in ("fixture", "test") and set(params) & roots
                    for kind, params, _body in defs.values())
-        bound[name] = _imports_driver(_module_scope(tree)) or uses
+        # A dynamic request is unresolvable, so the file is treated as
+        # cluster-bound rather than assumed free. Wrong in the direction that
+        # costs CI time, not in the direction that greens a gate over tests
+        # nothing ran.
+        dynamic = bool(dynamic_requests(tree))
+        bound[name] = _imports_driver(_module_scope(tree)) or uses or dynamic
         mentions[name] = _mentioned_files(tree, set(names) - {name})
 
     # A file that drives a cluster-bound file needs whatever that file needs.
@@ -487,161 +594,6 @@ def _fake_corpus(tmp_path, files, conftest=None):
     for name, body in files.items():
         (d / name).write_text(body)
     return d
-
-
-def test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster(tmp_path, expect):
-    """The base case and its control, over a conftest this test wrote: the
-    derivation of the cluster fixtures runs here too, on a fixture rather than on
-    the real corpus."""
-    d = _fake_corpus(tmp_path, {
-        "test_plain.py": "def test_nothing(expect):\n    expect.num(1, 1, 'x')\n",
-        "test_direct.py": "def test_it(pgc_conn, expect):\n    pass\n",
-    })
-    expect.text(" ".join(sorted(cluster_fixtures(d / "conftest.py"))),
-                "pgc_cluster pgc_conn",
-                "both connecting fixtures are derived, including the indirect one")
-    free, bound = partition(d)
-    expect.text(" ".join(free) + " / " + " ".join(bound),
-                "test_plain.py / test_direct.py",
-                "a test requesting a cluster fixture is bound; one requesting none is free")
-
-
-def test_the_classifier_follows_a_cluster_fixture_through_a_local_wrapper(tmp_path, expect):
-    """THE CASE A GREP CANNOT SEE. The file names no fixture of conftest's in any
-    test; a module-local fixture does, and the tests request that."""
-    d = _fake_corpus(tmp_path, {
-        "test_wrapped.py": (
-            "import pytest\n\n"
-            "@pytest.fixture\n"
-            "def loaded(pgc_cluster):\n"
-            "    yield pgc_cluster\n\n"
-            "def test_it(loaded, expect):\n"
-            "    pass\n"
-        ),
-    })
-    free, bound = partition(d)
-    expect.text(" ".join(free) + "/" + " ".join(bound), "/test_wrapped.py",
-                "a cluster fixture reached through a local fixture is followed")
-
-
-def test_the_classifier_catches_a_module_scope_driver_import(tmp_path, expect):
-    """An import at module scope kills COLLECTION, so the file cannot run in the
-    job even though no test of its own asks for a connection."""
-    d = _fake_corpus(tmp_path, {
-        "test_eager.py": "import psycopg\n\ndef test_it(expect):\n    pass\n",
-    })
-    free, bound = partition(d)
-    expect.text(" ".join(free) + "/" + " ".join(bound), "/test_eager.py",
-                "a module-scope driver import makes the file cluster-bound")
-
-
-def test_the_classifier_is_not_fooled_by_prose_that_names_the_driver(tmp_path, expect):
-    """THE REGEX TRAP, and this layer has paid for it once already: the
-    broad-except refusal was first written as a line regex and rejected its own
-    tests, because the forbidden shape appears inside a `makepyfile` string.
-
-    A docstring naming the driver, a block-comment string naming a cluster
-    fixture, and a test BUILT as a string are all prose about code."""
-    d = _fake_corpus(tmp_path, {
-        "test_needsdb.py": "def test_it(pgc_conn, expect):\n    pass\n",
-        "test_prose.py": (
-            '"""This file explains `import psycopg` and the pgc_conn fixture,\n'
-            'and it discusses test_needsdb.py, which does need a cluster."""\n'
-            "\n"
-            "def test_it(pytester, expect):\n"
-            '    """It uses pgc_conn nowhere; it writes a test that would."""\n'
-            '    "a block comment mentioning import psycopg and pgc_cluster"\n'
-            "    pytester.makepyfile(\n"
-            '        "import psycopg\\n"\n'
-            '        "def test_inner(pgc_conn):\\n    pass\\n"\n'
-            "    )\n"
-        ),
-    })
-    free, bound = partition(d)
-    expect.text(" ".join(free) + " / " + " ".join(bound),
-                "test_prose.py / test_needsdb.py",
-                "prose, a generated test, and a file merely DISCUSSED are not requirements")
-
-
-def test_the_classifier_takes_a_fixture_that_provisions_without_connecting(tmp_path, expect):
-    """THE SECOND SIGNAL, isolated. A fixture can start a cluster and hand back the
-    object without ever connecting, so it imports no driver: the only thing that
-    marks it is the call into the module that provisions a server.
-
-    Its own arm rather than a clause in the one below, because a fixture that
-    neither imports nor calls would leave two rules untested at once."""
-    d = _fake_corpus(tmp_path, {
-        "test_raw.py": "def test_it(pgc_raw, expect):\n    pass\n",
-    }, conftest=(
-        "import pytest\n"
-        "from pgc_cluster import make_cluster\n\n"
-        "@pytest.fixture(scope='session')\n"
-        "def pgc_raw():\n"
-        "    yield make_cluster()\n"
-    ))
-    expect.text(" ".join(sorted(cluster_fixtures(d / "conftest.py"))), "pgc_raw",
-                "a fixture that provisions a cluster is a root without importing a driver")
-    free, bound = partition(d)
-    expect.text(" ".join(free) + " / " + " ".join(bound), " / test_raw.py",
-                "and the file requesting it is cluster-bound")
-
-
-def test_the_classifier_follows_a_conftest_fixture_that_connects_indirectly(tmp_path, expect):
-    """THE CASE THE CLOSURE OVER CONFTEST EXISTS FOR. A conftest fixture can reach
-    a cluster through a SIBLING and import nothing of its own, so a test requesting
-    only that fixture names no root and no driver anywhere.
-
-    Without the closure the file reads as database-free and the gate would run it
-    against a database that is not there."""
-    d = _fake_corpus(tmp_path, {
-        "test_indirect.py": "def test_it(pgc_readonly, expect):\n    pass\n",
-    }, conftest=(
-        "import pytest\n"
-        "from pgc_cluster import make_cluster\n\n"
-        "@pytest.fixture(scope='session')\n"
-        "def pgc_cluster():\n"
-        "    import psycopg\n"
-        "    yield make_cluster()\n\n"
-        "@pytest.fixture\n"
-        "def pgc_readonly(pgc_cluster):\n"
-        "    yield pgc_cluster\n"
-    ))
-    expect.text(" ".join(sorted(cluster_fixtures(d / "conftest.py"))),
-                "pgc_cluster pgc_readonly",
-                "a fixture reaching a cluster only through a sibling is a root too")
-    free, bound = partition(d)
-    expect.text(" ".join(free) + " / " + " ".join(bound), " / test_indirect.py",
-                "and the file requesting it is cluster-bound")
-
-
-def test_the_classifier_does_not_read_a_helpers_parameter_as_a_fixture(tmp_path, expect):
-    """pytest resolves parameter names for tests and fixtures, not for helpers, so
-    a helper taking `pgc_conn` pulls in nothing."""
-    d = _fake_corpus(tmp_path, {
-        "test_helper.py": (
-            "def _plan(pgc_conn, sql):\n    return sql\n\n"
-            "def test_it(expect):\n    expect.text(_plan(None, 'x'), 'x', 'n')\n"
-        ),
-    })
-    free, bound = partition(d)
-    expect.text(" ".join(free) + "/" + " ".join(bound), "test_helper.py/",
-                "a helper's parameter name is just a parameter name")
-
-
-def test_the_classifier_follows_a_file_that_drives_a_cluster_bound_file(tmp_path, expect):
-    """This file's own shape. It requests no fixture, and it hands a cluster-bound
-    file to pytest as a subprocess, so it needs whatever that file needs."""
-    d = _fake_corpus(tmp_path, {
-        "test_needy.py": "def test_it(pgc_conn, expect):\n    pass\n",
-        "test_driver.py": (
-            "import subprocess, sys\n\n"
-            "def test_it(expect):\n"
-            "    subprocess.run([sys.executable, '-m', 'pytest', 'test_needy.py'])\n"
-        ),
-    })
-    free, bound = partition(d)
-    expect.text(" ".join(free) + "/" + " ".join(bound), "/test_driver.py test_needy.py",
-                "driving a cluster-bound file is inherited")
 
 
 def test_the_membership_report_names_a_database_free_file_left_undeclared(tmp_path, expect):

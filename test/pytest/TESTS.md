@@ -61,9 +61,10 @@ behaviour, the source of that number is named.
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
 - [14. test_suite_accounting.py: the matrix accounting for its own suites](#14-test_suite_accountingpy-the-matrix-accounting-for-its-own-suites)
 - [15. test_harness_deps.py: the harness must self-test without a database](#15-test_harness_depspy-the-harness-must-self-test-without-a-database)
-- [16. Adding a test](#16-adding-a-test)
-- [17. What this corpus does NOT yet refuse](#17-what-this-corpus-does-not-yet-refuse)
-- [18. Traps this corpus records](#18-traps-this-corpus-records)
+- [16. test_harness_deps_classifier.py: the classifier, in the file the gate runs](#16-test_harness_deps_classifierpy-the-classifier-in-the-file-the-gate-runs)
+- [17. Adding a test](#17-adding-a-test)
+- [18. What this corpus does NOT yet refuse](#18-what-this-corpus-does-not-yet-refuse)
+- [19. Traps this corpus records](#19-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -1239,7 +1240,72 @@ environment broken if the test died. A module that raises on import, first on th
 path, is the same observation and reversible by construction. Both behavioural
 arms assert the shim actually bites before believing anything it produces.
 
-## 16. Adding a test
+## 16. test_harness_deps_classifier.py: the classifier, in the file the gate runs
+
+`test_harness_deps.py` defines the classifier that decides which files the
+`pytest (harness guards, no database)` job runs — and that file is itself classified
+cluster-bound, correctly, because it hands real cluster-bound file names to pytest in
+a subprocess. So the job's file list is `NO_CLUSTER`, and the code that computes
+`NO_CLUSTER` was the one thing the job never ran.
+
+@linuxhikerpm measured the consequence: disabling transitive conftest-fixture closure
+left shell selftest 350 green and every CI-selected test passing, and only the excluded
+targeted test failed. A load-bearing branch could break with both real gates green.
+
+These arms drive a corpus they write in `tmp_path` and read nothing from the real tree,
+so this file needs no database and is declared in `NO_CLUSTER`. It imports the
+classifier as a **library**, which does not make it cluster-bound: the propagation rule
+reads string constants naming corpus files, not imports.
+
+### The classifier's branches
+
+| test | what it asserts |
+| --- | --- |
+| `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control |
+| `test_the_classifier_follows_a_cluster_fixture_through_a_local_wrapper` | a local fixture wrapping a conftest root |
+| `test_the_classifier_catches_a_module_scope_driver_import` | importing the driver at module scope is enough |
+| `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver` | a docstring naming psycopg is not an import |
+| `test_the_classifier_takes_a_fixture_that_provisions_without_connecting` | a fixture that provisions but never connects is still a root |
+| `test_the_classifier_follows_a_conftest_fixture_that_connects_indirectly` | the transitive closure inside conftest, which is the branch that was ungated |
+| `test_the_classifier_does_not_read_a_helpers_parameter_as_a_fixture` | a helper's parameter is not a request |
+| `test_the_classifier_follows_a_file_that_drives_a_cluster_bound_file` | driving another file inherits what it needs |
+
+### Ordinary pytest dependency forms
+
+The classifier read module-level `def`s and positional parameters. pytest resolves a
+fixture through five more shapes, and @linuxhikerpm built a direct fixture in each:
+every one was classified database-free and then failed under the no-driver shim.
+Measured against the classifier as it was:
+
+| form | before | after |
+| --- | --- | --- |
+| a test method inside a class | **free** | bound |
+| `@pytest.mark.usefixtures` | **free** | bound |
+| a keyword-only fixture parameter | **free** | bound |
+| `request.getfixturevalue` | **free** | bound |
+| an aliased cluster root in `conftest.py` | **free** | bound |
+| module-level positional | bound | bound |
+
+The fifth needed a shape the review did not give. An alias on the *test* side is caught
+anyway, because the underlying fixture still takes the root positionally; it is an alias
+on the **root**, in conftest, that hides it — the root was recorded under the def's name
+while a test requests it under the alias. Measured: `roots=['_mk']` before, `roots=['conn']` after.
+
+`request.getfixturevalue` is not supported and not banned. The name is computed at run
+time, so no AST can resolve it, and such a file is classified **cluster-bound** —
+wrong in the direction that costs CI time rather than the direction that greens a gate
+over tests nothing ran.
+
+| test | what it asserts |
+| --- | --- |
+| `test_a_test_method_inside_a_class_is_a_fixture_request` | pytest collects `test_*` methods of a class |
+| `test_usefixtures_is_a_fixture_request_without_a_parameter` | a dependency with no parameter |
+| `test_a_keyword_only_parameter_is_a_fixture_request` | `def test_x(*, pgc_conn)` |
+| `test_a_dynamic_request_is_treated_as_cluster_bound` | unresolvable means conservative, not free |
+| `test_an_aliased_cluster_root_is_found_under_the_name_tests_request` | the root is read under its requestable name |
+| `test_a_plain_test_and_a_helpers_parameter_stay_database_free` | the cost side: a rule that calls everything bound would empty the gate |
+
+## 17. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -1266,7 +1332,7 @@ arms assert the shim actually bites before believing anything it produces.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 17. What this corpus does NOT yet refuse
+## 18. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
@@ -1278,7 +1344,7 @@ Read it before adding a test. The gaps most likely to affect a new test are that
 same family satisfies it, and that a write is not required to have written anything.
 Both are named there with the refusal each needs.
 
-## 18. Traps this corpus records
+## 19. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.
