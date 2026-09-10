@@ -302,7 +302,9 @@ _us_unbound() {	# _us_unbound FILE -> lines naming a variable the file never ass
 		for _v in $(printf '%s' "${_line#*:}" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | tr -d '${'); do
 			case "$_us_globals" in *" $_v "*) continue ;; esac
 			grep -qE "(^|[[:space:]]|;)$_v=" "$_f" && continue
-			grep -qE "for[[:space:]]+$_v[[:space:]]+in[[:space:]]" "$_f" && continue
+			# BRACES, because `$_v[` reads as an array expansion: shellcheck
+			# SC1087 at -S error, which is the CI gate for this harness.
+			grep -qE "for[[:space:]]+${_v}[[:space:]]+in[[:space:]]" "$_f" && continue
 			grep -qE "local[[:space:]][^#]*\b$_v\b" "$_f" && continue
 			printf '%s:%s:%s\n' "${_f##*/}" "$_n" "$_v"
 		done
