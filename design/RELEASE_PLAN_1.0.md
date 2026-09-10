@@ -93,10 +93,55 @@ Nothing further should be added. It is 11 days into a 14-day cycle.
 
 ### 1.0-alpha4, target 2026-09-15. Theme: skipping and layout
 
-- **Hilbert curve clustering.** Confirmed for 1.0 by the owner on 2026-08-29.
-  Z-order ships; Hilbert is the open half and gives better locality on the same
-  machinery. It is a new key kind for `cluster` and `recluster`, so it is
-  user-visible surface. Under the freeze rule it is this release or 2.0.
+- **Hilbert curve clustering. DONE**, merged as #899 (issue #889). It ships as
+  two new verbs, `pgcolumnar.cluster_hilbert` and `pgcolumnar.recluster_hilbert`,
+  rather than a key-kind argument: PostgreSQL refuses to extend the existing
+  `(regclass, VARIADIC name[])` signature in either direction, and an
+  array-plus-kind overload breaks the documented `cluster('t','a','b')` call
+  style. Both measured on 18.4.
+
+  **The "better locality" claim above was an assertion when this plan was
+  written, and it is now a measurement.** It had to be, because the obvious
+  fixture cannot show it: on a dense power-of-two-aligned grid whose groups are
+  perfect dyadic sub-cubes, the two curves produce the **identical** row-to-group
+  partition, so no query can distinguish them. That case is carried as a control.
+
+  On 200,000 rows over two `int` columns with a deliberately non-dyadic
+  `stripe_row_limit`, summing the engine's own chunk-group counter over 60 query
+  boxes per size, across **two seeds**:
+
+  | query box | Z-order groups read | Hilbert groups read | Hilbert advantage |
+  | --- | --- | --- | --- |
+  | 2000 | 233 / 241 | 122 / 118 | 1.91x - 2.04x |
+  | 5000 | 339 / 351 | 212 / 209 | 1.60x - 1.68x |
+  | 12000 | 592 / 588 | 412 / 402 | 1.44x - 1.46x |
+  | 30000 | 1623 / 1624 | 1308 / 1313 | 1.24x |
+
+  **Reading the table: in the two count columns FEWER IS BETTER, and in the last
+  column LARGER IS BETTER.** A chunk group that is read is a group the scan had
+  to open and decode; one that is skipped costs nothing. `groupsSkipped++` and
+  `groupsRead++` are the two arms of the same loop in `src/columnar_reader.c`, so
+  the count is work done and not work available.
+
+  **The claim is the decay, not the headline.** The advantage shrinks from about
+  2x to about 1.24x as the query box grows, and that is the shape a locality
+  effect has: a large box must read most groups whichever curve laid them out. A
+  constant offset would have been an artifact, and an earlier single-origin
+  version of this measurement produced exactly that.
+
+  **The most selective cell is the least reproducible, so do not quote it alone.**
+  Across the two seeds the ratio moved +6.94%, +5.03%, +1.80% and -0.32% as the
+  box grows -- so the 2x headline is the least stable number in the table and the
+  decay is the most stable. Two seeds is a spread, not a distribution;
+  a threshold set from this would need more.
+
+  **What that does not license.** Two `int` columns, uniform, one shape. It is
+  not evidence for three or four columns or for mixed types, and the ordinal
+  layer caps the benefit for types of unequal width -- `bool` against `int4`
+  showed no separation at all. It is a count of chunk groups, which is work and
+  not time; no timing claim is made, and the per-row key build has never been
+  measured inside PostgreSQL. Recorded on #889 with the instrument's own defects,
+  three of which produced wrong numbers before they were found.
 - **Per-tier block compression defaults.** On fast local storage, block
   compression can cost more CPU than it saves in I/O. The finding reverses for
   object storage. Make the default depend on the tier. Low effort, and it changes

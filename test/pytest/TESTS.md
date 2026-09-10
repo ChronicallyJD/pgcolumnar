@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**123 tests in 10 files.** One hundred and eight of them test the harness rather than the
+**135 tests in 11 files.** One hundred and twenty of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -36,9 +36,10 @@ behaviour, the source of that number is named.
 - [10. test_runshape.py: the shape of the run itself](#10-test_runshapepy-the-shape-of-the-run-itself)
 - [11. test_zonemap_boundaries.py: exact boundaries](#11-test_zonemap_boundariespy-exact-boundaries)
 - [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
-- [13. Adding a test](#13-adding-a-test)
-- [14. What this corpus does NOT yet refuse](#14-what-this-corpus-does-not-yet-refuse)
-- [15. Traps this corpus records](#15-traps-this-corpus-records)
+- [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
+- [14. Adding a test](#14-adding-a-test)
+- [15. What this corpus does NOT yet refuse](#15-what-this-corpus-does-not-yet-refuse)
+- [16. Traps this corpus records](#16-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -916,7 +917,46 @@ The shell and pytest forms were both run red before implementation (`0`, wanted
 zero. The fixture row count and columnar plan marker are premises, and both query
 answers are checked independently of the pruning counters.
 
-## 13. Adding a test
+## 13. test_hilbert_locality.py: what the Hilbert curve buys
+
+The pytest twin of `test/hilbert_locality.sh`, written in the same change under the
+owner's rule of 2026-09-09 that every new test ships in both harnesses. Twelve tests.
+
+It measures one thing -- how many chunk groups a range query reads under Z-order
+against Hilbert -- and spends most of its arms refusing to measure it when the
+comparison would be meaningless.
+
+| test | what it refuses |
+| --- | --- |
+| `test_every_layout_verb_ran_without_raising` | a verb that raised looks identical to a verb that no-opped |
+| `test_the_source_holds_the_rows_both_arms_will_load` | an empty fixture |
+| `test_both_arms_hold_the_identical_row_multiset` | the two arms holding DIFFERENT DATA, which made the first pilot's ratio a fact about the data rather than the curve |
+| `test_the_fixture_is_two_dimensional` | a fixture where one column does not span, so the curve has nothing to interleave |
+| `test_both_arms_have_the_group_count_measured` | a group meaning a different unit on each arm |
+| `test_the_two_partitions_differ` | the case where the curves cut the SAME partition, where no query can separate them |
+| `test_two_tables_on_the_same_curve_are_one_partition` | the null control: same curve twice must be one partition |
+| `test_dense_dyadic_grid_is_one_partition` | the dense power-of-two grid, which provably cannot separate the curves |
+| `test_both_arms_plan_as_a_columnar_scan` | a counter read from a plan that is not the columnar scan |
+| `test_parallelism_is_off_so_a_counter_is_a_fact_about_the_layout` | a per-worker counter read as a whole-query one |
+| `test_the_predicates_are_usable_and_the_denominators_match` | unequal denominators, and zero usable skip predicates |
+| `test_groups_read_over_sixty_placements` | nothing -- this is the measurement |
+
+**The two controls REFUSE rather than returning 1.0.** Both are cases where the
+curves genuinely cut the same partition, so a ratio would be arithmetic on two
+identical numbers. A harness that reported `1.0000` there would look like a
+measurement and be an artifact.
+
+**Why sixty placements and not one.** A single query-box origin measures where that
+box happened to land. At one origin the differences were 1, 1, 0 and 1 groups, and
+the ratio read `2.000` off a single group.
+
+**What the twin does NOT carry**, and the bash suite does: the exact-integer pins.
+The twin asserts Hilbert reads fewer groups at every box; `test/hilbert_locality.sh`
+pins the eight counts exactly. Its header records why -- for a CURVE change the
+digest pins upstream catch it first and the integers add nothing, so their real
+domain is a changed READER at an unchanged layout.
+
+## 14. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -943,7 +983,7 @@ answers are checked independently of the pruning counters.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 14. What this corpus does NOT yet refuse
+## 15. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
@@ -955,7 +995,7 @@ Read it before adding a test. The gaps most likely to affect a new test are that
 same family satisfies it, and that a write is not required to have written anything.
 Both are named there with the refusal each needs.
 
-## 15. Traps this corpus records
+## 16. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.
