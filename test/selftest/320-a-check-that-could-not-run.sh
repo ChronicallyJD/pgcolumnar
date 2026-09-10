@@ -201,8 +201,15 @@ while IFS= read -r _cnt_l; do
 done < <(grep -rn 'PGC_CHECKS=\$((PGC_CHECKS' "$_cnt_dir"/*.sh "$_cnt_dir"/selftest/*.sh 2>/dev/null \
 	| grep -v '/lib\.sh:' | sort)
 
-check "premise: the sweep finds the direct writes it is meant to police" \
-	"$([ "${#_cnt_sites[@]}" -ge 5 ] && echo enough || echo "${#_cnt_sites[@]}")" "enough"
+# The premise used to require FIVE direct writes to exist, which was a premise
+# about the corpus rather than about the sweep -- and #917 converted the thirteen
+# that used lib.sh's accounting, so it went red for the reason the change is FOR.
+# A premise that fails when the thing it guards is fixed is the wrong premise.
+#
+# It now asserts the sweep read something, and the classifier is proven on a
+# FIXTURE below rather than on whatever the corpus happens to contain.
+check "premise: the sweep read the corpus and found sites to classify" \
+	"$([ "${#_cnt_sites[@]}" -ge 1 ] && echo yes || echo "no (${#_cnt_sites[@]})")" "yes"
 
 # A file that keeps its OWN counters and never calls pgc_summary is not bound by
 # this invariant, because nothing reconciles it. Asserted rather than assumed:
@@ -222,6 +229,83 @@ done
 
 check "every direct write to PGC_CHECKS records an outcome too" \
 	"$(_tsm_fmt_cnt "$_cnt_n" "$_cnt_bad")" "[]"
+
+# AND, SINCE #917, THERE MUST BE NONE AT ALL among files that use lib.sh's
+# accounting. That is a stronger rule than the one above and it was not
+# satisfiable before: counting a check and RECORDING it are now one operation,
+# pgc_record, so a direct write to PGC_CHECKS counts a check that emits no
+# RESULT line -- and pgc_reconcile_records then reports a records/checks mismatch
+# on top of whatever the suite was actually failing for.
+#
+# The two rules disagreed until the thirteen sites were converted, which
+# OffgridwithJD found: selftest 320 blessed a direct write with a nearby outcome,
+# while the reconciler required a record. pgc_pass and pgc_fail exist precisely so
+# a suite-local helper need not touch the counters, and lib.sh's own header
+# already calls them "the only supported way to add a check from outside this
+# file". This arm makes that a rule rather than a description.
+#
+# A file that keeps its OWN counters and never calls pgc_summary is exempt for the
+# same reason as above, measured from the file rather than named: bench_guards
+# reuses the variable name privately and never sources lib.sh.
+_cnt_lib=0; _cnt_lib_bad=""
+for _cnt_l in "${_cnt_sites[@]}"; do
+	_cnt_f="${_cnt_l%%:*}"
+	_cnt_ln="$(printf '%s' "$_cnt_l" | cut -d: -f2)"
+	[ "$(grep -c 'pgc_summary' "$_cnt_f" || true)" != 0 ] || continue
+	_cnt_lib=$((_cnt_lib + 1))
+	[ "$_cnt_lib" -le 5 ] && _cnt_lib_bad="$_cnt_lib_bad ${_cnt_f##*/}:$_cnt_ln"
+done
+check "no suite that uses lib.sh's accounting writes PGC_CHECKS directly" \
+	"$(_tsm_fmt_cnt "$_cnt_lib" "$_cnt_lib_bad")" "[]"
+
+# BOTH RULES, PROVEN ON A FIXTURE. With the corpus clean, two arms reading "[]"
+# are satisfied by a sweep that classifies nothing, so the classifier is driven
+# against files built to trip it.
+_cnt_fx="$PGC_WORKDIR/cntfx"; mkdir -p "$_cnt_fx"
+
+# Uses lib.sh's accounting, bumps the counter, records no outcome nearby: both
+# rules must see it.
+# The bump is ASSEMBLED from the variable name rather than written out, so these
+# generator lines do not themselves carry the shape the sweep looks for. Writing
+# it literally made this file flag its own three fixtures -- the same mistake
+# selftest 080's control avoids by living in a quoted heredoc.
+_cnt_bump="$(printf '%s=$((%s + 1))' PGC_CHECKS PGC_CHECKS)"
+_cnt_out="$(printf '%s=$((%s + 1))' PGC_FAILED PGC_FAILED)"
+printf 'pgc_summary\n%s\necho hi\n' "$_cnt_bump" > "$_cnt_fx/bare.sh"
+# Uses lib.sh's accounting, bumps the counter, DOES record an outcome: the old
+# rule lets it through, the new one does not. That difference is the change.
+printf 'pgc_summary\n%s\n%s\n' "$_cnt_bump" "$_cnt_out" > "$_cnt_fx/outcome.sh"
+# Keeps its own counter and never calls pgc_summary: exempt from both.
+printf '%s\necho "checks run: 1"\n' "$_cnt_bump" > "$_cnt_fx/private.sh"
+
+_cnt_fx_old() {	# the ORIGINAL rule, applied to one file
+	local _f="$1" _l
+	[ "$(grep -c 'pgc_summary' "$_f" || true)" != 0 ] || { echo exempt; return; }
+	_l="$(grep -n 'PGC_CHECKS=\$((PGC_CHECKS' "$_f" | head -1 | cut -d: -f1)"
+	[ -n "$_l" ] || { echo none; return; }
+	if [ "$(sed -n "$((_l > 3 ? _l - 3 : 1)),$((_l + 6))p" "$_f" \
+		| grep -cE 'PGC_PASSED=|PGC_FAILED=|PGC_UNRUN=' || true)" = 0 ]; then
+		echo flagged
+	else
+		echo allowed
+	fi
+}
+_cnt_fx_new() {	# the STRONGER rule, applied to one file
+	local _f="$1"
+	[ "$(grep -c 'pgc_summary' "$_f" || true)" != 0 ] || { echo exempt; return; }
+	[ "$(grep -c 'PGC_CHECKS=\$((PGC_CHECKS' "$_f" || true)" != 0 ] && echo flagged || echo none
+}
+
+check "premise: the fixtures carry the shapes these rules are about" \
+	"$(grep -lc 'PGC_CHECKS=\$((PGC_CHECKS' "$_cnt_fx"/*.sh 2>/dev/null | grep -c . || true)" "3"
+check "the original rule flags a bump that records no outcome" \
+	"$(_cnt_fx_old "$_cnt_fx/bare.sh")" "flagged"
+check "and allows one that does, which is what it was written to allow" \
+	"$(_cnt_fx_old "$_cnt_fx/outcome.sh")" "allowed"
+check "the stronger rule flags that same allowed bump, which is the change" \
+	"$(_cnt_fx_new "$_cnt_fx/outcome.sh")" "flagged"
+check "and both exempt a file that keeps its own counter without lib.sh" \
+	"$(_cnt_fx_old "$_cnt_fx/private.sh")/$(_cnt_fx_new "$_cnt_fx/private.sh")" "exempt/exempt"
 
 # ---- and the RUNNER must not report an INCOMPLETE suite as a pass ------------
 #

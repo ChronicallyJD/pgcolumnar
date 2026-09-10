@@ -1012,11 +1012,19 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	printf '%s\n' "$_display"
 	# Tabs in a field would split it. Nothing in the tree puts one in a check
 	# name, and this makes that true rather than assumed.
+	#
+	# PARAMETER EXPANSION, not `printf | tr` in a command substitution. The first
+	# version paid four forks per record -- two subshells and two tr processes --
+	# in the function that runs at every one of 3,762 check sites, and whose own
+	# comment hoists PGC_SUITE out of the body on exactly that ground. Measured on
+	# an idle box, 2,000 calls, identical output on every input including a real
+	# tab: 3.1577 ms per call against 0.0096 ms, 331x, or 11.9 seconds of pure
+	# fork overhead across a full suite against 36 ms. Reported by OffgridwithJD.
 	printf 'RESULT\t%s\t%s\t%s\t%s\n' \
 		"${PGC_SUITE:-unknown}" \
-		"$(printf '%s' "$_name" | tr '\t' ' ')" \
+		"${_name//$'\t'/ }" \
 		"$_v" \
-		"$(printf '%s' "$_reason" | tr '\t' ' ')"
+		"${_reason//$'\t'/ }"
 }
 
 pgc_pass() {	# pgc_pass NAME
