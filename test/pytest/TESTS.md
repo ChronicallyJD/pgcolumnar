@@ -938,6 +938,36 @@ The empty-parametrize refusal carries its own message rather than folding into t
 bare-skip refusal. When a corpus glob matches nothing, the cause the reader needs to
 see is the corpus, not the marker.
 
+### Where a guard runs decides what the run reports
+
+A guard implemented as a **fixture teardown** cannot fail the test it guards. pytest has
+already recorded the call phase as passed, so the refusal arrives as a separate `ERROR`
+on the same node-id and the test's own outcome stays `passed`. Anything counting
+passes — `--pgc-expect-tests`, a CI summary, a human reading "N passed" — sees a pass.
+
+Measured, the same `AssertionError` raised from each place:
+
+| raised from | the run reports |
+| --- | --- |
+| a `pytest_runtest_call` wrapper | `1 failed` |
+| a fixture teardown | `1 passed, 1 error` |
+
+This layer's vacuity guard is in a `pytest_runtest_call` wrapper, which is why a test
+that concludes nothing is *failed* rather than passed-with-an-error. Two arms keep that
+from being an accident, and the second is the control: without it the first passes
+whatever phase the guard is in, because "a vacuous test fails" is equally true of a
+correctly-placed guard and of no guard at all beside an unrelated failure.
+
+| test | what it asserts | how it fails |
+| --- | --- | --- |
+| `test_the_vacuity_guard_fails_the_test_rather_than_erroring_beside_it` | a test concluding nothing is `failed`, with no error | moving the guard into the `expect` fixture's teardown reddens it |
+| `test_a_guard_in_a_teardown_would_report_a_pass_which_is_why_it_is_not_there` | a teardown refusal leaves the test reported `passed` with an error beside it | the mode stated as a measurement rather than a warning |
+
+This closes the part of `guard-as-teardown-fixture-still-reports-passed`
+(`VACUITY_MODES.md` 3.7) that is about **this layer's own guard placement**. It does not
+close the family: a guard anyone adds later in a teardown is still a guard that cannot
+fail its test, and nothing refuses that shape in general.
+
 ## 11. test_zonemap_boundaries.py: exact boundaries
 
 ### `test_exact_zonemap_boundaries`

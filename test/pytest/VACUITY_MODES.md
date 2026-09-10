@@ -259,8 +259,14 @@ the sentinels that close the other half, empty compared with empty.
 
 ### 3.7 The guard itself goes quiet
 
-- `guard-as-teardown-fixture-still-reports-passed` — a guard implemented as a
-  teardown fixture leaves the test reporting PASSED.
+- `guard-as-teardown-fixture-still-reports-passed` — **narrowed, not closed.** Measured:
+  the same `AssertionError` raised from a `pytest_runtest_call` wrapper gives `1 failed`,
+  and raised from a fixture teardown gives `1 passed, 1 error` — the test's own outcome
+  stays `passed`, so anything counting passes sees a pass. This layer's vacuity guard is
+  in the call-phase wrapper, and two arms in `test_runshape.py` now pin that placement
+  with a control, so a refactor into a teardown reddens rather than going quiet. What is
+  NOT closed is the general shape: a guard anyone adds later in a teardown still cannot
+  fail its test, and nothing refuses that. See TESTS.md section 10.
 - `session-accounting-guard`, `session-exit-rewrite-masks-a-real-failure`,
   `description-guard-reopens-psycopg-raise`,
   `mitigations-measured-and-the-one-that-does-not-work`
