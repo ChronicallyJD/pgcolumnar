@@ -239,6 +239,46 @@ checkout with nothing installed — it asserts the field is read, that the read
 reaches the exit status, that the override is conditional, and that the two
 harnesses agree on 67. Against the pre-fix layer it reddens six arms.
 
+
+### An A/B whose arms agree measures nothing
+
+`expect.differ(a, b, name)` is the assertion `mutation-arm-unobservable` says nobody
+writes. Before it the layer had **eight** helpers asserting equality and **one**
+asserting inequality — `ordering_observable`, specific to a forward/reverse pair — so
+the general case was hand-rolled.
+
+| test | asserts |
+| --- | --- |
+| `test_layer_requires_ab_arms_to_differ` | two identical arms fail, naming the mode |
+| `test_differ_names_both_arms_when_they_agree` | the refusal carries the value both arms held |
+| `test_differ_passes_when_the_arms_differ` | the positive control |
+| `test_differ_counts_as_an_assertion` | `differ` alone is a concluded test |
+| `test_differ_refuses_a_failed_query_on_either_side` | a failed arm is refused, left and right |
+| `test_differ_refuses_two_failed_queries` | **the inverse of #930's trap**; see below |
+| `test_the_inequality_scan_finds_a_planted_offence` | the AST scan fires on both spellings |
+| `test_the_inequality_scan_does_not_flag_honest_code` | five shapes it must not flag |
+| `test_no_test_in_this_corpus_hand_rolls_an_inequality` | the population is zero, across 17 files |
+
+**Two failed queries are not two observable arms.** `query_error()` produces a value
+unique per occurrence precisely so two failures cannot compare **equal** and pass an
+equality assertion. That uniqueness makes them compare **unequal**, so an arms-differ
+assertion passes on a pair of statements that both blew up — the defect arriving
+through the fix for it. Measured: two calls give `QUERY_ERROR.1.<detail>` and
+`QUERY_ERROR.2.<detail>`.
+
+**The hand-rolled idiom threw both values away.** `expect.num(int(after != before), 1,
+...)` reports `got 0 want 1` when it fails, and a reader cannot tell arms that were
+both empty from arms that were both wrong from arms correctly identical. Three defects,
+one message.
+
+**The scan is AST rather than a line regex**, for the reason the `pytest.raises` scan
+records: the two paragraphs in this tree that describe the old idiom quote it verbatim,
+so a text sweep flags its own documentation.
+
+**And the scan found a site the manual count missed.** Grepping for before/after naming
+found two. The scan found three — the third spelled `int(stated == disk) == 0`, the same
+assertion with the comparison inverted, which no search for `!=` would reach.
+
 ## 4. test_guards_pinned.py: every refusal, pinned to its own message
 
 **Why this file exists.** @jdatcmd neutered each guard in the layer in turn and

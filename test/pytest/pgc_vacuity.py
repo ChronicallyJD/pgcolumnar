@@ -366,6 +366,47 @@ class Expect:
                 f"order is observable before asserting order."
             )
 
+    # -- inequality ----------------------------------------------------------
+    def differ(self, got, want, name):
+        """Assert that two arms of an A/B are observably different.
+
+        `mutation-arm-unobservable`: both arms produce the identical answer and both
+        are green, because the assertion that would catch it is the one nobody writes.
+        Before this the layer had eight helpers asserting equality and one asserting
+        inequality -- `ordering_observable`, specific to a forward/reverse pair -- so
+        the general case was hand-rolled as `expect.num(int(after != before), 1, ...)`
+        at two sites. That idiom throws BOTH VALUES AWAY: when it fails it says
+        `got 0 want 1`, and a reader cannot tell arms that were both empty from arms
+        that were both wrong from arms correctly identical. Three defects, one message.
+
+        TWO FAILED QUERIES ARE NOT TWO ARMS, and that refusal is the inverse of the
+        one #930 added. `query_error()` makes each failure UNIQUE precisely so two
+        failures cannot compare EQUAL and pass an equality assertion -- which makes
+        them compare UNEQUAL, so an arms-differ assertion passes on a pair of
+        statements that both blew up. Measured: two calls give
+        `QUERY_ERROR.1.<detail>` and `QUERY_ERROR.2.<detail>`, which are `!=`. The fix
+        for one direction opened the other, which is why this is checked rather than
+        inherited from the equality helpers' refusal.
+        """
+        for side, v in (("left", got), ("right", want)):
+            if _failed_query(v):
+                raise VacuityError(
+                    # ONE UNBREAKABLE TOKEN FIRST: pytest word-wraps a long traceback
+                    # line, so an arm matching a multi-word phrase against a single
+                    # `E` line can miss a message that contains it.
+                    f"{name}: failed-query-is-not-an-arm: the {side} arm is a failed "
+                    f"query: {v!r}. query_error() makes each failure unique, so two "
+                    f"failures do not compare equal -- which means they DIFFER, and "
+                    f"this assertion would report the mutation as observable. Assert "
+                    f"the failure you expect instead of differencing two of them."
+                )
+        self._counted()
+        if got == want:
+            raise AssertionError(
+                f"{name}: arms-do-not-differ: {got!r} on both arms. An A/B whose arms "
+                f"agree cannot show that the thing between them did anything."
+            )
+
     # -- row counts ---------------------------------------------------------
     def rowcount(self, got, want, name):
         """Compare a row count, refusing psycopg's "no count available" sentinel.
