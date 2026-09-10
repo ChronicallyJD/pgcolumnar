@@ -72,7 +72,7 @@ def test_lib_sh_counts_a_check_in_exactly_one_place(expect):
 # ---- the record line --------------------------------------------------------
 
 
-def test_each_verdict_emits_one_record_carrying_its_fields(expect):
+def test_each_verdict_emits_one_record_carrying_its_fields(tmp_path, expect):
     """Tab separated -- suite, name, verdict, reason -- so a name with spaces survives.
 
     The reason carries the REASON_CODE, which is what makes this more than a reformat:
@@ -93,10 +93,28 @@ def test_each_verdict_emits_one_record_carrying_its_fields(expect):
     # check NAMES, not of checks, and one sharer going red would mark them all.
     # Derived from BASH_SOURCE rather than from a convention. Found by
     # OffgridwithJD, whose own six branches were each adding more.
-    parts = {r.split("\t")[2] for r in _records(' check "a name" x x')}
-    expect.num(len(parts), 1, "the record names exactly one part")
-    expect.text("nonempty" if parts and next(iter(parts)) else "empty", "nonempty",
-                "and the part field is not blank")
+    # THESE TWO ARMS COULD NOT FAIL, and OffgridwithJD said so. The field is
+    # `${_part:-${PGC_SUITE:-unknown}}`, so deleting the derivation still yields a
+    # non-blank single value and both arms stayed green. "Exactly one, and not
+    # blank" is satisfied by the fallback.
+    #
+    # The property needs a case where the part and the suite DIFFER, which is the
+    # case the field exists for: harness_selftest sources 40-odd parts into one
+    # shell. So a fixture does the same -- an outer script that sources an inner
+    # one which calls the check -- and the record must name the INNER file.
+    outer = tmp_path / "outer_suite.sh"
+    inner = tmp_path / "inner_part.sh"
+    inner.write_text('check "a name" x x\n')
+    outer.write_text(f'. "{LIB}"\n. "{inner}"\n')
+    r = subprocess.run(["bash", "-c", f'set -uo pipefail\nbash "{outer}"'],
+                       capture_output=True, text=True)
+    recs = [l for l in r.stdout.splitlines() if l.startswith("RESULT\t")]
+    expect.num(len(recs), 1, "premise: the sourced part emitted exactly one record")
+    suite, part = recs[0].split("\t")[1], recs[0].split("\t")[2]
+    expect.text(suite, "outer_suite", "the suite is the script that ran")
+    expect.text(part, "inner_part", "and the part is the file the check was asked from")
+    expect.text("different" if suite != part else "same", "different",
+                "which are not the same thing, and the fallback would make them so")
 
     recs = _records(' check_unrunnable "a name" MISSING_DEPENDENCY "no jq"')
     expect.num(len(recs), 1, "an unrunnable check emits exactly one record")
