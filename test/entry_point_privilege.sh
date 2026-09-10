@@ -307,9 +307,12 @@ as_ep() {  # as_ep <sql> -> the SQLSTATE, or the literal noerror
 	local out
 	out="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U t_ep -d "$PGC_DB" \
 		-At -v VERBOSITY=sqlstate -v ON_ERROR_STOP=0 -c "$1" 2>&1)"
-	printf '%s\n' "$out" | sed -n 's/^.*ERROR:[[:space:]]*\([0-9A-Z]\{5\}\).*$/\1/p' | head -1 \
-		| grep -q . && printf '%s\n' "$out" | sed -n 's/^.*ERROR:[[:space:]]*\([0-9A-Z]\{5\}\).*$/\1/p' | head -1 \
-		|| echo noerror
+	# Extract once into a variable rather than twice through a pipeline whose
+	# STATUS is the answer: `... | grep -q .` reports "no sqlstate" whenever the
+	# writer takes EPIPE, and this function's answer is a SQLSTATE.
+	local _sqlstate
+	_sqlstate="$(sed -n 's/^.*ERROR:[[:space:]]*\([0-9A-Z]\{5\}\).*$/\1/p' <<<"$out" | head -1)"
+	if [ -n "$_sqlstate" ]; then printf '%s\n' "$_sqlstate"; else echo noerror; fi
 }
 
 # The premise that makes every SQLSTATE arm below mean anything: this role can

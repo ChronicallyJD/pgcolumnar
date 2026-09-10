@@ -59,10 +59,11 @@ behaviour, the source of that number is named.
 - [11. test_zonemap_boundaries.py: exact boundaries](#11-test_zonemap_boundariespy-exact-boundaries)
 - [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
-- [14. Adding a test](#14-adding-a-test)
-- [15. What this corpus does NOT yet refuse](#15-what-this-corpus-does-not-yet-refuse)
-- [16. Traps this corpus records](#16-traps-this-corpus-records)
-- [17. test_raises_sqlstate.py: which error, and which statement](#17-test_raises_sqlstatepy-which-error-and-which-statement)
+- [14. test_suite_accounting.py: the matrix accounting for its own suites](#14-test_suite_accountingpy-the-matrix-accounting-for-its-own-suites)
+- [15. Adding a test](#15-adding-a-test)
+- [16. What this corpus does NOT yet refuse](#16-what-this-corpus-does-not-yet-refuse)
+- [17. Traps this corpus records](#17-traps-this-corpus-records)
+- [18. test_raises_sqlstate.py: which error, and which statement](#18-test_raises_sqlstatepy-which-error-and-which-statement)
 
 ## 1. How to read a test in here
 
@@ -1013,7 +1014,142 @@ pins the eight counts exactly. Its header records why -- for a CURVE change the
 digest pins upstream catch it first and the integers add nothing, so their real
 domain is a changed READER at an unchanged layout.
 
-## 14. Adding a test
+## 14. test_suite_accounting.py: the matrix accounting for its own suites
+
+`test_suite_accounting.py` holds the matrix runner to its own arithmetic.
+
+`run_all_versions.sh` prints `suites that ran: N of M` and never checks it, and twelve
+registered suites exit 0 without ever calling `pgc_summary`. Measured with a pattern
+tight enough to exclude `portlib.sh` -- a looser one matched it and gave both reviewers
+of this change the same wrong answer: **none** of the twelve sources `test/lib.sh`.
+Each defines its own `check()`, and ten keep no tally at all, so the harness cannot see
+their checks. Counted among the suites that
+"ran", they are the overcount #447 added that line to stop, one level further down.
+
+A count cannot close this. Two errors of opposite sign cancel, and an exempt list
+maintained by hand makes the count agree by construction -- the check then measures
+the list rather than the run. So membership is derived from a property each suite
+carries, and the two readings are reconciled as SETS, in both directions:
+
+| reading | where it comes from |
+| --- | --- |
+| declared | the suite's own text calls `pgc_summary` |
+| observed | the suite's log carries the `accounting:` line `pgc_summary` prints before every exit path |
+
+Neither is a number and neither is hand-maintained. A suite that stops calling
+`pgc_summary` moves between the sets on its own.
+
+These tests drive the SHELL functions out of `run_all_versions.sh` rather than
+reimplementing them in Python. A Python twin would be a second implementation and
+would agree with itself; the house rule asks for two observers of one implementation.
+They run under `set -o pipefail`, because `harness_selftest.sh` does.
+
+### `test_a_suite_that_calls_pgc_summary_declares_accounting`
+
+The property is the CALL. A comment mentioning `pgc_summary`, and a longer name
+containing it, are both refused -- a claim satisfied by prose is the failure the whole
+design exists to avoid.
+
+### `test_the_accounting_line_is_read_on_every_exit_path`
+
+Pass, failure, skip and incomplete all carry the line, which is what makes it the
+runtime twin of the declaration rather than a synonym for PASSED.
+
+### `test_the_reconciliation_names_both_directions`
+
+Declared-but-not-accounted is a suite that died before reaching its summary; today
+that reads PASS whenever the shell happened to exit 0. Accounted-but-not-declared is a
+stale reading of the source, which a hand-maintained list can never report.
+
+### `test_opposite_errors_do_not_cancel`
+
+Both directions are reported from one run. One error masking the other is exactly what
+a count cannot distinguish from correctness.
+
+### `test_the_driver_s_own_non_dispatch_record_excuses_only_what_it_names`
+
+`PGC_SKIP_TIMING` drops four suites on every CI run; they declare accounting and
+correctly produce none. The driver records that decision where it makes it, rather
+than leaving it to be inferred from the log the driver forges. The record excuses only
+what it names, and a suite that both accounted and was recorded as never dispatched
+fails.
+
+### `test_the_printed_identity_can_actually_fail`
+
+`inputs == sum(buckets)` is printed beside every reconciliation. Computing `inputs`
+FROM the buckets makes the line true for any values and reddens nothing, which is why
+it is counted from the two files by a separate route. Dropping the sort before `comm`
+makes the totals diverge, and that is the fault the identity guards.
+
+### `test_the_reader_accepts_the_line_the_producer_actually_emits`
+
+Every other log in the file is a literal, and the shell half types the same four again,
+and the format string lives a third time in `pgc_summary`. Three hand-written copies of
+one line: a wording drift in the **producer** leaves both harnesses green while the
+reader answers "no" for every real suite, reddening the whole matrix on both majors.
+So this arm runs a real suite and feeds the reader its actual stdout, with a reworded
+control to show it can fail.
+
+### `test_the_partition_over_the_registered_suites_adds_up`
+
+The readers run over the real registered suite list. No count is asserted: how many
+suites are exempt is not a fact about correctness, and pinning it would be a second
+copy of the list this design removes. What is asserted is that the partition covers
+the population and that both buckets are occupied.
+
+### `test_the_accounted_reader_takes_either_runtime_mechanism`
+
+Two runtime-observable mechanisms exist: `pgc_summary`'s accounting line, used by 239
+suites, and a suite's own `checks run:` line, which `bench_guards` and `docs_style`
+print from private counters without ever sourcing `lib.sh`. A reader that knew only the
+first would call those two unaccounted, which is false.
+
+### `test_a_registered_suite_accounted_by_nothing_fails_by_name`
+
+The defect @linuxhikerpm blocked #922 on. `pgc_reconcile_accounting` takes the declared
+and observed sets, both derived from the suites themselves, so a registered suite in
+neither is **outside the universe it reconciles** — with all its inputs empty it reports
+complete symmetry and returns 0, whatever `SUITES` holds. Treating absence of a
+declaration as absence from the population preserves the overcount.
+
+`pgc_reconcile_population` takes the registered set as an input and puts every
+registered suite in exactly one of four buckets: accounted, not dispatched, known debt,
+or unaccounted — and unaccounted fails, by name. Each of the three ways out is asserted
+to actually let a suite out, or the bucket would be a name for "always fails".
+
+### `test_the_debt_file_excuses_only_what_it_names`
+
+Debt is recorded by name rather than as a count, which is what makes it a burn-down: a
+new unaccounted suite fails while the known ones are excused. Debt that is no longer
+debt — a suite that now accounts, or one no longer registered — is reported, so the
+burn-down cannot stall silently. Those two are reported rather than fatal: a gate that
+reddens the moment someone *fixes* something teaches people not to fix things.
+
+### `test_the_population_partitions_and_prints_its_identity`
+
+`inputs == sum(buckets)` over the registered population, printed per the house rule.
+Like the symmetry check's identity it **cannot** be false on the data — the four buckets
+are built by successive subtraction from the registered set, so their sum equals it
+identically, measured at 0 firings over 400 random four-set inputs while the real bucket
+findings fired on 353. What it guards is `comm` reading unsorted input, which produces
+buckets that are not a partition at all.
+
+### `test_the_debt_file_is_tracked_and_holds_only_registered_suites`
+
+`test/suites_without_accounting.txt` is tracked so that adding a name is a diff a
+reviewer sees — the whole reason it is a file and not a number in the environment. Every
+name in it must be a registered suite.
+
+### `test_the_declaration_reader_survives_pipefail_on_a_long_suite`
+
+A regression arm. The first implementation piped `sed` into `grep -q`; grep exits on
+match, sed takes EPIPE, and `pipefail` reports the pipeline as failed. The reader
+answered "no" for a suite that plainly calls `pgc_summary`. It is a race, so it
+reproduces on long files and not short ones -- it passed every fixture and failed only
+on the real population, naming two of the longest suites. Selftest 040 carries the same
+story from #473 and #476.
+
+## 15. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -1040,7 +1176,7 @@ domain is a changed READER at an unchanged layout.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 15. What this corpus does NOT yet refuse
+## 16. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 26
@@ -1061,7 +1197,7 @@ setup, and a compound statement such as a `for` holding the setup and the statem
 under test. Both are pinned by arms that assert the scan reports nothing on them, and
 `VACUITY_MODES.md` section 3.4 says what would close the mode.
 
-## 16. Traps this corpus records
+## 17. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.
@@ -1093,7 +1229,7 @@ process. Walking `/proc/<pid>/cmdline` is the reliable instrument.
 `test_one_tree_hashes_one_way_however_the_locale_is_set` requires one tree to
 give one fingerprint across every installed locale.
 
-## 17. test_raises_sqlstate.py: which error, and which statement
+## 18. test_raises_sqlstate.py: which error, and which statement
 
 Numbered 17 rather than inserted after section 4, where a reader looking for a
 per-file section would expect it. Renumbering twelve headings and their Contents

@@ -472,7 +472,7 @@ jobs:
       - name: Run the suite matrix on PG ${{ matrix.pg }}
         run: |
           set -euo pipefail
-          # PGC_SKIP_TIMING drops the three wall-clock suites: a shared runner
+          # PGC_SKIP_TIMING drops the four wall-clock suites: a shared runner
           # cannot hold a ratio still, and a gate that reds for reasons unrelated
           # to the change is worse than one that does not run. They stay in the
           # local matrix, which is where those numbers mean anything.

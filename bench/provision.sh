@@ -76,7 +76,9 @@ pg_present() { [ -x "$PREFIX_ROOT/$1/bin/pg_config" ]; }
 # built with cassert would produce benchmark numbers that are quietly wrong, and
 # nothing else on the box would notice.
 pg_is_assert() {
-	"$PREFIX_ROOT/$1/bin/pg_config" --configure 2>/dev/null | grep -q -- '--enable-cassert'
+	# grep -c, not grep -q; see test/lib.sh's pgc_is_columnar_scan.
+	_cfg="$("$PREFIX_ROOT/$1/bin/pg_config" --configure 2>/dev/null || true)"
+	[ "$(grep -c -- '--enable-cassert' <<<"$_cfg" || true)" != 0 ]
 }
 
 check_pg() {
