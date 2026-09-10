@@ -67,10 +67,34 @@ rather than the catalogue it exists to become.
 import argparse
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
 NEVER = "never"
+UNKNOWN = "unknown"
+
+# ISO 8601 date, and nothing else. A free-form string was accepted verbatim, so a
+# typo became an observation date the ledger then treated as authoritative --
+# measured: `--date not-a-date` stored `not-a-date`.
+_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def _newer(current, incoming):
+    """The later of two observations, with `unknown` and `never` below every date.
+
+    LAST RED MAY ONLY MOVE FORWARD. It was a plain assignment, so merging an older
+    log rewrote a recent observation with an older one, and merging an undated log
+    replaced a real date with `unknown` -- both measured on #918, both silently.
+    A ledger whose whole subject is "when was this last seen red" cannot let the
+    answer regress because of the order somebody merged in.
+    """
+    rank = {NEVER: 0, UNKNOWN: 1}
+    if rank.get(incoming, 2) < rank.get(current, 2):
+        return current
+    if rank.get(incoming, 2) > rank.get(current, 2):
+        return incoming
+    return max(current, incoming) if incoming not in rank else current
 NONE = "-"
 FIELDS = 5
 
@@ -79,12 +103,31 @@ class LedgerError(Exception):
     """An integrity failure. Never silently skipped."""
 
 
+# The verdicts pgc_record can emit, and the only ones a record may carry. Kept
+# here as the reader's own list rather than derived from lib.sh: a python tool
+# reading a shell file to learn its vocabulary is the coupling CONTEXT.md
+# forbids, and the drift is caught by the arm that plants each verdict instead.
+VERDICTS = ("PASS", "FAIL", "UNRUN", "SKIP")
+
+# RESULT plus suite, part, name, verdict, reason.
+RECORD_FIELDS = 6
+
+
 def read_records(paths, *, require_nonempty=True):
     """[(suite, part, name, verdict)] for every RESULT line in the given logs.
 
-    Fails closed. A path that cannot be read, a log with no records, or a record
-    with too few fields is an error -- silently skipping them is how a gate over a
-    nonexistent log returned success.
+    Fails closed, and VALIDATES rather than merely counting. `len(f) < 5` accepted
+    a record missing its reason, a verdict outside the emitter's vocabulary, an
+    empty check name, and one record against `checks run: 2` -- all measured
+    returning 0 while the ledger absorbed them as evidence. Evidence that does not
+    parse is not evidence, and the ledger's whole subject is which checks have
+    been observed red: a malformed log is how an observation gets attributed to a
+    check that never ran. Reported by @linuxhikerpm on #918.
+
+    The reconciliation against `checks run:` is here as well as in the runner
+    because the two answer different questions. The runner asks whether the suite
+    it just ran was internally consistent; this asks whether a log handed to the
+    ledger, possibly from another machine or another day, can be trusted at all.
     """
     out = []
     for p in paths:
@@ -94,17 +137,38 @@ def read_records(paths, *, require_nonempty=True):
         except OSError as e:
             raise LedgerError(f"cannot read {p}: {e}") from e
         found = 0
+        stated = None
         for n, line in enumerate(text.splitlines(), 1):
+            m = re.match(r"^checks run: ([0-9]+)$", line)
+            if m:
+                stated = int(m.group(1))
+                continue
             if not line.startswith("RESULT\t"):
                 continue
             f = line.split("\t")
-            if len(f) < 5:
+            if len(f) != RECORD_FIELDS:
                 raise LedgerError(
-                    f"{p}:{n}: a record needs suite, part, name and verdict; got {len(f) - 1} field(s)")
+                    f"{p}:{n}: a record has {RECORD_FIELDS - 1} fields -- suite, part, "
+                    f"name, verdict, reason; got {len(f) - 1}")
+            if not f[1] or not f[2] or not f[3]:
+                raise LedgerError(
+                    f"{p}:{n}: a record with an empty suite, part or name names no check")
+            if f[4] not in VERDICTS:
+                raise LedgerError(
+                    f"{p}:{n}: verdict {f[4]!r} is not one of {', '.join(VERDICTS)}, "
+                    f"so this log was not written by pgc_record")
             out.append((f[1], f[2], f[3], f[4]))
             found += 1
         if require_nonempty and found == 0:
             raise LedgerError(f"{p}: no RESULT records, so there is nothing to reconcile")
+        if found and stated is None:
+            raise LedgerError(
+                f"{p}: {found} record(s) but no `checks run:` line, so the log never "
+                f"reached its summary and cannot be reconciled")
+        if stated is not None and found != stated:
+            raise LedgerError(
+                f"{p}: {found} record(s) against `checks run: {stated}` -- the log does "
+                f"not reconcile with itself, so it is not evidence about either number")
     return out
 
 
@@ -166,10 +230,33 @@ def cmd_merge(args):
     rows = read_ledger(args.ledger)
     runs = _by_run(args.logs)
 
+    if args.date != UNKNOWN and not _DATE.match(args.date):
+        raise LedgerError(
+            f"--date {args.date!r} is not an ISO date (YYYY-MM-DD). A ledger row's "
+            f"last-red is compared against other dates, so a free-form string is not "
+            f"an observation")
+
     if args.mutation and len(runs) > 1:
         raise LedgerError(
             "--mutation names one deliberate change, so it cannot be attributed across "
             f"{len(runs)} logs at once: merge them one run at a time")
+
+    # A MUTATION NAMES ONE CHECK, and a run that mutates one thing can redden
+    # several: the target, plus whatever depended on it. Attributing the mutation
+    # to every failure records collateral damage as evidence that the mutation
+    # kills that check, which is the opposite of what this column is for.
+    # Measured on #918: a two-FAIL log merged with --mutation MUTATION_A recorded
+    # it against both. Reported by @linuxhikerpm.
+    if args.mutation:
+        failed = sorted({key for _p, seen in runs for key, vs in seen.items() if "FAIL" in vs})
+        if len(failed) > 1:
+            listed = "\n".join(f"      {s}\t{p}\t{n}" for s, p, n in failed[:6])
+            more = "" if len(failed) <= 6 else f"\n      ... and {len(failed) - 6} more"
+            raise LedgerError(
+                f"--mutation names one check, but {len(failed)} checks failed in this "
+                f"run:\n{listed}{more}\n    Attributing it to all of them would record "
+                f"collateral damage as evidence. Merge without --mutation, or narrow the "
+                f"run to the check the mutation targets.")
 
     for path, seen in runs:
         for key, verdicts in sorted(seen.items()):
@@ -179,7 +266,7 @@ def cmd_merge(args):
                 # red observation.
                 rows[key] = [NEVER, set()]
             if "FAIL" in verdicts:
-                rows[key][0] = args.date
+                rows[key][0] = _newer(rows[key][0], args.date)
                 if args.mutation:
                     # A SET. Keeping only the last one records the most recent
                     # attack rather than the catalogue this column exists to

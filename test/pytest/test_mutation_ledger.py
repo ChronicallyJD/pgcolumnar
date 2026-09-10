@@ -108,18 +108,18 @@ def test_the_mutation_column_accumulates_rather_than_overwriting(tmp_path, expec
     """
     ledger = _w(tmp_path, "l.tsv", "")
     red = _w(tmp_path, "r.log", RED)
-    _run("merge", "--ledger", ledger, "--date", "D", "--mutation", "SAOP 128 -> 0", red)
+    _run("merge", "--ledger", ledger, "--date", "2026-09-10", "--mutation", "SAOP 128 -> 0", red)
     by = {r[2]: r[4] for r in _rows(ledger)}
     expect.text(by["first check"], "SAOP 128 -> 0",
                 "a named mutation is recorded against the check that reddened")
     expect.text(by["second check"], "-", "and not against one that stayed green")
 
-    _run("merge", "--ledger", ledger, "--date", "D", "--mutation", "bloom neutered", red)
+    _run("merge", "--ledger", ledger, "--date", "2026-09-10", "--mutation", "bloom neutered", red)
     expect.text({r[2]: r[4] for r in _rows(ledger)}["first check"],
                 "SAOP 128 -> 0;bloom neutered",
                 "a second mutation accumulates rather than replacing the first")
 
-    expect.num(_run("merge", "--ledger", ledger, "--date", "D", "--mutation", "X",
+    expect.num(_run("merge", "--ledger", ledger, "--date", "2026-09-10", "--mutation", "X",
                     red, _w(tmp_path, "g.log", GREEN))[1], 2,
                "one mutation cannot be attributed across several runs at once")
 
@@ -129,14 +129,14 @@ def test_two_runs_of_a_check_are_not_a_duplicate_of_it(tmp_path, expect):
     name twice in one run", and reported the first as the second."""
     ledger = _w(tmp_path, "l.tsv", "")
     g = _w(tmp_path, "g.log", GREEN)
-    out, _ = _run("merge", "--ledger", ledger, "--date", "D", g, g)
+    out, _ = _run("merge", "--ledger", ledger, "--date", "2026-09-10", g, g)
     expect.num(out.count("duplicate"), 0,
                "the same check in two logs is two runs, not a duplicate")
 
     twice = _w(tmp_path, "twice.log",
                "RESULT\tdemo\tpart1\tsame\tPASS\t\n"
                "RESULT\tdemo\tpart1\tsame\tFAIL\t\nchecks run: 2\n")
-    out, _ = _run("merge", "--ledger", _w(tmp_path, "l2.tsv", ""), "--date", "D", twice)
+    out, _ = _run("merge", "--ledger", _w(tmp_path, "l2.tsv", ""), "--date", "2026-09-10", twice)
     expect.num(out.count("duplicate check name in one run, so one ledger row covers 2: "
                          "demo\tpart1\tsame"), 1,
                "the same name twice in ONE log is a duplicate, and is named")
@@ -183,7 +183,7 @@ def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect
     """
     ledger = _w(tmp_path, "l.tsv", "")
     reg = _w(tmp_path, "reg", "demo\nother\n")
-    _run("merge", "--ledger", ledger, "--date", "D", _w(tmp_path, "g.log", GREEN))
+    _run("merge", "--ledger", ledger, "--date", "2026-09-10", _w(tmp_path, "g.log", GREEN))
 
     other = _w(tmp_path, "o.log", "RESULT\tother\tpartX\tsomething\tPASS\t\nchecks run: 1\n")
     b1 = _w(tmp_path, "b1.txt", "suites_not_covered 1\n")
@@ -191,7 +191,7 @@ def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect
     expect.num(rc, 0, "a check in an uncovered suite is not refused")
     expect.num(out.count("not covered=1"), 1, "but that suite is counted as debt")
 
-    _run("merge", "--ledger", ledger, "--date", "D", other)
+    _run("merge", "--ledger", ledger, "--date", "2026-09-10", other)
     other2 = _w(tmp_path, "o2.log",
                 "RESULT\tother\tpartX\tsomething\tPASS\t\n"
                 "RESULT\tother\tpartX\tnewly added\tPASS\t\nchecks run: 2\n")
@@ -205,7 +205,7 @@ def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect
 
     # THE DEADLOCK THAT SHIPPED, as its own arm: adding a check must not require an
     # edit the design forbids.
-    _run("merge", "--ledger", ledger, "--date", "D", other2)
+    _run("merge", "--ledger", ledger, "--date", "2026-09-10", other2)
     expect.num(_run("gate", "--ledger", ledger, "--budget", b0,
                     "--registered", reg, other2)[1], 0,
                "regenerating the ledger lets the new check through")
@@ -232,7 +232,7 @@ def test_the_ceiling_may_only_fall_and_that_is_enforced(tmp_path, expect):
 
     ledger = _w(tmp_path, "l.tsv", "")
     reg = _w(tmp_path, "reg", "demo\n")
-    _run("merge", "--ledger", ledger, "--date", "D", _w(tmp_path, "g.log", GREEN))
+    _run("merge", "--ledger", ledger, "--date", "2026-09-10", _w(tmp_path, "g.log", GREEN))
     log = _w(tmp_path, "g2.log", GREEN)
 
     (repo / "b.txt").write_text("suites_not_covered 9\n")
@@ -306,3 +306,86 @@ def test_the_committed_ledger_and_budget_agree(expect):
     covered = {r[0] for r in rows}
     expect.num(nums.get("suites_not_covered", -1), len(set(listed) - covered),
                "and the ceiling matches the suites with no rows")
+
+
+def test_a_log_that_does_not_parse_is_not_evidence(tmp_path, expect):
+    """`len(f) >= 5` accepted four shapes the emitter cannot produce.
+
+    A record missing its reason, a verdict outside pgc_record's vocabulary, an empty
+    check name, and one record against `checks run: 2` all merged at rc=0 -- the
+    ledger absorbing as evidence a log that does not parse. The ledger's subject is
+    which checks have been observed red, so a malformed log is how an observation
+    gets attributed to a check that never ran. Reported by @linuxhikerpm on #918.
+    """
+    led = _w(tmp_path, "l.tsv", "")
+    cases = {
+        "no reason field": "RESULT\tdemo\tpart1\ta name\tPASS\nchecks run: 1\n",
+        "a verdict the emitter cannot emit": "RESULT\tdemo\tpart1\ta name\tBOGUS\t\nchecks run: 1\n",
+        "an empty check name": "RESULT\tdemo\tpart1\t\tPASS\t\nchecks run: 1\n",
+        "a count that disagrees with the records": "RESULT\tdemo\tpart1\ta name\tPASS\t\nchecks run: 2\n",
+        "no count at all": "RESULT\tdemo\tpart1\ta name\tPASS\t\n",
+    }
+    for label, text in cases.items():
+        log = _w(tmp_path, "bad.log", text)
+        expect.num(_run("merge", "--ledger", led, "--date", "2026-09-10", log)[1], 2,
+                   f"{label} is an integrity failure, not a merge")
+
+    # THE CONTROL. Five arms all reporting 2 prove nothing if the tool has simply
+    # started refusing every log.
+    good = _w(tmp_path, "good.log", GREEN)
+    expect.num(_run("merge", "--ledger", led, "--date", "2026-09-10", good)[1], 0,
+               "control: a well-formed log still merges")
+
+
+def test_last_red_may_only_move_forward(tmp_path, expect):
+    """It was a plain assignment, so the answer depended on merge order.
+
+    Merging an older log rewrote a recent observation with an older one, and an
+    undated merge replaced a real date with `unknown`. A ledger whose whole subject
+    is when a check was last seen red cannot let that regress.
+    """
+    led = _w(tmp_path, "l.tsv", "")
+    red = _w(tmp_path, "red.log", RED)
+
+    def stored():
+        for line in pathlib.Path(led).read_text().splitlines():
+            f = line.split("\t")
+            if len(f) > 3 and f[2] == "first check":
+                return f[3]
+        return None
+
+    _run("merge", "--ledger", led, "--date", "2026-09-10", red)
+    _run("merge", "--ledger", led, "--date", "2026-09-01", red)
+    expect.text(stored(), "2026-09-10", "an older observation does not overwrite a newer one")
+    _run("merge", "--ledger", led, "--date", "2026-09-20", red)
+    expect.text(stored(), "2026-09-20", "and a newer one does")
+    _run("merge", "--ledger", led, red)
+    expect.text(stored(), "2026-09-20", "and an undated merge does not erase a known date")
+    expect.num(_run("merge", "--ledger", led, "--date", "not-a-date", red)[1], 2,
+               "a date that is not a date is refused rather than stored")
+
+
+def test_a_mutation_names_one_check_not_every_casualty(tmp_path, expect):
+    """One deliberate change can redden the target and whatever depended on it.
+
+    Attributing `--mutation` to every failure records collateral damage as evidence
+    that the mutation kills that check, which is the opposite of what the column is
+    for. Measured on #918: a two-FAIL log recorded it against both.
+    """
+    led = _w(tmp_path, "l.tsv", "")
+    two = _w(tmp_path, "two.log",
+             "RESULT\tdemo\tpart1\tthe target\tFAIL\t\n"
+             "RESULT\tdemo\tpart1\tcollateral\tFAIL\t\nchecks run: 2\n")
+    out, rc = _run("merge", "--ledger", led, "--date", "2026-09-10", "--mutation", "M", two)
+    expect.num(rc, 2, "--mutation across two failing checks in one run is refused")
+    expect.num(out.count("2 checks failed"), 1,
+               "and the refusal counts them, so the author can narrow the run")
+    expect.num(_run("merge", "--ledger", led, "--date", "2026-09-10", two)[1], 0,
+               "control: the same log merges without --mutation")
+
+    one = _w(tmp_path, "one.log", RED)
+    _run("merge", "--ledger", led, "--date", "2026-09-10", "--mutation", "M", one)
+    rows = [l.split("\t") for l in pathlib.Path(led).read_text().splitlines() if l.strip()]
+    tagged = [r[2] for r in rows if len(r) > 4 and "M" in r[4].split(";")]
+    expect.rows([[n] for n in sorted(tagged)], [["first check"]],
+                "and a single failure still carries it, on the check that reddened")

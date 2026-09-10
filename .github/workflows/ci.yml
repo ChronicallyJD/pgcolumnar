@@ -554,7 +554,10 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
-          for f in /tmp/pgcolumnar-matrix-*/*.log; do
+          # /tmp/pgcolumnar-logs, not the build directory: the runner removes
+          # each builddir at the end of its major, so this step used to search a
+          # path that no longer existed and print nothing.
+          for f in /tmp/pgcolumnar-logs/*.log /tmp/pgcolumnar-matrix-*/*.log; do
             [ -e "$f" ] || continue
             echo "===== $f ====="
             tail -60 "$f"

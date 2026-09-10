@@ -1814,6 +1814,30 @@ Last-write-wins records the most recent attack rather than the catalogue the col
 exists to become. One `--mutation` copied across several logs attributes a deliberate
 change to failures it had nothing to do with, and is refused.
 
+### `test_a_log_that_does_not_parse_is_not_evidence`
+
+`read_records` accepted `len(f) >= 5`, so a record missing its reason, a verdict
+outside `pgc_record`'s vocabulary, an empty check name, one record against
+`checks run: 2`, and a log with no count at all all merged at rc=0. The ledger
+absorbed as evidence a log that does not parse, which is how an observation gets
+attributed to a check that never ran. Five refusals and a control, because five
+arms all reporting rc=2 prove nothing if the tool has started refusing everything.
+
+### `test_last_red_may_only_move_forward`
+
+The date was a plain assignment, so the answer depended on merge order: an older
+log rewrote a recent observation, and an undated merge replaced a real date with
+`unknown`. A free-form `--date` was stored verbatim, so a typo became an
+observation date the ledger treated as authoritative.
+
+### `test_a_mutation_names_one_check_not_every_casualty`
+
+One deliberate change can redden the target and whatever depended on it.
+Attributing `--mutation` to every failure records collateral damage as evidence
+that the mutation kills that check. A run with more than one failing check is
+refused with the count, and a single failure still carries the mutation on the
+check that reddened.
+
 ### `test_two_runs_of_a_check_are_not_a_duplicate_of_it`
 
 Merging logs first cannot tell *the same check in two runs* from *the same name twice in

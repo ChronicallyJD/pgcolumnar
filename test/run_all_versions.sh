@@ -1449,6 +1449,24 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		SUMMARY+=("FAIL   PG$major  ($suites_ran ran, $suites_skipped skipped, $suites_incomplete incomplete)  ${results}")
 		overall=1
 	fi
+	# KEEP THE LOGS, THEN DELETE THE BUILD DIRECTORY. The gate runs above and the
+	# rm runs here, and CI's "Collect logs on failure" step globs
+	# /tmp/pgcolumnar-matrix-*/*.log AFTER this loop has finished -- so it searched
+	# a directory this line had already removed and collected nothing. Run
+	# 34503924812 is the measurement. That mattered beyond diagnosis: the ledger is
+	# fed by merging real logs, and a CI red is exactly the run whose logs record a
+	# check going red for the first time. Deleting them meant CI could never feed
+	# the thing it gates. Reported by @linuxhikerpm.
+	#
+	# Copied rather than left in place, because the build directory is large and
+	# the logs are not, and because a retained path that does not move is what a
+	# workflow step can name.
+	_logkeep="${PGC_LOG_KEEP:-/tmp/pgcolumnar-logs}"
+	mkdir -p "$_logkeep"
+	for _l in "$builddir"/*.log; do
+		[ -e "$_l" ] || continue
+		cp -p "$_l" "$_logkeep/pg${major}-${_l##*/}"
+	done
 	rm -rf "$builddir"
 done
 
