@@ -18,6 +18,15 @@ true until the next version shipped.
 
 ### Added
 
+- Exact zone-map boundary coverage now lives in matching shell and pytest tests
+  (#831).
+
+  The `<=` and `>=` arms put the constant exactly at a row-group minimum or
+  maximum and compare returned rows with a heap twin. The `<`, `>`, and `=`
+  mirrors assert groups removed with bloom disabled, so a conservative pruning
+  regression cannot hide behind a correct answer. Each of the five one-token
+  strategy mutations was proved to fail its corresponding assertion.
+
 - The test harness refuses to measure a binary that was not built from the source
   under test.
 
@@ -47,7 +56,18 @@ true until the next version shipped.
   binary check driven against a live cluster, and devloop writing the stamp.
   `harness_selftest` goes from 261 checks to 288, both measured.
 
+- `IN (...)` and `= ANY(array)` now test each listed value against row-group
+  zone maps and bloom filters instead of reducing the list to its `[min,max]`
+  hull (#752).
 
+  A scattered list whose hull spans a table could previously read every row
+  group. The set is now one internal predicate whose element tests are a
+  disjunction, while the outer predicate list remains a conjunction. The
+  executor still rechecks exact membership, so pruning remains conservative.
+
+  Per-element evaluation is capped at 128 non-NULL entries. Larger lists retain
+  the bounded two-key hull because exact vector refinement otherwise costs
+  elements times rows.
 - Hilbert clustering: `pgcolumnar.cluster_hilbert` and
   `pgcolumnar.recluster_hilbert` (#889).
 

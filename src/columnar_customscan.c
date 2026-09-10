@@ -185,6 +185,8 @@ static const CustomExecMethods pgcolumnar_exec_methods = {
  * planning
  * ------------------------------------------------------------------------- */
 
+#define PGCOLUMNAR_SAOP_ELEMENT_LIMIT 128
+
 /*
  * pgcolumnar_projected_columns
  *		Build the 0-based set of columns the plan actually references, from the
@@ -753,23 +755,15 @@ pgcolumnar_like_prefix_scankey(OpExpr *op, Var *var, Const *con,
 }
 
 /*
- * pgcolumnar_saop_range_scankey
+ * pgcolumnar_saop_scankey
  *		Turn `col = ANY(array)` -- the planner's form of `col IN (...)` -- into
- *		the [min, max] range it implies, so zone maps can skip groups whose
- *		range cannot intersect any listed value (#704).
+ *		one set-valued scan key (#704, #752).
  *
- * Range keys rather than per-element equality keys, because the skip
- * predicates conjoin: pgcolumnar_group_can_match requires a group to satisfy
- * EVERY predicate, and a list has no group satisfying `= a AND = b`. The range
- * is the disjunction's projection onto that AND-only structure, and it is
- * conservative by construction: the executor still rechecks exact membership
- * on every surviving row, so a group inside the range holding none of the
- * listed values is read and filtered, never skipped wrongly. The cost of that
- * shape is no bloom probe (equality-only, columnar_reader.c) and little
- * pruning from a list that spans the column's range. Because these keys are
- * WEAKER than their clause, they must never serve as an exact row filter:
- * the batch-fold eligibility gate in columnar_vector.c is what keeps them
- * out of the vectorized fold, and its comment names this function.
+ * One set-valued key rather than one equality key per element, because the
+ * outer skip-predicate array is a conjunction. The reader implements the
+ * disjunction inside this one predicate: a group survives when any element can
+ * lie in its zone map (and, when safe, can pass its bloom filter). The executor
+ * still rechecks exact membership on every surviving row.
  *
  * Only `useOr` equality: `= ALL (list)` is a conjunction already and is
  * satisfiable only for a single-valued list, and a negated operator admits
@@ -778,13 +772,9 @@ pgcolumnar_like_prefix_scankey(OpExpr *op, Var *var, Const *con,
  * true), so they are ignored for the range; a list with no non-NULL element
  * matches nothing and builds no keys rather than a degenerate range.
  *
- * The element ordering proc comes from the COLUMN type's btree opfamily, for
- * the element type pair -- the same family that supplied the equality
- * operator's strategy, so "min of the list" and "compares below the group's
- * max" agree on one ordering. A cross-type list (int column, bigint elements)
- * therefore orders its elements with the element type's own proc from that
- * family, and the reader resolves the (column, element) comparison the same
- * way it does for any cross-type range key (#477).
+ * The element ordering proc comes from the COLUMN type's btree opfamily. It
+ * identifies the single-distinct-value case and supplies the bounded [min,max]
+ * fallback for a set too large to evaluate element by element.
  *
  * Same collation rule as the OpExpr path, same reason (spec 9): the stored
  * min/max are ordered under the column's collation, so only a comparison
@@ -793,8 +783,8 @@ pgcolumnar_like_prefix_scankey(OpExpr *op, Var *var, Const *con,
  * equal to a listed element sorts equal to it, so it lies inside the range.
  */
 static int
-pgcolumnar_saop_range_scankey(ScalarArrayOpExpr *saop, Index scanrelid,
-							  TupleDesc tupdesc, ScanKey key)
+pgcolumnar_saop_scankey(ScalarArrayOpExpr *saop, Index scanrelid,
+						TupleDesc tupdesc, ScanKey key)
 {
 	Node	   *leftop;
 	Node	   *rightop;
@@ -812,6 +802,7 @@ pgcolumnar_saop_range_scankey(ScalarArrayOpExpr *saop, Index scanrelid,
 	bool	   *nulls;
 	int			nelems;
 	int			i;
+	int			nvalues = 0;
 	Datum		minVal = (Datum) 0;
 	Datum		maxVal = (Datum) 0;
 	bool		have = false;
@@ -873,6 +864,7 @@ pgcolumnar_saop_range_scankey(ScalarArrayOpExpr *saop, Index scanrelid,
 	{
 		if (nulls[i])
 			continue;
+		nvalues++;
 		if (!have)
 		{
 			minVal = maxVal = elems[i];
@@ -908,8 +900,30 @@ pgcolumnar_saop_range_scankey(ScalarArrayOpExpr *saop, Index scanrelid,
 		return 1;
 	}
 
+	/*
+	 * Keep the array as one predicate. The reader tests each non-NULL element
+	 * against a group's zone map and bloom filter, so a scattered set can prune
+	 * groups inside its [min,max] hull. One key replaces the old two range keys;
+	 * both callers provide two slots and no allocation contract changes.
+	 *
+	 * Bound the set form because exact vector refinement compares each surviving
+	 * row with its elements. Above this limit the old two-key hull is the safe,
+	 * bounded fallback. A future join runtime filter needs a compact set
+	 * representation rather than handing an unbounded build side to this path.
+	 */
+	if (nvalues <= PGCOLUMNAR_SAOP_ELEMENT_LIMIT)
+	{
+		MemSet(&key[0], 0, sizeof(ScanKeyData));
+		key[0].sk_flags = SK_SEARCHARRAY;
+		key[0].sk_attno = var->varattno;
+		key[0].sk_strategy = BTEqualStrategyNumber;
+		key[0].sk_subtype = elemtype;
+		key[0].sk_collation = saop->inputcollid;
+		key[0].sk_argument = con->constvalue;
+		return 1;
+	}
+
 	MemSet(&key[0], 0, sizeof(ScanKeyData));
-	key[0].sk_flags = 0;
 	key[0].sk_attno = var->varattno;
 	key[0].sk_strategy = BTGreaterEqualStrategyNumber;
 	key[0].sk_subtype = elemtype;
@@ -917,13 +931,11 @@ pgcolumnar_saop_range_scankey(ScalarArrayOpExpr *saop, Index scanrelid,
 	key[0].sk_argument = minVal;
 
 	MemSet(&key[1], 0, sizeof(ScanKeyData));
-	key[1].sk_flags = 0;
 	key[1].sk_attno = var->varattno;
 	key[1].sk_strategy = BTLessEqualStrategyNumber;
 	key[1].sk_subtype = elemtype;
 	key[1].sk_collation = saop->inputcollid;
 	key[1].sk_argument = maxVal;
-
 	return 2;
 }
 
@@ -951,13 +963,14 @@ pgcolumnar_clause_to_scankey(Node *clause, Index scanrelid, TupleDesc tupdesc,
 	*exact = false;
 
 	/*
-	 * `col IN (...)` / `col = ANY(array)` becomes a [min, max] range (#704). Its
-	 * keys are conservative, so this returns with exact still false and the fold
-	 * refuses them (#715).
+	 * `col IN (...)` / `col = ANY(array)` becomes one set key, with a bounded
+	 * [min,max] fallback above the element limit (#704, #752). Both forms are
+	 * conservative pruning keys, so exact remains false and the fold refuses
+	 * them as its complete row filter (#715).
 	 */
 	if (IsA(clause, ScalarArrayOpExpr))
-		return pgcolumnar_saop_range_scankey((ScalarArrayOpExpr *) clause,
-											 scanrelid, tupdesc, key);
+		return pgcolumnar_saop_scankey((ScalarArrayOpExpr *) clause,
+									   scanrelid, tupdesc, key);
 
 	if (!IsA(clause, OpExpr))
 		return 0;
