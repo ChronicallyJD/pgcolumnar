@@ -89,6 +89,7 @@ test in `test_layer.py` that fails without it.
 | a broad `pytest.raises` must pin a SQLSTATE, found by AST | `raises-too-broad` |
 | a `pytest.raises` block may not hold a compound statement or call a function this file defines | `raises-catches-setup` |
 | every comparison refuses a value carrying the `QUERY_ERROR` prefix, on either side | `error-swallowed-to-empty` |
+| a write whose command tag reports 0 rows fails the test unless the zero is named | `insert-wrote-no-rows` |
 
 Three of those were added after checking this layer against the inventory rather
 than reasoning about it, and all three had passed silently before:
@@ -220,8 +221,19 @@ binds the exception and the body pins its SQLSTATE. See section 2.
 
 ### 3.5 The fixture built the wrong situation
 
-- `insert-wrote-no-rows` — `INSERT ... SELECT ... WHERE false` writes nothing and
-  raises nothing; `rowcount` is 0 and nobody reads it.
+**`insert-wrote-no-rows` is now closed.** `INSERT ... SELECT ... WHERE false` writes
+  nothing and raises nothing, and before this nobody read either field. Every write the
+  test connection runs is now recorded from the server's own command tag, and a test
+  that ran one reporting 0 rows fails unless it named the zero with
+  `expect.wrote(cur, 0, ...)` — which is how a DELETE that must match nothing stays
+  writable. See section 2 and TESTS.md section 22.
+
+  THE TAG DECIDES, NOT THE COUNT, and that is the whole design. `SELECT 0` and
+  `INSERT 0 0` both carry `rowcount == 0`, so a guard keyed on the count would refuse
+  every test whose last statement was a SELECT over an empty result. Measured on PG 18
+  against a pgcolumnar table: DDL reports `CREATE TABLE`/`SET`/`TRUNCATE TABLE` with
+  `rowcount` `-1`, an `INSERT ... WHERE false` reports `INSERT 0 0` with 0, and
+  `UPDATE 0` and `DELETE 0` likewise. This guard therefore never parses SQL.
 - `mutation-arm-unobservable` — both arms of an A/B produce the identical answer and
   both are green. The assertion that would catch it, that the arms must **differ**,
   is the one nobody writes.
@@ -312,7 +324,16 @@ Each entry names the red test to write first.
 
 1. `test_expect_query_error_sentinel_is_unique_per_failure` — make something produce
    `QUERY_ERROR.<seq>`; the constant exists and nothing writes it.
-2. `test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.
+2. ~~`test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.~~
+   **Done**, and in two files rather than one, because it is two properties. The
+   refusal and the tag-versus-count classification live in
+   `test_writes_wrote_rows.py`, which needs no database: a stub cursor carrying the
+   two measured fields exercises them exactly. Whether the connection the tests
+   actually use is watched at all is a different claim, and no driver-free arm can
+   make it — `test_the_connection_the_tests_use_is_watched` in `test_connection.py`
+   does, through a real `INSERT ... WHERE false`. Splitting them was not tidiness:
+   #917's pytest twin tested a function's body and left its CALL SITE uncovered, so
+   deleting the call kept that half green while the shell half went red.
 3. `test_layer_requires_ab_arms_to_differ` — closes `mutation-arm-unobservable`.
 4. ~~`test_raises_requires_a_sqlstate` — closes `raises-too-broad`.~~ **Done.**
    It closes `raises-too-broad` and narrows `raises-catches-setup`, which stays

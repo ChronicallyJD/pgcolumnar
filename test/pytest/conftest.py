@@ -30,6 +30,8 @@ import shutil
 
 import pytest
 
+import pgc_vacuity
+
 from pgc_cluster import _pg_config, build_once, make_cluster
 
 pytest_plugins = ["pytester"]
@@ -119,7 +121,11 @@ def pgc_conn(pgc_cluster, request):
         conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         conn.execute(f'CREATE SCHEMA "{schema}"')
         conn.execute(f'SET search_path TO "{schema}", public')
-        yield conn
+        # WATCHED, so a write that wrote nothing cannot pass unnoticed. The three
+        # statements above run on the raw connection deliberately: they are this
+        # fixture's own DDL, not the test's writes, and DDL carries no row count
+        # anyway. See pgc_vacuity.watch_writes and test_writes_wrote_rows.py.
+        yield pgc_vacuity.watch_writes(conn, request.node.nodeid)
     finally:
         try:
             conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
