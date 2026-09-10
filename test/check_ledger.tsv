@@ -604,32 +604,35 @@ harness_selftest	400-a-check-result-must-be-machine	the same ratio check, ENABLE
 harness_selftest	400-a-check-result-must-be-machine	the same timing check, ENABLED, emits one record and passes	never	-
 harness_selftest	400-a-check-result-must-be-machine	the sweep finds a check inside a PIPED loop	never	-
 harness_selftest	410-a-check-must-have-been-red	a before-log and an after-log together are refused, not silently empty	never	-
-harness_selftest	410-a-check-must-have-been-red	a budget git does not know is an integrity failure, not a note	never	-
+harness_selftest	410-a-check-must-have-been-red	a budget that does not exist at the prior is a note, not a refusal	never	-
 harness_selftest	410-a-check-must-have-been-red	a check in an UNCOVERED suite is not refused	never	-
 harness_selftest	410-a-check-must-have-been-red	a check merely added is not reported as a rename	never	-
 harness_selftest	410-a-check-must-have-been-red	a check observed red gains the date it was seen	never	-
 harness_selftest	410-a-check-must-have-been-red	a check the ledger has never seen is refused	never	-
+harness_selftest	410-a-check-must-have-been-red	a clean status says nothing and does not fail the major	never	-
 harness_selftest	410-a-check-must-have-been-red	a gate over a nonexistent log is an integrity failure, not a pass	never	-
 harness_selftest	410-a-check-must-have-been-red	a later green run does not erase an observation	never	-
 harness_selftest	410-a-check-must-have-been-red	a name that appeared while another disappeared is reported as a rename	never	-
 harness_selftest	410-a-check-must-have-been-red	a named mutation is recorded against the check that reddened	never	-
 harness_selftest	410-a-check-must-have-been-red	a real refusal is a different status from an integrity failure	never	-
+harness_selftest	410-a-check-must-have-been-red	a refusal keeps the regenerate-the-ledger wording	never	-
 harness_selftest	410-a-check-must-have-been-red	a rename in one part survives an addition in another	never	-
 harness_selftest	410-a-check-must-have-been-red	a run whose checks are all ledgered passes the gate	never	-
 harness_selftest	410-a-check-must-have-been-red	a second mutation ACCUMULATES rather than replacing the first	never	-
 harness_selftest	410-a-check-must-have-been-red	a stale prior is named WITH its distance from HEAD	never	-
 harness_selftest	410-a-check-must-have-been-red	an absolute budget path resolves against git rather than shrugging	never	-
 harness_selftest	410-a-check-must-have-been-red	an empty log is one too, because there is nothing to reconcile	never	-
+harness_selftest	410-a-check-must-have-been-red	an integrity failure says regenerating will not help	never	-
 harness_selftest	410-a-check-must-have-been-red	and a level prior carries no distance, so zero is silent	never	-
 harness_selftest	410-a-check-must-have-been-red	and a raise against that base ref is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	and a record missing its verdict	never	-
-harness_selftest	410-a-check-must-have-been-red	and a refused gate fails the major	never	-
 harness_selftest	410-a-check-must-have-been-red	and an empty mutation is a placeholder, not an empty last field	never	-
 harness_selftest	410-a-check-must-have-been-red	and it entered as debt, not as an observation nothing made	never	-
+harness_selftest	410-a-check-must-have-been-red	and it is a different sentence from the refusal, not the same one twice	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is named, so the author knows which one	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is the new one that is named, not the one already ledgered	never	-
 harness_selftest	410-a-check-must-have-been-red	and it runs before the build directory is removed, which is the only place it can	never	-
-harness_selftest	410-a-check-must-have-been-red	and it says it was asked to compare and could not	never	-
+harness_selftest	410-a-check-must-have-been-red	and it says the change introduces the file rather than raising anything	never	-
 harness_selftest	410-a-check-must-have-been-red	and it says why, rather than falling back to something weaker	never	-
 harness_selftest	410-a-check-must-have-been-red	and none of them ends in a tab	never	-
 harness_selftest	410-a-check-must-have-been-red	and not against one that stayed green	never	-
@@ -646,6 +649,7 @@ harness_selftest	410-a-check-must-have-been-red	and the runner names no remote a
 harness_selftest	410-a-check-must-have-been-red	auto refuses when GITHUB_BASE_REF names a ref that is not here	never	-
 harness_selftest	410-a-check-must-have-been-red	auto uses the base ref when it resolves, and names it	never	-
 harness_selftest	410-a-check-must-have-been-red	auto with no base ref and no upstream is an integrity failure	never	-
+harness_selftest	410-a-check-must-have-been-red	both failure arms fail the major	never	-
 harness_selftest	410-a-check-must-have-been-red	but that suite is counted as not covered, which is the debt	never	-
 harness_selftest	410-a-check-must-have-been-red	each says what was wrong with the input	never	-
 harness_selftest	410-a-check-must-have-been-red	every committed row has five fields	never	-
@@ -660,6 +664,7 @@ harness_selftest	410-a-check-must-have-been-red	premise: the budget is a tracked
 harness_selftest	410-a-check-must-have-been-red	premise: the budget was restored byte-exact	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the check has history before the rename	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the fixture log names checks the real ledger already knows	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the gate's status block was found in the runner	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger is not empty, so the partition means something	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger itself is a tracked file, not a variable	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger tool exists	never	-
@@ -679,6 +684,7 @@ harness_selftest	410-a-check-must-have-been-red	the distance travels with a refu
 harness_selftest	410-a-check-must-have-been-red	the gate refuses to run without the registered suite list	never	-
 harness_selftest	410-a-check-must-have-been-red	the ledger partitions into observed and never	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner asks the tool to resolve the prior rather than naming one	never	-
+harness_selftest	410-a-check-must-have-been-red	the runner captures the gate's status rather than only its success	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner invokes the ledger gate	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner passes --against to the gate	never	-
 harness_selftest	410-a-check-must-have-been-red	the same check in two logs is two runs, not a duplicate	never	-

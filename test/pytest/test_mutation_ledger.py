@@ -259,8 +259,22 @@ def test_the_runner_invokes_the_gate_before_it_removes_the_logs(expect):
     expect.at_least(len(teardown), 1, "premise: the runner removes the build directory")
     expect.text("before" if call[0] < teardown[-1] else "after", "before",
                 "and it runs before the logs are removed, the only place it can")
-    window = "\n".join(text[call[0]:call[0] + 8])
-    expect.num(window.count("verfail=1"), 1, "and a refused gate fails the major")
+    # The block is extracted, not a fixed-size window: a window's size is a fact
+    # about formatting, and the first version measured 8 lines and broke the moment
+    # the call site gained a comment.
+    src = RUNNER.read_text()
+    block = src[src.index("\t\t_led_rc=$?"):]
+    block = block[:block.index("\t\tesac") + len("\t\tesac")]
+    # Comments stripped: the block's own explanation quotes the sentences counted
+    # below, so an unstripped extraction counts the documentation as an occurrence.
+    block = "\n".join(l for l in block.splitlines() if not l.strip().startswith("#"))
+    expect.num(block.count("verfail=1"), 2,
+               "both failure arms fail the major")
+    expect.num(block.count("has a check the ledger has never seen"), 1,
+               "a refusal keeps the regenerate-the-ledger wording")
+    expect.num(block.count("could not run the ledger gate at all"), 1,
+               "and an integrity failure gets its own sentence, since regenerating "
+               "the ledger would not help")
 
 
 def test_the_committed_ledger_and_budget_agree(expect):

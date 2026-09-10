@@ -233,8 +233,6 @@ check "the runner invokes the ledger gate" \
 check "and it runs before the build directory is removed, which is the only place it can" \
 	"$([ "$(grep -n 'pgc_ledger.py" gate' "$_rv" | cut -d: -f1)" -lt \
 	    "$(grep -n 'rm -rf "\$builddir"' "$_rv" | tail -1 | cut -d: -f1)" ] && echo before || echo after)" "before"
-check "and a refused gate fails the major" \
-	"$(grep -A8 'pgc_ledger.py" gate' "$_rv" | grep -c 'verfail=1')" "1"
 
 # ---- the committed files agree ----------------------------------------------
 
@@ -327,12 +325,24 @@ check "premise: the raised copy really does carry a higher ceiling" \
 	"$(sed -n 's/^suites_not_covered //p' "$_mono_raised")" "9999"
 check "premise: and it is a file git has never seen, which is the case that used to fail open" \
 	"$(git -C "$PGC_TESTDIR" show "HEAD:test/check_ledger_budget.txt.raised" >/dev/null 2>&1 && echo tracked || echo untracked)" "untracked"
-check "a budget git does not know is an integrity failure, not a note" \
+# A FILE THAT DOES NOT EXIST AT THE PRIOR HAS NO CEILING TO VIOLATE, so it is a
+# NOTE rather than an error. Introducing the budget is not raising it.
+#
+# The first version made it an error and the gate caught its own bootstrap the
+# first time it ran in CI: #925's base is #923's branch, where the budget does not
+# exist because this change adds it, so `auto` resolved the base correctly, found
+# no prior, failed closed, and reddened the matrix. A PR introducing the file could
+# never pass its own gate.
+#
+# It is not a hole: deleting the budget on a branch and re-adding it higher does
+# not reach here, because the file still exists at the prior and the comparison
+# happens. Only a genuinely new file gets the note.
+check "a budget that does not exist at the prior is a note, not a refusal" \
 	"$(_led_rc gate --ledger "$_ledger" --budget "$_mono_raised" --registered "$_mono_reg" \
-		--against HEAD "$_mono_log")" "2"
-check "and it says it was asked to compare and could not" \
+		--against HEAD "$_mono_log")" "0"
+check "and it says the change introduces the file rather than raising anything" \
 	"$(_led_run gate --ledger "$_ledger" --budget "$_mono_raised" --registered "$_mono_reg" \
-		--against HEAD "$_mono_log" | grep -c 'does not exist at HEAD')" "1"
+		--against HEAD "$_mono_log" | grep -c 'this change introduces it')" "1"
 rm -f "$_mono_raised"
 
 # And the raise itself, on the tracked path, by rewriting it in place and putting
@@ -470,3 +480,36 @@ check "the distance travels with a refusal too, not only with a pass" \
 	"$(cd "$_dist" && sed -i 's/^suites_not_covered 7$/suites_not_covered 99/' b.txt
 	   python3 "$_led" gate --ledger led --budget b.txt --registered reg \
 		--against oldbase log 2>&1 | grep -c 'against oldbase (3 commits behind HEAD)')" "1"
+
+# ---- the runner must not collapse the two failure kinds ---------------------
+#
+# The gate distinguishes rc=1, a real refusal whose fix is to regenerate the
+# ledger, from rc=2, the gate unable to do its job at all. The runner reported
+# both as "has a check the ledger has never seen", which sends the reader at a
+# repair that cannot help -- and printed it three lines below the gate's own
+# "new this run=0", which says the opposite. Reported by OffgridwithJD from the
+# CI log of this very branch.
+
+# The block is EXTRACTED and tested, not counted inside a -A window. A window's
+# size is a fact about formatting: the first version of these arms measured 6, 8
+# and 12 lines, and every one of them went wrong the moment the call site gained
+# a comment. Selftest 320 already takes this approach with the runner's classifier.
+# Comments stripped. The block's own explanation quotes the sentences these arms
+# count, so an unstripped extraction counts the documentation as a second
+# occurrence -- selftest 080's control problem, which this session has now met
+# five times in five different files.
+_ledcase="$(sed -n '/^\t\t_led_rc=\$?$/,/^\t\tesac$/p' "$_rv" | grep -vE '^[[:space:]]*#')"
+check "premise: the gate's status block was found in the runner" \
+	"$(printf '%s' "$_ledcase" | grep -c 'case "\$_led_rc" in')" "1"
+check "the runner captures the gate's status rather than only its success" \
+	"$(grep -c '_led_rc=\$?' "$_rv")" "1"
+check "a refusal keeps the regenerate-the-ledger wording" \
+	"$(printf '%s' "$_ledcase" | grep -c 'has a check the ledger has never seen')" "1"
+check "an integrity failure says regenerating will not help" \
+	"$(printf '%s' "$_ledcase" | grep -c 'will not help')" "1"
+check "and it is a different sentence from the refusal, not the same one twice" \
+	"$(printf '%s' "$_ledcase" | grep -c 'could not run the ledger gate at all')" "1"
+check "a clean status says nothing and does not fail the major" \
+	"$(printf '%s' "$_ledcase" | grep -cE '^[[:space:]]+0\)[[:space:]]*;;[[:space:]]*$')" "1"
+check "both failure arms fail the major" \
+	"$(printf '%s' "$_ledcase" | grep -c 'verfail=1')" "2"

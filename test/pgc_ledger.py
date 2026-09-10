@@ -322,7 +322,12 @@ def _behind(path, ref):
 
 
 def _committed_budget(path, ref):
-    """The budget as of `ref`. Raises rather than returning None.
+    """The budget as of `ref`, or None when the file does not exist there.
+
+    None means "this change introduces the file", which is not a raise. Every
+    OTHER failure -- an unresolvable ref, a path outside its repository, a budget
+    naming no ceiling -- raises, because asked to compare and unable is a different
+    thing from nothing to compare.
 
     `git show REF:PATH` needs a REPO-RELATIVE path. The production caller passes an
     absolute one inside a copied build directory, so the first version returned
@@ -347,13 +352,28 @@ def _committed_budget(path, ref):
         rel = abspath.relative_to(pathlib.Path(top).resolve())
     except ValueError as e:
         raise LedgerError(f"{path} resolves outside its own repository at {top}") from e
+    # A FILE THAT DOES NOT EXIST AT THE PRIOR HAS NO CEILING TO VIOLATE. This
+    # returns None and the caller notes it, rather than erroring, and the
+    # distinction is the whole of it: introducing the budget is not raising it.
+    #
+    # The gate caught its own bootstrap the first time it ran in CI -- #925's base
+    # is #923's branch, where check_ledger_budget.txt does not exist because this
+    # PR adds it, so `auto` resolved the base correctly, found no prior, failed
+    # closed, and reddened the matrix. Correct behaviour for a rule that could not
+    # be satisfied: a PR introducing the file could never pass its own gate.
+    #
+    # It is not a hole. Deleting the budget on a branch and re-adding it with a
+    # higher ceiling does not reach here, because the file still exists at the
+    # prior and the comparison happens. Only a genuinely new file gets the note,
+    # and a genuinely new budget file is reviewed as a new file.
+    #
+    # An unresolvable REF stays an error above, and a malformed budget stays one
+    # below. Asked to compare and unable is different from nothing to compare.
     try:
         blob = subprocess.run(["git", "-C", top, "show", f"{ref}:{rel.as_posix()}"],
                               capture_output=True, text=True, check=True).stdout
-    except (subprocess.CalledProcessError, OSError) as e:
-        raise LedgerError(
-            f"--against {ref} was given, but {rel.as_posix()} does not exist at {ref}, "
-            "so there is no prior ceiling to compare against") from e
+    except (subprocess.CalledProcessError, OSError):
+        return None
     out = {}
     for line in blob.splitlines():
         line = line.strip()
@@ -438,7 +458,12 @@ def cmd_gate(args):
         # There is no better ref to pick that does not guess, so the weakness is
         # made visible instead. It costs nothing when the number is 0.
         shown = f"{ref}{_behind(args.budget, ref)}"
-        p_want = _committed_budget(args.budget, ref)["suites_not_covered"]
+        prior = _committed_budget(args.budget, ref)
+        if prior is None:
+            print(f"    no budget at {shown}: this change introduces it, so there is no "
+                  f"prior ceiling it could have raised")
+            return rc
+        p_want = prior["suites_not_covered"]
         if want > p_want:
             print(f"    suites_not_covered was raised from {p_want} to {want} "
                   f"(against {shown}): the ceiling may only fall")

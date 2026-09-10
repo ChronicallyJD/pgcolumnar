@@ -1370,15 +1370,28 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		# change under review while printing that it had compared. A gate that
 		# quietly enforces less than it claims is what this whole change refuses.
 		# shellcheck disable=SC2086
-		if ! python3 "$builddir/test/pgc_ledger.py" gate \
+		python3 "$builddir/test/pgc_ledger.py" gate \
 			--ledger "$builddir/test/check_ledger.tsv" \
 			--budget "$builddir/test/check_ledger_budget.txt" \
 			--registered "$_acc_registered" \
 			--against auto \
-			$_led_logs; then
-			echo "  PG$major has a check the ledger has never seen, which is not a pass"
-			verfail=1
-		fi
+			$_led_logs
+		_led_rc=$?
+		# BRANCH ON THE STATUS THE TOOL WENT TO THE TROUBLE OF DISTINGUISHING.
+		# rc=1 is a real refusal and the fix is to regenerate the ledger; rc=2 is
+		# the gate unable to do its job at all, where regenerating helps nothing.
+		# Collapsing them printed "has a check the ledger has never seen" three
+		# lines below the gate's own "new this run=0", which contradicts it and
+		# sends the reader at the wrong repair. Reported by OffgridwithJD.
+		case "$_led_rc" in
+			0)	;;
+			1)	echo "  PG$major has a check the ledger has never seen, which is not a pass"
+				verfail=1 ;;
+			*)	echo "  PG$major could not run the ledger gate at all, which is not a pass:"
+				echo "  the input or the prior ceiling was unusable, and regenerating the"
+				echo "  ledger will not help. The failure above says which."
+				verfail=1 ;;
+		esac
 	fi
 
 	# How many of the suites counted as having RUN actually accounted for their
