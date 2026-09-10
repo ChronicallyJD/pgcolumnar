@@ -60,9 +60,10 @@ behaviour, the source of that number is named.
 - [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
 - [14. test_suite_accounting.py: the matrix accounting for its own suites](#14-test_suite_accountingpy-the-matrix-accounting-for-its-own-suites)
-- [15. Adding a test](#15-adding-a-test)
-- [16. What this corpus does NOT yet refuse](#16-what-this-corpus-does-not-yet-refuse)
-- [17. Traps this corpus records](#17-traps-this-corpus-records)
+- [15. test_check_results_are_machine_readable.py: one counter, one record](#15-test_check_results_are_machine_readablepy-one-counter-one-record)
+- [16. Adding a test](#16-adding-a-test)
+- [17. What this corpus does NOT yet refuse](#17-what-this-corpus-does-not-yet-refuse)
+- [18. Traps this corpus records](#18-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -1105,7 +1106,67 @@ reproduces on long files and not short ones -- it passed every fixture and faile
 on the real population, naming two of the longest suites. Selftest 040 carries the same
 story from #473 and #476.
 
-## 15. Adding a test
+## 15. test_check_results_are_machine_readable.py: one counter, one record
+
+Check results were prose. `check`, `check_num` and `check_text` printed `PASS` or
+`FAIL` and nothing else, so proving that a mutation reddened one **named** check meant
+grepping text. That is how a reverted guard once reported plain green while the check
+count fell from 190 to 186 -- the suite passed, and the only evidence anything had
+changed was a number nobody was comparing.
+
+The fix is not a second emitter beside the counters. A second source of truth for how
+many checks ran is the defect this family of issues exists to close, and `lib.sh` had
+**eleven** places that bumped `PGC_CHECKS` -- eleven chances to add a twelfth and
+forget the line beside it, which is exactly what `projections.sh`'s `expect_fail` did
+with ten call sites for as long as it existed.
+
+So counting a check and recording it are **one operation**, `pgc_record`. A helper
+cannot report an outcome without being counted, and cannot be counted without
+reporting one, because no code path does either alone. `checks run: N` and the N
+record lines are the same increment seen twice.
+
+The record is tab separated -- suite, name, verdict, reason -- so a check name with
+spaces survives, and the reason carries the `REASON_CODE` from #915. That is what
+makes it more than a reformat: an unrunnable check is distinguishable from a passing
+one without parsing prose.
+
+### `test_lib_sh_counts_a_check_in_exactly_one_place`
+
+The structural arm, and the one that matters most. It stops the next `expect_fail`
+from being written rather than catching it after a year of silent miscounting.
+
+### `test_each_verdict_emits_one_record_carrying_its_fields`
+
+PASS, FAIL and UNRUN each emit one record with the right verdict, and the name field
+keeps its spaces. A reason code the enum does not hold is already a failure, and must
+record the verdict it produced rather than the one it was asked for.
+
+### `test_every_helper_records_exactly_once`
+
+`check_text`, `check_num`, `check_ratio`, `pgc_pass` and `pgc_fail`, not a sample of
+them. Each had its own counter bump and its own outcome line, and each was one place
+the pair could come apart.
+
+### `test_the_human_lines_are_byte_identical`
+
+3,762 call sites, and suites, selftests and CI all grep `^PASS` and `^FAIL`. Adding a
+record beside them is only safe if the prose did not move, so the exact strings are
+pinned rather than the refactor trusted.
+
+### `test_the_record_count_equals_the_counter_the_summary_reports`
+
+One operation, so it cannot fail by drifting. It can fail if a helper is added that
+prints an outcome without recording it, which is the `expect_fail` shape.
+
+### `test_the_runner_reconciles_records_against_the_stated_count`
+
+A suite's log states `checks run: N` and carries N records. Those are two artifacts of
+the same run and they can genuinely disagree: a suite killed mid-way, a truncated log,
+a helper that prints an outcome without recording it. A log with no count at all never
+reached its summary -- a different fault from a miscount, and not a clean
+reconciliation.
+
+## 16. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -1132,7 +1193,7 @@ story from #473 and #476.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 16. What this corpus does NOT yet refuse
+## 17. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
@@ -1144,7 +1205,7 @@ Read it before adding a test. The gaps most likely to affect a new test are that
 same family satisfies it, and that a write is not required to have written anything.
 Both are named there with the refusal each needs.
 
-## 17. Traps this corpus records
+## 18. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.

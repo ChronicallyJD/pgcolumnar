@@ -28,6 +28,10 @@
 # failure and continue.
 
 PGC_FAIL=0
+# The suite's own name, resolved ONCE at load rather than per check: pgc_record
+# runs at every one of 3,762 call sites, and a basename fork at each of them is
+# 3,762 forks a suite does not need.
+PGC_SUITE="$(basename "$0" .sh)"
 PGC_CHECKS=0
 
 # The status pgc_summary uses for "ran no checks".
@@ -969,17 +973,62 @@ psql_file() {
 # only supported way to add a check from outside this file, and selftest part 320
 # sweeps for direct PGC_CHECKS writes so the next expect_fail is caught when it
 # is written rather than when it reddens something.
-pgc_pass() {	# pgc_pass NAME
+# ---- one place that counts a check, and it is the same place that records it -
+#
+# lib.sh had ELEVEN sites bumping PGC_CHECKS, each with its own outcome line
+# beside it. That is eleven chances to add a twelfth and forget the line, which
+# is exactly what projections.sh's expect_fail did with ten call sites for as
+# long as it existed.
+#
+# Counting and recording are therefore ONE operation. A helper cannot report an
+# outcome without being counted, and cannot be counted without reporting one,
+# because there is no code path that does either alone. `checks run: N` and the
+# N record lines are the same increment seen twice.
+#
+# DISPLAY is passed whole rather than composed here, so every existing human line
+# stays byte-identical: suites, selftests and CI all grep `^PASS` and `^FAIL`,
+# and 3,762 call sites is far past what a careful refactor can be trusted on.
+#
+# The record is tab separated -- suite, name, verdict, reason -- so a check name
+# containing spaces survives, and the reason carries the REASON_CODE #915
+# introduced. That is what makes this more than a reformat: an unrunnable check
+# is distinguishable from a passing one without parsing prose.
+pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
+	local _v="$1" _name="$2" _display="$3" _reason="${4:-}"
 	PGC_CHECKS=$((PGC_CHECKS + 1))
-	PGC_PASSED=$((PGC_PASSED + 1))
-	echo "PASS  $1"
+	case "$_v" in
+		PASS)  PGC_PASSED=$((PGC_PASSED + 1)) ;;
+		FAIL)  PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1 ;;
+		UNRUN) PGC_UNRUN=$((PGC_UNRUN + 1)) ;;
+		*)
+			# An unknown verdict is a failure of the harness, not a check to
+			# drop. Dropping it would leave PGC_CHECKS bumped with no outcome
+			# recorded, which is the reconciliation failure pgc_summary refuses.
+			PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1
+			_display="FAIL  $_name: pgc_record was given the verdict [$_v], which is not PASS, FAIL or UNRUN"
+			_v=FAIL
+			;;
+	esac
+	printf '%s\n' "$_display"
+	# Tabs in a field would split it. Nothing in the tree puts one in a check
+	# name, and this makes that true rather than assumed.
+	printf 'RESULT\t%s\t%s\t%s\t%s\n' \
+		"${PGC_SUITE:-unknown}" \
+		"$(printf '%s' "$_name" | tr '\t' ' ')" \
+		"$_v" \
+		"$(printf '%s' "$_reason" | tr '\t' ' ')"
+}
+
+pgc_pass() {	# pgc_pass NAME
+	pgc_record PASS "$1" "PASS  $1"
 }
 
 pgc_fail() {	# pgc_fail NAME DETAIL
-	PGC_CHECKS=$((PGC_CHECKS + 1))
-	PGC_FAILED=$((PGC_FAILED + 1))
-	PGC_FAIL=1
-	if [ -n "${2:-}" ]; then echo "FAIL  $1: $2"; else echo "FAIL  $1"; fi
+	if [ -n "${2:-}" ]; then
+		pgc_record FAIL "$1" "FAIL  $1: $2"
+	else
+		pgc_record FAIL "$1" "FAIL  $1"
+	fi
 }
 
 # A check that could not be evaluated is a third state, not a pass.
@@ -998,30 +1047,23 @@ pgc_fail() {	# pgc_fail NAME DETAIL
 # FAILED, because the failure is the more urgent fact.
 check_unrunnable() {	# check_unrunnable NAME REASON_CODE DETAIL
 	local name="$1" reason="${2:-}" detail="${3:-}"
-	PGC_CHECKS=$((PGC_CHECKS + 1))
 	case " $PGC_UNRUN_REASONS " in
 		*" $reason "*) ;;
 		*)
-			echo "FAIL  $name: unrunnable reason [$reason] is not one of: $PGC_UNRUN_REASONS"
-			PGC_FAIL=1
-			PGC_FAILED=$((PGC_FAILED + 1))
+			pgc_record FAIL "$name" \
+				"FAIL  $name: unrunnable reason [$reason] is not one of: $PGC_UNRUN_REASONS"
 			return
 			;;
 	esac
-	PGC_UNRUN=$((PGC_UNRUN + 1))
-	echo "UNRUN  $name: $reason: $detail"
+	pgc_record UNRUN "$name" "UNRUN  $name: $reason: $detail" "$reason"
 }
 
 check() {
 	local name="$1" got="$2" want="$3"
-	PGC_CHECKS=$((PGC_CHECKS + 1))
 	if [ "$got" = "$want" ]; then
-		PGC_PASSED=$((PGC_PASSED + 1))
-		echo "PASS  $name"
+		pgc_record PASS "$name" "PASS  $name"
 	else
-		echo "FAIL  $name: got [$got] want [$want]"
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
+		pgc_record FAIL "$name" "FAIL  $name: got [$got] want [$want]"
 	fi
 }
 
@@ -1071,11 +1113,8 @@ pgc_is_number() {	# $1 -> 0 when $1 is a number
 check_text() {
 	local name="$1" got="$2" want="$3"
 	if [ -z "$got" ] || [ -z "$want" ]; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: a side is empty, so nothing was compared:" \
-			"got [$got] want [$want]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: a side is empty, so nothing was compared: got [$got] want [$want]"
 		return 1
 	fi
 	check "$name" "$got" "$want"
@@ -1085,11 +1124,8 @@ check_text() {
 check_num() {
 	local name="$1" got="$2" want="$3"
 	if ! pgc_is_number "$got" || ! pgc_is_number "$want"; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: not a measurement, so nothing was compared:" \
-			"got [$got] want [$want]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: not a measurement, so nothing was compared: got [$got] want [$want]"
 		return 1
 	fi
 	check "$name" "$got" "$want"
@@ -1121,30 +1157,20 @@ check_ratio() {	# $1 label, $2 a, $3 b, $4 max
 	local name="$1" a="$2" b="$3" max="$4" ratio
 
 	if ! pgc_is_number "$a" || ! pgc_is_number "$b" || ! pgc_is_number "$max"; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: not a measurement, so no ratio was formed:" \
-			"a=[$a] b=[$b] max=[$max]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: not a measurement, so no ratio was formed: a=[$a] b=[$b] max=[$max]"
 		return 1
 	fi
 	if [ "$(awk -v x="$a" -v y="$b" 'BEGIN { print (x + 0 == 0 || y + 0 == 0) ? "yes" : "no" }')" = yes ]; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: a side of the ratio is zero, so nothing was measured:" \
-			"a=[$a] b=[$b]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: a side of the ratio is zero, so nothing was measured: a=[$a] b=[$b]"
 		return 1
 	fi
 	ratio="$(awk -v a="$a" -v b="$b" 'BEGIN { printf "%.2f", a / b }')"
-	PGC_CHECKS=$((PGC_CHECKS + 1))
 	if [ "$(awk -v r="$ratio" -v m="$max" 'BEGIN { print (r <= m) ? "yes" : "no" }')" = yes ]; then
-		PGC_PASSED=$((PGC_PASSED + 1))
-		echo "PASS  $name (${ratio}x, bound ${max}x, from a=$a b=$b)"
+		pgc_record PASS "$name" "PASS  $name (${ratio}x, bound ${max}x, from a=$a b=$b)"
 	else
-		echo "FAIL  $name: ${ratio}x exceeds the ${max}x bound (a=$a b=$b)"
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
+		pgc_record FAIL "$name" "FAIL  $name: ${ratio}x exceeds the ${max}x bound (a=$a b=$b)"
 	fi
 }
 
@@ -1157,10 +1183,8 @@ pgc_require_tools() {
 		command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
 	done
 	if [ -n "$missing" ]; then
-		echo "FAIL  the tools this suite measures with are missing:$missing"
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
+		pgc_record FAIL "the tools this suite measures with are missing" \
+			"FAIL  the tools this suite measures with are missing:$missing"
 		return 1
 	fi
 	return 0
@@ -1479,10 +1503,7 @@ pgc_skip() {  # pgc_skip <capability> <message>
 		echo "SKIP  $2 (waived by $allow_one or PGC_ALLOW_MISSING)"
 		pgc_summary
 	fi
-	PGC_CHECKS=$((PGC_CHECKS + 1))
-	PGC_FAIL=1
-	PGC_FAILED=$((PGC_FAILED + 1))
-	echo "FAIL  $2"
+	pgc_record FAIL "$2" "FAIL  $2"
 	echo "      A missing dependency is an environment defect, not a pass. Install"
 	echo "      it, or set $allow_one=1 to run knowingly without this coverage."
 	pgc_summary

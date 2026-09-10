@@ -940,6 +940,34 @@ pgc_log_shows_accounting() {	# pgc_log_shows_accounting LOGFILE -> yes|no
 	fi
 }
 
+pgc_reconcile_records() {	# pgc_reconcile_records LOGFILE -> 0 ok, 1 mismatch
+	# A suite's log states `checks run: N` and carries N record lines. They are
+	# the same increment seen twice -- pgc_record does both -- so this cannot
+	# fail by drifting. It CAN fail, which is why it is asserted: a suite killed
+	# mid-way, a truncated log, or a helper that prints an outcome without
+	# recording it all separate the two.
+	#
+	# A log with no `checks run:` line at all never reached its summary. That is a
+	# different fault from a miscount, and it must not read as a clean
+	# reconciliation just because there is nothing to compare against.
+	local _log="$1" _records _stated
+	if [ ! -f "$_log" ]; then
+		echo "    no log to reconcile records against: $_log"
+		return 1
+	fi
+	_records="$(grep -c '^RESULT	' "$_log" || true)"
+	_stated="$(sed -n 's/^checks run: \([0-9][0-9]*\)$/\1/p' "$_log" | tail -1)"
+	if [ -z "$_stated" ]; then
+		echo "    records=$_records but the log never stated a count, so it did not reach its summary"
+		return 1
+	fi
+	if [ "$_records" != "$_stated" ]; then
+		echo "    records=$_records but the log states checks run: $_stated"
+		return 1
+	fi
+	return 0
+}
+
 pgc_reconcile_accounting() {	# pgc_reconcile_accounting DECLARED OBSERVED [NOTDISPATCHED] -> 0 ok, 1 asymmetric
 	# Set equality in both directions. The two directions catch opposite
 	# mistakes and neither can stand in for the other:
@@ -1088,11 +1116,25 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	# PG16 would report PG15's incomplete suites in its own summary line and
 	# still print PASS, because verfail is per major and this count was not.
 	suites_incomplete=0
+	_rec_bad=0
 	for s in "${SUITES[@]}"; do
 		_rc="$(cat "$builddir/${s}.rc" 2>/dev/null)"
 		_verdict="$(pgc_classify_suite_rc "$_rc" "$builddir/${s}.log")"
 		pgc_tally_suite "$s" "$_verdict" "$builddir/${s}.log"
+		# Only a suite that reached its summary has a count to reconcile against
+		# (#917). One that was never dispatched, or that does not use lib.sh's
+		# accounting at all, has nothing to compare and is not a mismatch.
+		if [ "$(pgc_log_shows_accounting "$builddir/${s}.log")" = yes ]; then
+			if ! pgc_reconcile_records "$builddir/${s}.log"; then
+				echo "    in $s"
+				_rec_bad=$((_rec_bad + 1))
+			fi
+		fi
 	done
+	if [ "$_rec_bad" != 0 ]; then
+		echo "  $_rec_bad suite(s) on PG$major state a check count their records do not match"
+		verfail=1
+	fi
 
 	# How many suites actually asserted something, said out loud (#447).
 	#
