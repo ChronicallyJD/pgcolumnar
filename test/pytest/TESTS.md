@@ -1126,9 +1126,12 @@ reddens the moment someone *fixes* something teaches people not to fix things.
 
 ### `test_the_population_partitions_and_prints_its_identity`
 
-`inputs == sum(buckets)` over the registered population. Unlike the symmetry check's
-identity, this one can be false on the data: a name can genuinely fall outside all four
-buckets.
+`inputs == sum(buckets)` over the registered population, printed per the house rule.
+Like the symmetry check's identity it **cannot** be false on the data — the four buckets
+are built by successive subtraction from the registered set, so their sum equals it
+identically, measured at 0 firings over 400 random four-set inputs while the real bucket
+findings fired on 353. What it guards is `comm` reading unsorted input, which produces
+buckets that are not a partition at all.
 
 ### `test_the_debt_file_is_tracked_and_holds_only_registered_suites`
 

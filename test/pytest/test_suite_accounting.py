@@ -436,9 +436,14 @@ def test_the_debt_file_excuses_only_what_it_names(tmp_path, expect):
 
 
 def test_the_population_partitions_and_prints_its_identity(tmp_path, expect):
-    """inputs == sum(buckets) over the REGISTERED population -- the identity the
-    symmetry check could not offer, because there a name can genuinely fall
-    outside all four buckets."""
+    """inputs == sum(buckets) over the REGISTERED population, printed per the house rule.
+
+    It cannot be false on the data: the buckets are built by successive subtraction
+    from the registered set, so their sum equals it identically -- 0 firings over 400
+    random four-set inputs while the real bucket findings fired on 353. What it guards
+    is `comm` reading unsorted input. The arm below it, on the unaccounted bucket, is
+    the one that carries weight here.
+    """
     reg = _write(tmp_path, "reg", "a\nb\nc\nd\n")
     acct = _write(tmp_path, "acct", "a\n")
     nd = _write(tmp_path, "nd", "b\n")
