@@ -175,9 +175,13 @@ check "so vacuum_sorted on the child does the work" \
 # This is why the cascade is not a cosmetic gap. #751 reads the same mark to
 # claim a pathkey, so a stale mark makes the planner drop the Sort.
 sorts() {
-	env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres -d "$PGC_DB" -At \
-		-c "EXPLAIN (COSTS OFF) $1" 2>/dev/null \
-		| grep -qE '^ *(->)? *(Incremental )?Sort' && echo yes || echo no
+	# grep -c on a captured value, not a pipe into grep -q; see lib.sh's
+	# pgc_is_columnar_scan for the mechanism and the measurement.
+	local _plan
+	_plan="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres -d "$PGC_DB" -At \
+		-c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
+	[ "$(grep -cE '^ *(->)? *(Incremental )?Sort' <<<"$_plan" || true)" != 0 ] \
+		&& echo yes || echo no
 }
 psql_run "CREATE TABLE wp (k int, j int) PARTITION BY RANGE (k);"
 psql_run "CREATE TABLE wp1 PARTITION OF wp FOR VALUES FROM (0) TO (100000) USING pgcolumnar;"

@@ -45,9 +45,13 @@ pgc_check_ordered_oracle
 
 # Does the plan for this query contain a Sort (or Incremental Sort) node?
 sorts() {	# sorts QUERY -> yes|no
-	env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
-		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null \
-		| grep -qE '^ *(->)? *(Incremental )?Sort' && echo yes || echo no
+	# grep -c on a captured value, not a pipe into grep -q; see lib.sh's
+	# pgc_is_columnar_scan for the mechanism and the measurement.
+	local _plan
+	_plan="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
+		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
+	[ "$(grep -cE '^ *(->)? *(Incremental )?Sort' <<<"$_plan" || true)" != 0 ] \
+		&& echo yes || echo no
 }
 inv() {		# inversions on the lead column in the order the scan returns rows
 	q "SELECT count(*) FROM (SELECT $2, lag($2) OVER () AS p FROM $1) s WHERE p > $2;"
@@ -443,10 +447,14 @@ check "REFUSE: a recorded name that no longer resolves is not a claim" \
 
 # sorts() runs one statement, so the SET has to travel with the connection.
 sorts_off() {
-	env PATH="$PGC_BINDIR:$PATH" PGOPTIONS="-c pgcolumnar.enable_sorted_pathkeys=off" \
+	# grep -c on a captured value, not a pipe into grep -q; see lib.sh's
+	# pgc_is_columnar_scan for the mechanism and the measurement.
+	local _plan
+	_plan="$(env PATH="$PGC_BINDIR:$PATH" PGOPTIONS="-c pgcolumnar.enable_sorted_pathkeys=off" \
 		psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres -d "$PGC_DB" -At \
-		-c "EXPLAIN (COSTS OFF) $1" 2>/dev/null \
-		| grep -qE '^ *(->)? *(Incremental )?Sort' && echo yes || echo no
+		-c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
+	[ "$(grep -cE '^ *(->)? *(Incremental )?Sort' <<<"$_plan" || true)" != 0 ] \
+		&& echo yes || echo no
 }
 check "premise: the claim is live with the GUC on" "$(sorts 'SELECT k FROM c ORDER BY k')" "no"
 check "control: pgcolumnar.enable_sorted_pathkeys = off restores the Sort" \

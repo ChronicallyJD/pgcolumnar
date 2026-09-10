@@ -121,7 +121,40 @@ _epipe_hd="$(_epipe_heredoc_lines "${_epipe_globs[@]}" 2>/dev/null || true)"
 # and the rule's own explanation -- and the note beside every site that was fixed
 # -- necessarily spells the shape out. A sweep that counts its own documentation
 # is selftest 260's mistake.
-_epipe_hits="$(grep -nE '(echo|printf)[^|]*\|[[:space:]]*grep -[a-zA-Z]*q' \
+# ANY PRODUCER, not just echo and printf. This reverses a scoping decision
+# recorded above, so the reason is recorded too.
+#
+# The rule's own stated principle is a reader that exits early AND whose EXIT
+# STATUS is the answer being read. That is producer-independent: the writer takes
+# EPIPE whether it is a builtin, a psql, an ldd or an ss. Scoping to echo and
+# printf was a narrower implementation than the principle, justified by "a
+# pipeline out of psql or a file is a different question" -- which is true of
+# `| head -1` used as TEXT, and false of `| grep -q` used as a VERDICT.
+#
+# Twenty-six sites were outside the old pattern, two of them in lib.sh and shared
+# by every suite that asks whether a plan is a columnar scan. The worst was
+# native_vecskip.sh's "premise: and it is not the scalar scan", which WANTS "no":
+# a spurious EPIPE answer makes that premise pass for the wrong reason, so the
+# race is vacuity there rather than a false red.
+#
+# NOT CLAIMED TO BE LYING TODAY. Measured by OffgridwithJD, 200 trials per size on
+# a loaded box, match always on line one so the answer is knowably yes:
+#
+#     1,892 bytes (EXPLAIN-sized)   0/200 wrong
+#     8,893 bytes                   1/200   <- first observed lie
+#    66,894 bytes                  21/40
+#   288,894 bytes                  40/40
+#   control, match on the LAST line so grep reads to EOF: 0/200 at every size
+#
+# It is LATENT, and the mechanism has no floor -- the probability rises with size
+# rather than crossing a threshold, which refuted a clean pipe-capacity
+# hypothesis. Reasoning about "small enough" is how #473, #476 and selftest 350
+# each survived, so the rule sweeps instead.
+# The leading [^|] excludes the `||` OPERATOR. Widening from the echo/printf
+# form lost that exclusion for free: `[ "$rc" = 124 ] || grep -q PAT <<<"$out"`
+# is a fallback branch reading a here-string -- no writer process, so no EPIPE --
+# and the first version of the widened pattern flagged both fuzz suites for it.
+_epipe_hits="$(grep -nE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' \
 	"${_epipe_globs[@]}" 2>/dev/null \
 	| grep -v '/harness_selftest.sh:' \
 	| grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
@@ -216,9 +249,29 @@ _epipe_shape='x() { printf "%s" "$1" | grep -%s PATTERN; }'
 } > "$_epipe_probe"
 _epipe_probe_hd="$(_epipe_heredoc_lines "$_epipe_probe" 2>/dev/null || true)"
 check "the sweep's pattern sees both lines of the probe" \
-	"$(grep -cE '(echo|printf)[^|]*\|[[:space:]]*grep -[a-zA-Z]*q' "$_epipe_probe")" "2"
+	"$(grep -cE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$_epipe_probe")" "2"
 check "and the heredoc exemption covers the one inside the heredoc, not the other" \
 	"$(printf '%s' "$_epipe_probe_hd" | grep -c ':3:' || true)" "1"
 check "and does not cover the live one above it" \
 	"$(printf '%s' "$_epipe_probe_hd" | grep -c ':1:' || true)" "0"
+
+# The widening itself, asserted. A producer that is neither echo nor printf must
+# be caught, or the reversal above is prose and the 26 sites come back.
+_epipe_wide="$PGC_WORKDIR/epipe_wide.sh"
+printf 'ldd /bin/sh | grep -%s libc && echo yes || echo no\n' q > "$_epipe_wide"
+check "the sweep catches a producer that is neither echo nor printf" \
+	"$(grep -cE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$_epipe_wide")" "1"
+check "premise: and the old echo/printf pattern did NOT catch it" \
+	"$(grep -cE '(echo|printf)[^|]*\|[[:space:]]*grep -[a-zA-Z]*q' "$_epipe_wide")" "0"
+
+# `||` IS NOT A PIPE. A fallback branch reading a here-string has no writer
+# process and cannot take EPIPE. The first version of the widened pattern flagged
+# both fuzz suites for exactly that, so it is pinned here rather than left to be
+# rediscovered the next time the pattern is touched.
+_epipe_oror="$PGC_WORKDIR/epipe_oror.sh"
+printf '[ "$rc" = 124 ] || grep -%s PAT <<<"$out"\n' q > "$_epipe_oror"
+check "the sweep does not mistake the || operator for a pipe" \
+	"$(grep -cE '[^|]\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$_epipe_oror")" "0"
+check "premise: and the line really does hold the reader it must not flag" \
+	"$(grep -c 'grep -q PAT' "$_epipe_oror")" "1"
 

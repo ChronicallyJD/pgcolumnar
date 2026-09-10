@@ -45,9 +45,13 @@ groupvec_off() { psql_run "ALTER DATABASE $PGC_DB SET pgcolumnar.enable_group_ve
 # "Columnar Vectorized Group Keys"; no other node emits it, so a positive grep is
 # proof of the node rather than an absence test that a fallback would also pass.
 pgc_is_groupvec() {	# query -> yes|no
-	env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
-		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null \
-		| grep -q 'Columnar Vectorized Group Keys' && echo yes || echo no
+	# grep -c on a captured plan, not a pipe into grep -q; see lib.sh's
+	# pgc_is_columnar_scan for the mechanism and the measurement.
+	local _plan
+	_plan="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
+		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
+	[ "$(grep -c 'Columnar Vectorized Group Keys' <<<"$_plan" || true)" != 0 ] \
+		&& echo yes || echo no
 }
 
 # toggle_diff LABEL "QUERY on t_col": same query, path off vs on, byte-exact.

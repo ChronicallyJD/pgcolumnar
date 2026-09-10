@@ -451,14 +451,23 @@ check "a long suite that calls pgc_summary still declares accounting" \
 	"$(pgc_suite_declares_accounting "$_bigsuite")" "yes"
 
 # And prove the arm can fail. The twin is the SHAPE that was wrong, restated
-# here rather than extracted, because the wrong version is no longer in the tree.
-_grepq_twin() {	# the original shape, restated as tightly as it can be
-	sed 's/#.*$//' "$1" \
-		| grep -qE '(^|[^_[:alnum:]])pgc_summary([^_[:alnum:]]|$)' && echo yes || echo no
-}
-check "premise: the grep -q twin is a different function from the real one" \
-	"$(type -t _grepq_twin)" "function"
+# rather than extracted, because the wrong version is no longer in the tree.
+#
+# It lives in a QUOTED HEREDOC, like selftest 080's own control and for the same
+# reason: 080 now sweeps every producer piped into an early-exit reader, so a
+# deliberate demonstration of the forbidden shape has to be text being written to
+# a file rather than a pipeline this suite runs. Exempted by property, not by a
+# line number.
+_grepq_twin_sh="$_acc/grepq_twin.sh"
+cat > "$_grepq_twin_sh" <<'TWIN'
+set -uo pipefail
+sed 's/#.*$//' "$1" \
+	| grep -qE '(^|[^_[:alnum:]])pgc_summary([^_[:alnum:]]|$)' && echo yes || echo no
+TWIN
+check "premise: the twin script was written and is runnable" \
+	"$([ -s "$_grepq_twin_sh" ] && echo yes || echo no)" "yes"
 check "the grep -q shape is the one that gets this wrong under pipefail" \
-	"$(_grepq_twin "$_bigsuite")" "no"
+	"$(bash "$_grepq_twin_sh" "$_bigsuite")" "no"
 check "and it agrees with the real reader on a SHORT file, which is why it survived review" \
-	"$(_grepq_twin "$_acc/declares.sh")" "$(pgc_suite_declares_accounting "$_acc/declares.sh")"
+	"$(bash "$_grepq_twin_sh" "$_acc/declares.sh")" \
+	"$(pgc_suite_declares_accounting "$_acc/declares.sh")"

@@ -63,7 +63,8 @@
 _tsm_root="$(cd "$PGC_TESTDIR/.." && pwd)"
 
 _tsm_has_shebang() {	# _tsm_has_shebang FILE
-	head -1 "$1" 2>/dev/null | grep -q '^#!'
+	# grep -c on a captured line, not a pipe into grep -q; see selftest 080.
+	[ "$(head -1 "$1" 2>/dev/null | grep -c '^#!' || true)" != 0 ]
 }
 
 # ok      -- shebang and bit, or neither: internally consistent

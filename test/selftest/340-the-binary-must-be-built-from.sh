@@ -877,7 +877,9 @@ printf 'x\n' > "$_lc/tree/pgcolumnar.control"
 
 _lc_have=""
 for _lc_l in C C.utf8 en_US.utf8; do
-	locale -a 2>/dev/null | grep -qx "$_lc_l" && _lc_have="$_lc_have $_lc_l"
+	# grep -c, not grep -q; see selftest 080. locale -a lists hundreds of names.
+	[ "$(locale -a 2>/dev/null | grep -cx "$_lc_l" || true)" != 0 ] \
+		&& _lc_have="$_lc_have $_lc_l"
 done
 _lc_count="$(printf '%s\n' $_lc_have | grep -c .)"
 

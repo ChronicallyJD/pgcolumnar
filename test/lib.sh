@@ -1249,9 +1249,17 @@ check_ratio_needs_quiet_machine() {  # <name> <a> <b> <bound>
 # EXPLAIN without ANALYZE is enough: the line comes from the plan rather than the
 # run, so the assertion costs a plan and does not execute the query.
 pgc_is_columnar_scan() {	# query -> yes|no
-	env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
-		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null \
-		| grep -q 'Columnar Projected Columns' && echo yes || echo no
+	# grep -c, NOT grep -q. grep -q exits the moment it matches, psql is still
+	# writing, and under a suite's `set -o pipefail` the pipeline reports failure
+	# though the pattern WAS present -- so this helper answers "no" for a plan that
+	# contains the line. Latent rather than live at EXPLAIN size (0 wrong in 200
+	# trials at 1.9KB) but with no floor in the mechanism: measured 1/200 wrong at
+	# 8.9KB and 40/40 at 289KB, on a loaded machine. grep -c reads to EOF.
+	local _plan
+	_plan="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
+		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
+	[ "$(grep -c 'Columnar Projected Columns' <<<"$_plan" || true)" != 0 ] \
+		&& echo yes || echo no
 }
 
 # Does this query's plan drive the per-row fetch path?
@@ -1278,9 +1286,12 @@ pgc_is_columnar_scan() {	# query -> yes|no
 # report "no" for a query that does exercise the cache. Measured: an UPDATE over
 # 2,000 rows made 20,366 fetch_row calls under a Custom Scan plan (#797).
 pgc_uses_row_fetch() {	# setup query -> yes|no
-	env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
-		-d "$PGC_DB" -At -c "$1" -c "EXPLAIN (COSTS OFF) $2" 2>/dev/null \
-		| grep -q 'Index Scan using' && echo yes || echo no
+	# grep -c, not grep -q; see pgc_is_columnar_scan above for the measurement.
+	local _plan
+	_plan="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
+		-d "$PGC_DB" -At -c "$1" -c "EXPLAIN (COSTS OFF) $2" 2>/dev/null)"
+	[ "$(grep -c 'Index Scan using' <<<"$_plan" || true)" != 0 ] \
+		&& echo yes || echo no
 }
 
 # Order-independent set hash of an arbitrary query's result. The row is cast to
