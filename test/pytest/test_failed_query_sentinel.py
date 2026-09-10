@@ -40,7 +40,13 @@ def _comparisons():
         if name.startswith("_"):
             continue
         params = list(inspect.signature(fn).parameters)[1:]
-        if len(params) >= 2 and params[0] == "got" and params[1] in ("want", "floor"):
+        # (forward, reverse) AS WELL AS (got, want). `ordering_observable` compares two
+        # caller-supplied readings under different parameter names, so a derivation
+        # keyed on "got" missed it -- and it was the one assertion the unique producer
+        # made WEAKER, turning a loud red into a silent pass. Reported by @jdatcmd.
+        if len(params) >= 2 and (
+                (params[0] == "got" and params[1] in ("want", "floor"))
+                or (params[0], params[1]) == ("forward", "reverse")):
             out.append((name, params[1]))
     return sorted(out)
 
@@ -49,7 +55,8 @@ def test_the_comparison_surface_is_what_this_file_thinks_it_is(expect):
     """premise: the derivation finds the assertions, so the arm below is not vacuous."""
     names = [n for n, _ in _comparisons()]
     expect.at_least(len(names), 5, "the layer offers at least five (got, want) comparisons")
-    for required in ("hash", "text", "rows", "row_set", "ordered_rows"):
+    for required in ("hash", "text", "rows", "row_set", "ordered_rows",
+                     "ordering_observable"):
         expect.num(names.count(required), 1, f"{required} is one of them")
 
 
@@ -72,6 +79,9 @@ VALID = {
     "rows":          ([(1,), (2,)], [(1,), (2,)]),
     "row_set":       ([(1,), (2,)], [(2,), (1,)]),
     "ordered_rows":  ([(1,), (2,)], [(1,), (2,)]),
+    # Forward and reverse must DIFFER, or the assertion refuses the fixture for a
+    # different reason and the arm would pass without testing the sentinel.
+    "ordering_observable": ([(1,), (2,)], [(2,), (1,)]),
 }
 
 # How a sentinel arrives for each: bare for a scalar comparison, and as a CELL for a
@@ -166,31 +176,99 @@ def test_the_constant_alone_is_not_unique_which_is_why_the_producer_exists(expec
 
 
 def test_the_refusal_cannot_be_switched_off_from_the_corpus_it_polices(expect):
-    """Every conftest under test/pytest/ is imported before collection, so a test
-    file can reach into this module. A refusal that reads a module-level name is
-    therefore writable by the thing it polices -- the hatch an earlier guard in this
-    layer had to close for its family list. Here the prefix is a module global, so
-    the arm is whether rewriting it disarms the refusal."""
+    """Every conftest under test/pytest/ is imported before collection, so a corpus file
+    can rewrite this module's globals. The refusal must survive that.
+
+    THE FIRST VERSION OF THIS ARM WAS TAUTOLOGICAL and @jdatcmd measured it. It rewrote
+    `pgc_vacuity.QUERY_ERROR` and THEN minted its sentinels with `query_error()`, which
+    read that same global -- so producer and matcher moved together and the refusal
+    matched whatever the prefix had just been set to. It could not fail for the property
+    it names.
+
+    The faithful hatch is this one: mint while the layer is armed, rewrite afterwards,
+    which is what a corpus file actually does. Against the old code that COMPARED two
+    sentinels instead of refusing them, and an end-to-end corpus file reported
+    `1 passed` over two failed queries.
+
+    `ZZZ_NOT_A_PREFIX` is in the list deliberately. `'Q'` alone cannot disarm a
+    prefix-reading matcher, because `'QUERY_ERROR.1'.startswith('Q')` is true -- so a
+    spelling that is not a prefix of the real one is the case that would have found the
+    hole, and it is the case the old arm never tried.
+    """
     e = pgc_vacuity.Expect("sentinel::hatch")
     original = pgc_vacuity.QUERY_ERROR
-    try:
-        for spelling in ("", "NOTHING_MATCHES_THIS", "Q"):
-            pgc_vacuity.QUERY_ERROR = spelling
-            try:
-                e.text(query_error("a"), query_error("b"), "a rewritten prefix")
-            except VacuityError:
-                expect.num(1, 1, f"the refusal still arrives with the prefix set to {spelling!r}")
-            except AssertionError:
-                raise AssertionError(
-                    f"rewriting QUERY_ERROR to {spelling!r} disarmed the refusal: the "
-                    f"values were COMPARED instead of refused"
-                )
-            else:
-                raise AssertionError(f"rewriting QUERY_ERROR to {spelling!r} disarmed the refusal")
-    finally:
-        pgc_vacuity.QUERY_ERROR = original
+    for spelling in ("", "NOTHING_MATCHES_THIS", "Q", "ZZZ_NOT_A_PREFIX"):
+        a, b = query_error("a"), query_error("b")      # minted WHILE ARMED
+        # Compared in plain Python: `expect.text` now refuses a value carrying the
+        # prefix, which is the point, and an arm ABOUT sentinels therefore cannot use
+        # the assertion it is describing on one.
+        expect.num(1 if a.split(".")[0] == original else 0, 1,
+                   f"premise: minted under the real prefix ({spelling!r} case)")
+        pgc_vacuity.QUERY_ERROR = spelling             # the corpus rewrites it after
+        try:
+            e.text(a, b, "a rewritten prefix")
+        except VacuityError:
+            expect.num(1, 1, f"the refusal survives the prefix being set to {spelling!r}")
+        except AssertionError:
+            raise AssertionError(
+                f"rewriting QUERY_ERROR to {spelling!r} disarmed the refusal: the two "
+                f"sentinels were COMPARED instead of refused"
+            )
+        else:
+            raise AssertionError(f"rewriting QUERY_ERROR to {spelling!r} disarmed the refusal")
+        finally:
+            pgc_vacuity.QUERY_ERROR = original
     expect.num(1 if pgc_vacuity.QUERY_ERROR == original else 0, 1,
                "and the module is left as it was found")
+
+
+def test_a_hardcoded_sentinel_survives_the_same_rewrite(expect):
+    """The corpus hardcodes sentinel text that no producer minted --
+    `'QUERY_ERROR.empty-relation'` and `f"QUERY_ERROR.no-partition-for-{table}"` in
+    `test_hilbert_locality.py`, and `"QUERY_ERROR.1"` in `test_guards_pinned.py`. One of
+    those is built inside SQL by `coalesce(...)`, so it can never come from
+    `query_error()`. A matcher that read a rewritable global would stop seeing them.
+    """
+    e = pgc_vacuity.Expect("sentinel::hardcoded")
+    original = pgc_vacuity.QUERY_ERROR
+    left = "QUERY_ERROR.empty-relation"
+    right = "".join(["QUERY_ERROR", ".empty-relation"])   # equal, distinct objects
+    expect.num(1 if left is not right else 0, 1,
+               "premise: the two are distinct objects, so identity guards cannot fire")
+    pgc_vacuity.QUERY_ERROR = "NOTHING_MATCHES_THIS"
+    try:
+        e.text(left, right, "two hardcoded sentinels after a rewrite")
+    except VacuityError:
+        expect.num(1, 1, "a hardcoded sentinel is still refused")
+    except AssertionError:
+        raise AssertionError("the hardcoded sentinel was COMPARED after the rewrite")
+    else:
+        raise AssertionError("the hardcoded sentinel was accepted after the rewrite")
+    finally:
+        pgc_vacuity.QUERY_ERROR = original
+
+
+def test_the_ordering_premise_refuses_a_failed_reading(expect):
+    """The one assertion the unique producer made WEAKER before this arm existed.
+
+    `ordering_observable` requires forward and reverse to differ. With the old shared
+    constant two failed readings were IDENTICAL, so it went red -- loudly, for the wrong
+    reason but in the right direction. With unique sentinels they differ, so it passed
+    and greenlit every ordered assertion resting on the premise. Measured by @jdatcmd,
+    and it is why the refusal is now the first thing that assertion does.
+    """
+    e = pgc_vacuity.Expect("sentinel::ordering")
+    for label, fwd, rev in (
+            ("both readings failed", [(query_error("f"),)], [(query_error("r"),)]),
+            ("one reading failed", [(query_error("f"),), (1,)], [(1,), (2,)])):
+        try:
+            e.ordering_observable(fwd, rev, "the ordering premise")
+        except VacuityError:
+            expect.num(1, 1, f"the ordering premise refuses when {label}")
+        except AssertionError:
+            raise AssertionError(f"{label}: compared instead of refused")
+        else:
+            raise AssertionError(f"{label}: the ordering premise PASSED on a failed query")
 
 
 def test_a_legitimate_comparison_is_untouched(expect):

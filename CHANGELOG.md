@@ -198,6 +198,34 @@ true until the next version shipped.
   Python reuses the stale bytecode, which made two of the refusals look like they did
   not bite.
 
+  THREE DEFECTS @jdatcmd FOUND IN THE FIRST VERSION, each reproduced before it was fixed.
+
+  The HATCH WAS OPEN and the arm that said otherwise was tautological: it rewrote
+  `pgc_vacuity.QUERY_ERROR` and THEN minted its sentinels with `query_error()`, which
+  read that same global -- producer and matcher moved together, so the refusal matched
+  whatever the prefix had just been set to. The faithful hatch mints while armed and
+  rewrites afterwards, which is what a corpus file does, and against the first version
+  that COMPARED two sentinels instead of refusing them. End to end it reported
+  `1 passed` over two failed queries. The prefix is now bound in a DEFAULT ARGUMENT,
+  evaluated once when the function is defined and never read from the module namespace
+  again, so rewriting the global changes neither what is minted nor what is refused.
+  `ZZZ_NOT_A_PREFIX` is in the arm's spellings deliberately: `'Q'` cannot disarm a
+  prefix-reading matcher, because `'QUERY_ERROR.1'.startswith('Q')` is true.
+
+  `ordering_observable` WAS MADE WEAKER BY THE PRODUCER, and this is the one place the
+  change regressed the layer. It takes `(forward, reverse)` rather than `(got, want)`,
+  so it sat outside the refusal and outside the derivation that finds comparisons. With
+  the old shared constant two failed readings were IDENTICAL and it went red -- loudly.
+  With unique sentinels they differ, so it passed and greenlit every ordered assertion
+  resting on the premise. The refusal is now the first thing it does, the derivation
+  recognises `(forward, reverse)`, and an arm pins both.
+
+  And `TESTS.md` stated the split twice in one sentence while only the first half was
+  gated: 26 refused and "the other 47" sums to 73 against the 72 the inventory names.
+  `selftest/350`'s regex matches the half a change naturally updates. Both halves are
+  now read by an arm in the corpus's own docs guard, against the inventory's count of
+  the ids it names rather than a number typed twice.
+
   `VACUITY_MODES.md` said "the port has the sentinel constant but nothing produces it",
   and that was wrong in both halves: two sites did produce sentinels by hand, and the
   thing actually missing was the refusal in four of the five comparisons. The

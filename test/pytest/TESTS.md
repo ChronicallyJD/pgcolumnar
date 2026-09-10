@@ -733,6 +733,7 @@ many times.
 | `test_the_readme_and_the_inventory_agree_on_what_is_refused` | README.md quotes the inventory's number, so the two cannot drift apart again |
 | `test_the_inventory_accounts_for_every_mode_the_run_found` | the admitted gap row is the run's total minus what is written down |
 | `test_the_prose_totals_match_the_counted_modes` | every sentence stating what the layer refuses today carries the counted number, not just the table |
+| `test_the_two_halves_of_the_refused_sentence_sum_to_the_named_total` | TESTS.md states the split twice in one sentence, and BOTH halves are checked against the inventory's own count — the gated half alone let 26 + 47 = 73 past a named total of 72 |
 | `test_an_undocumented_file_is_caught_with_the_tests_inside_it` | how 29 tests went missing at once |
 | `test_a_document_with_no_totals_line_states_none` | absent totals report `None`, which must not read as "they match" |
 | `test_a_stated_total_that_disagrees_with_disk_is_visible` | the count arm's own red |
@@ -1180,7 +1181,7 @@ story from #473 and #476.
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 26
-of them.** The other 47, of which 46 were demonstrated, are listed there with the
+of them.** The other 46, of which 45 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
 Read it before adding a test. The gaps most likely to affect a new test are that
@@ -1259,7 +1260,9 @@ to, for the same reason.
 | `test_row_set_refuses_before_it_maps_rather_than_after` | `row_set` refuses a sentinel that arrived as a cell | `row_set` reprs its rows before delegating, so a refusal only in `rows` cannot see it |
 | `test_the_producer_is_unique_per_occurrence` | fifty calls are fifty distinct values, all carrying the prefix | a producer that returns a constant, which is what the comment used to claim |
 | `test_the_constant_alone_is_not_unique_which_is_why_the_producer_exists` | the control: the bare constant equals itself | compared in plain Python, because the layer now refuses to compare two sentinels |
-| `test_the_refusal_cannot_be_switched_off_from_the_corpus_it_polices` | rewriting `pgc_vacuity.QUERY_ERROR` does not disarm the refusal | every conftest is imported before collection, so a module global is writable by the corpus the rule polices |
+| `test_the_refusal_cannot_be_switched_off_from_the_corpus_it_polices` | sentinels minted WHILE ARMED are still refused after the global is rewritten | every conftest is imported before collection, so a module global is writable by the corpus the rule polices |
+| `test_a_hardcoded_sentinel_survives_the_same_rewrite` | a sentinel no producer minted — the corpus writes three, one from inside SQL — is still refused after a rewrite | a matcher reading a rewritable global would stop seeing them |
+| `test_the_ordering_premise_refuses_a_failed_reading` | `ordering_observable` refuses a failed reading on either side | with the old shared constant two failed readings were identical and it went RED; unique sentinels differ, so it passed and greenlit every ordered assertion resting on it |
 | `test_a_legitimate_comparison_is_untouched` | equal text, rows, sets and numbers still pass | a refusal that also refuses real data is not a refusal |
 
 **Each refusal is proved load-bearing.** Removing the one call from each assertion,

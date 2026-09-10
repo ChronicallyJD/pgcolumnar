@@ -48,7 +48,27 @@ EMPTY = "EMPTY"
 _query_error_seq = itertools.count(1)
 
 
-def query_error(detail=""):
+# THE PREFIX IS BOUND AT DEFINITION TIME, in a default argument, and that is the whole
+# mechanism rather than a style choice.
+#
+# The first version read the module global `QUERY_ERROR` in both the producer and the
+# refusal. Every `conftest.py` under test/pytest/ is imported before collection, so a
+# corpus file can rewrite that global -- and because BOTH sides read it, they moved
+# together and the refusal matched whatever the prefix had just been set to. The arm
+# that was supposed to catch this minted its sentinels AFTER rewriting, so it could not
+# fail for the property it named: tautological, and @jdatcmd measured it.
+#
+# The faithful hatch mints while armed and rewrites afterwards, which is what a corpus
+# file actually does. Measured against the first version: with the rewrite, two minted
+# sentinels were COMPARED instead of refused, and a corpus file doing it end to end
+# reported `1 passed` over two failed queries -- `error-swallowed-to-empty`
+# reintroduced through the hatch the change claimed to close.
+#
+# A default argument is evaluated once, when the function is defined, and is not read
+# from the module namespace afterwards. So rewriting `pgc_vacuity.QUERY_ERROR` changes
+# neither what is minted nor what is refused. `QUERY_ERROR` stays exported because the
+# corpus names it in literals, and it is no longer what the mechanism reads.
+def query_error(detail="", _prefix=QUERY_ERROR):
     """The value a failed query yields: unique per occurrence, by construction.
 
     Two failures can never compare equal, which is the whole mechanism -- a helper
@@ -62,10 +82,10 @@ def query_error(detail=""):
     than any particular number.
     """
     n = next(_query_error_seq)
-    return f"{QUERY_ERROR}.{n}.{detail}" if detail else f"{QUERY_ERROR}.{n}"
+    return f"{_prefix}.{n}.{detail}" if detail else f"{_prefix}.{n}"
 
 
-def _failed_query(v):
+def _failed_query(v, _prefix=QUERY_ERROR):
     """Is this value a failed query's sentinel? Matches the prefix, at any depth.
 
     A sentinel arrives as a CELL inside a row as often as it arrives as a whole
@@ -74,9 +94,9 @@ def _failed_query(v):
     convenience. Strings only: a tuple is walked, not tested.
     """
     if isinstance(v, str):
-        return v.startswith(QUERY_ERROR)
+        return v.startswith(_prefix)
     if isinstance(v, (list, tuple, set, frozenset)):
-        return any(_failed_query(x) for x in v)
+        return any(_failed_query(x, _prefix) for x in v)
     return False
 
 # Reasons a test may declare itself unrunnable. Closed, exactly as lib.sh keeps it
@@ -248,6 +268,14 @@ class Expect:
         supports no ordering claim, and every ordered assertion over it is vacuous
         however carefully it is written.
         """
+        # A FAILED QUERY ON EITHER SIDE, BEFORE ANYTHING ELSE. This assertion takes
+        # (forward, reverse) rather than (got, want), so it sat outside the refusal --
+        # and making the sentinel UNIQUE turned a loud red into a silent pass here.
+        # Measured by @jdatcmd: with the old constant, two failed readings were
+        # identical and this arm went RED; with two minted sentinels they differ, so it
+        # went GREEN and greenlit every ordered assertion resting on the premise. That
+        # was the one place the producer made the layer strictly weaker than before.
+        self._refuse_failed_query(name, forward, reverse)
         f, r = list(forward), list(reverse)
         if not f and not r:
             raise VacuityError(f"{name}: both directions are empty.")
