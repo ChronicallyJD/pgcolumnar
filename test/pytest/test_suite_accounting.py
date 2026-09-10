@@ -1,7 +1,11 @@
 """The matrix must reconcile the suites it registered against the ones that accounted.
 
-`run_all_versions.sh` prints "suites that ran: N of M" and never checks it, and ten
-registered suites exit 0 having never counted a check. Counted among the suites that
+`run_all_versions.sh` prints "suites that ran: N of M" and never checks it, and twelve
+registered suites exit 0 without ever calling `pgc_summary`. Measured with a pattern
+tight enough to exclude `portlib.sh` -- a looser one matched it and gave both reviewers
+of this change the same wrong answer: **none** of the twelve sources `test/lib.sh`.
+Each defines its own `check()`, and ten keep no tally at all, so the harness cannot see
+their checks. Counted among the suites that
 "ran", they are the overcount #447 added that line to stop, one level further down.
 
 A count cannot close this. Two errors of opposite sign cancel, and an exempt list
@@ -125,6 +129,39 @@ def test_the_accounting_line_is_read_on_every_exit_path(tmp_path, expect):
                 "and prose containing the word is not the line")
     expect.text(_call("pgc_log_shows_accounting", str(tmp_path / "gone.log"))[0].strip(),
                 "no", "an absent log shows none rather than erroring")
+
+
+def test_the_reader_accepts_the_line_the_producer_actually_emits(tmp_path, expect):
+    """Every log above is a literal typed into this file, and the shell half types the
+    same four again, and the format string itself lives a third time in `pgc_summary`.
+
+    Three hand-written copies of one line. A wording drift in the PRODUCER leaves both
+    harnesses green while the reader answers "no" for every real suite -- which would
+    redden the whole matrix on both majors, having passed its own tests. Found by
+    OffgridwithJD, who measured it: one realistic rewording of lib.sh flips the reader
+    on a real log with no arm going red.
+
+    So run a REAL suite and feed the reader its actual stdout. This is the only arm in
+    the file that survives a change to the format.
+    """
+    suite = tmp_path / "real.sh"
+    suite.write_text(f'. "{REPO / "test" / "lib.sh"}"\ncheck "x" a a\npgc_summary\n')
+    log = tmp_path / "real.log"
+    r = subprocess.run(["bash", str(suite)], capture_output=True, text=True)
+    log.write_text(r.stdout)
+
+    expect.num(r.stdout.count("\naccounting: "), 1,
+               "premise: the real suite produced exactly one accounting line")
+    expect.text(_call("pgc_log_shows_accounting", str(log))[0].strip(), "yes",
+                "the reader accepts the line the producer actually emits")
+
+    # The control that the arm is not simply insensitive.
+    drifted = tmp_path / "drifted.log"
+    drifted.write_text(r.stdout.replace("\naccounting: ", "\naccounting summary: "))
+    expect.num(drifted.read_text().count("\naccounting: "), 0,
+               "premise: the drift changed the line the reader looks for")
+    expect.text(_call("pgc_log_shows_accounting", str(drifted))[0].strip(), "no",
+                "and a reworded producer line is refused, so the arm can fail")
 
 
 # ---- the reconciliation -----------------------------------------------------

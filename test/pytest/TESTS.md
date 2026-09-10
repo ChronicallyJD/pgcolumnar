@@ -1017,8 +1017,12 @@ domain is a changed READER at an unchanged layout.
 
 `test_suite_accounting.py` holds the matrix runner to its own arithmetic.
 
-`run_all_versions.sh` prints `suites that ran: N of M` and never checks it, and ten
-registered suites exit 0 having never counted a check. Counted among the suites that
+`run_all_versions.sh` prints `suites that ran: N of M` and never checks it, and twelve
+registered suites exit 0 without ever calling `pgc_summary`. Measured with a pattern
+tight enough to exclude `portlib.sh` -- a looser one matched it and gave both reviewers
+of this change the same wrong answer: **none** of the twelve sources `test/lib.sh`.
+Each defines its own `check()`, and ten keep no tally at all, so the harness cannot see
+their checks. Counted among the suites that
 "ran", they are the overcount #447 added that line to stop, one level further down.
 
 A count cannot close this. Two errors of opposite sign cancel, and an exempt list
@@ -1076,6 +1080,15 @@ FROM the buckets makes the line true for any values and reddens nothing, which i
 it is counted from the two files by a separate route. Dropping the sort before `comm`
 makes the totals diverge, and that is the fault the identity guards.
 
+### `test_the_reader_accepts_the_line_the_producer_actually_emits`
+
+Every other log in the file is a literal, and the shell half types the same four again,
+and the format string lives a third time in `pgc_summary`. Three hand-written copies of
+one line: a wording drift in the **producer** leaves both harnesses green while the
+reader answers "no" for every real suite, reddening the whole matrix on both majors.
+So this arm runs a real suite and feeds the reader its actual stdout, with a reworded
+control to show it can fail.
+
 ### `test_the_partition_over_the_registered_suites_adds_up`
 
 The readers run over the real registered suite list. No count is asserted: how many
@@ -1089,7 +1102,7 @@ A regression arm. The first implementation piped `sed` into `grep -q`; grep exit
 match, sed takes EPIPE, and `pipefail` reports the pipeline as failed. The reader
 answered "no" for a suite that plainly calls `pgc_summary`. It is a race, so it
 reproduces on long files and not short ones -- it passed every fixture and failed only
-on the real population, naming the two longest suites. Selftest 040 carries the same
+on the real population, naming two of the longest suites. Selftest 040 carries the same
 story from #473 and #476.
 
 ## 15. Adding a test

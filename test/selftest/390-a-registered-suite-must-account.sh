@@ -8,11 +8,17 @@
 # drops leaves the sum short and the line still reads plausibly.
 #
 # The second is worse, because it is live today. pgc_classify_suite_rc maps rc=0
-# to PASS with no further question, and ten registered suites exit 0 having never
-# called pgc_summary. They assert things -- concurrency prints its own failure and
-# exits non-zero -- but the harness cannot count their checks, and nothing says
-# so. They are counted among the suites that "ran", which is the exact overcount
-# #447 added that line to stop, one level further down.
+# to PASS with no further question, and twelve registered suites exit 0 without
+# ever calling pgc_summary. Measured, with a pattern tight enough to exclude
+# portlib.sh -- a looser one matched it and gave both reviewers of this change the
+# same wrong answer: NONE of the twelve sources test/lib.sh. Each defines its own
+# check(), and ten of them keep no tally at all. So the harness cannot see their
+# checks, and nothing says so. They are counted among the suites that "ran", which
+# is the exact overcount #447 added that line to stop, one level further down.
+#
+# The number is deliberately not repeated in prose elsewhere. The reconciliation
+# prints it at runtime, and a count in prose is the thing this repository keeps
+# having to unlearn: nine collisions on one written number in a single day.
 #
 # So the fix is NOT a number. A count cannot do this job: two errors of opposite
 # sign cancel, and an exempt list maintained by hand makes the count agree by
@@ -107,22 +113,50 @@ printf '. "$(dirname "$0")/lib.sh"\n  # pgc_summary is only mentioned here\nexit
 check "an indented comment is still a comment" \
 	"$(pgc_suite_declares_accounting "$_acc/indented.sh")" "no"
 
-# The residual case the shell rule does NOT cover: a hash after whitespace INSIDE
-# a quoted string. Measured over all 251 registered suites -- three carry a line
-# with both a hash and pgc_summary, and in every one the hash starts the line. So
-# no suite is misread today, and this arm keeps that true rather than leaving it
-# to be rediscovered.
-_hashline=0
+# The residual the shell rule does not cover is a hash after whitespace INSIDE a
+# quoted string, and the arm for it must not be a second spelling of the hazard.
+#
+# The first version of this arm WAS that, and it was INVERTED: it required a
+# non-whitespace character before the hash, which is a hash inside a WORD -- the
+# shape the stripper handles correctly -- so it flagged the safe case and was
+# blind to the dangerous one. Found by OffgridwithJD, who built the control:
+#
+#     psql -c "SELECT 1 # note"; pgc_summary   the reader answered NO, unflagged
+#     X=a#b; pgc_summary                       the reader answered YES, FLAGGED
+#
+# So the arm no longer restates the hazard. It compares the reader's INPUT with
+# its OUTPUT: count the call in the raw file, count it again in the stripped
+# text, and if the stripped count is lower the stripper hid a call. That detects
+# it for any spelling, present or future, cannot be inverted, and does not depend
+# on a measurement staying true -- it IS the measurement.
+_hash_pat='(^|[^_[:alnum:]])pgc_summary([^_[:alnum:]]|$)'
+_hidden=0
 while IFS= read -r _hs; do
-	[ -f "$PGC_TESTDIR/${_hs}.sh" ] || continue
-	if grep -nE '(^|[^_[:alnum:]])pgc_summary([^_[:alnum:]]|$)' "$PGC_TESTDIR/${_hs}.sh" \
-		| grep -qE '^[0-9]+:[^#]*[^[:space:]]#'; then
-		_hashline=$((_hashline + 1))
-		echo "    a hash precedes a pgc_summary call in $_hs.sh"
+	_hf="$PGC_TESTDIR/${_hs}.sh"
+	[ -f "$_hf" ] || continue
+	_raw="$(grep -cE "$_hash_pat" "$_hf" || true)"
+	_str="$(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$_hf" | grep -cE "$_hash_pat" || true)"
+	if [ "$_str" -lt "$_raw" ]; then
+		# A call the stripper removed. Only a real one matters; a comment-only
+		# mention losing its line is the stripper working.
+		if [ "$(pgc_suite_declares_accounting "$_hf")" = no ] \
+			&& grep -qE "$_hash_pat" "$_hf"; then
+			_hidden=$((_hidden + 1))
+			echo "    the comment stripper hides a pgc_summary call in $_hs.sh"
+		fi
 	fi
 done < <(listed_suites)
-check "no registered suite has a hash before a pgc_summary call on the same line" \
-	"$_hashline" "0"
+check "the stripper hides no pgc_summary call in any registered suite" "$_hidden" "0"
+
+# And prove that arm can fire, on a file built to trip it. Without this the zero
+# above is satisfied by an arm that never looks at anything.
+printf '. "$(dirname "$0")/lib.sh"\npsql -c "SELECT 1 # note"; pgc_summary\n' > "$_acc/hidden.sh"
+_h_raw="$(grep -cE "$_hash_pat" "$_acc/hidden.sh" || true)"
+_h_str="$(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$_acc/hidden.sh" | grep -cE "$_hash_pat" || true)"
+check "premise: the fixture really does hide its call from the stripper" \
+	"$([ "$_h_str" -lt "$_h_raw" ] && echo hidden || echo "raw=$_h_raw str=$_h_str")" "hidden"
+check "and the reader answers no on it, which is the wrong answer the arm catches" \
+	"$(pgc_suite_declares_accounting "$_acc/hidden.sh")" "no"
 
 # ---- the observation reader ------------------------------------------------
 #
@@ -154,6 +188,41 @@ check "and prose containing the word does not count as the line" \
 
 check "an absent log shows no accounting rather than erroring" \
 	"$(pgc_log_shows_accounting "$_acc/absent.log")" "no"
+
+# ---- and the reader must be shown the PRODUCER's own output -----------------
+#
+# Every log above is a literal typed into this file, and pytest types the same
+# four again, and the format string itself lives a third time in lib.sh's
+# pgc_summary. Three hand-written copies of one line: a wording drift in the
+# PRODUCER leaves both harnesses green while the reader answers "no" for every
+# real suite, which would redden the whole matrix on both majors having passed
+# its own tests.
+#
+# That is the pipefail lesson surviving on the other reader, and it was found by
+# OffgridwithJD, who measured it: one realistic rewording of lib.sh:1507 flips the
+# reader to "no" on a real log with no arm going red.
+#
+# So run a REAL two-line suite and feed the reader its actual stdout. This is the
+# only arm here that survives a change to the format.
+_realsuite="$_acc/real.sh"
+printf '. "%s/lib.sh"\ncheck "x" a a\npgc_summary\n' "$PGC_TESTDIR" > "$_realsuite"
+_reallog="$_acc/real.log"
+bash "$_realsuite" > "$_reallog" 2>&1 || true
+
+check "premise: the real suite ran and reached its summary" \
+	"$(grep -c ': PASSED$' "$_reallog")" "1"
+check "premise: and produced exactly one accounting line to be read" \
+	"$(grep -c '^accounting: ' "$_reallog")" "1"
+check "the reader accepts the line the producer actually emits" \
+	"$(pgc_log_shows_accounting "$_reallog")" "yes"
+
+# The control that this arm is not simply insensitive: the same real log with its
+# accounting line reworded must be refused.
+sed 's/^accounting: /accounting summary: /' "$_reallog" > "$_acc/real_drifted.log"
+check "premise: the drift changed the line the reader looks for" \
+	"$(grep -c '^accounting: ' "$_acc/real_drifted.log")" "0"
+check "and a reworded producer line is refused, so the arm can fail" \
+	"$(pgc_log_shows_accounting "$_acc/real_drifted.log")" "no"
 
 # ---- the reconciliation, in both directions --------------------------------
 
@@ -357,8 +426,9 @@ check "nor no for every one of them" \
 # though grep matched. The function then answered "no" for a suite that plainly
 # calls pgc_summary.
 #
-# It was caught here, and only here: on the real population the two longest
-# suites -- analyze_function and hilbert_curve -- read as not declaring
+# It was caught here, and only here: on the real population two of the longest
+# suites -- hilbert_curve, the longest at 1,899 lines, and analyze_function, the
+# third at 806 -- read as not declaring
 # accounting inside this run and as declaring it outside. Selftest 040 carries
 # the same story from #473 and #476, where it named different innocent suites on
 # every run.

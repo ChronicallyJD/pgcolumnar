@@ -860,9 +860,13 @@ pgc_classify_suite_rc() {	# pgc_classify_suite_rc RC LOGFILE -> PASS|SKIP|INCOMP
 # invisible to a green run.
 # ---- accounting membership, derived rather than listed -----------------------
 #
-# The matrix prints "suites that ran: N of M" and never checks it, and ten
-# registered suites exit 0 having never counted a check. They assert things in
-# their own way; the harness simply cannot see their checks. Counted among the
+# The matrix prints "suites that ran: N of M" and never checks it, and twelve
+# registered suites exit 0 without ever calling pgc_summary. Measured, with a
+# pattern tight enough to exclude portlib.sh -- a looser one matched it and gave
+# both reviewers of this change the same wrong answer: NONE of the twelve sources
+# test/lib.sh. Each defines its own check(), and ten of them keep no tally at all.
+# So the harness cannot see their checks. The number is not written elsewhere on
+# purpose; the reconciliation prints it at runtime. Counted among the
 # suites that "ran", they are the same overcount #447 added that line to stop,
 # one level further down.
 #
@@ -921,6 +925,12 @@ pgc_log_shows_accounting() {	# pgc_log_shows_accounting LOGFILE -> yes|no
 	# the status, so its presence says "this suite reached its summary" and not
 	# "this suite passed". Anchored and fully shaped, so the word appearing in a
 	# suite's own prose cannot satisfy it.
+	# Unlike the declaration reader above, this one deliberately does NOT
+	# distinguish an absent log from a present one carrying no accounting line.
+	# Both mean the same thing here -- this suite did not reach its summary --
+	# and a declared suite with no log at all is exactly the catch. The asymmetry
+	# between the two readers is intentional and is noted because it is the kind
+	# of thing that reads as an oversight later.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
 	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log"; then
@@ -977,9 +987,14 @@ pgc_reconcile_accounting() {	# pgc_reconcile_accounting DECLARED OBSERVED [NOTDI
 	_noonly="$(printf '%s' "$_oonly" | grep -c . || true)"
 
 	# inputs is counted from the FILES, independently of the three buckets. A
-	# derived total makes the identity below true for any values, which is the
-	# shape pgc_summary's own comment warns about: three counters reconciled
-	# against a fourth is the only version of this line that can fail.
+	# derived total makes the identity below true for any values.
+	#
+	# BUT BE PRECISE ABOUT WHAT IT CAN CATCH, because the next reader will go
+	# looking for a data case and there is not one: for sets, |D u O| always
+	# equals |D n O| + |D \ O| + |O \ D|. OffgridwithJD measured it -- 400 random
+	# set pairs, zero firings. What can make it false is comm being fed unsorted
+	# input, which produces buckets that are not a partition at all. It is a comm
+	# tripwire, and selftest 390 drives it with exactly that mutation.
 	_inputs="$(LC_ALL=C sort -u "$_dfile" "$_ofile" | grep -c . || true)"
 	_sum=$(( _nboth + _ndonly + _noonly ))
 	rm -f "$_dfile" "$_ofile" "$_ndfile" "$_obsonly"
@@ -1099,10 +1114,19 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	[ -f "$_acc_notdisp" ] || : >"$_acc_notdisp"
 	_acc_absent=0
 	for s in "${SUITES[@]}"; do
-		case "$(pgc_suite_declares_accounting "$builddir/test/${s}.sh")" in
+		_acc_verdict="$(pgc_suite_declares_accounting "$builddir/test/${s}.sh")"
+		case "$_acc_verdict" in
 			yes)	printf '%s\n' "$s" >>"$_acc_declared" ;;
+			no)	;;
 			absent)	echo "    registered but has no file: $s.sh"
 				_acc_absent=$((_acc_absent + 1)) ;;
+			*)
+				# A default arm must not quietly name a real outcome. If the
+				# reader grows a fourth answer, this says so instead of filing
+				# it under "does not declare".
+				echo "    pgc_suite_declares_accounting answered [$_acc_verdict] for $s, which is none of yes/no/absent"
+				_acc_absent=$((_acc_absent + 1))
+				;;
 		esac
 		[ "$(pgc_log_shows_accounting "$builddir/${s}.log")" = yes ] \
 			&& printf '%s\n' "$s" >>"$_acc_observed"
@@ -1116,7 +1140,15 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		verfail=1
 	fi
 
+	# How many of the suites counted as having RUN actually accounted for their
+	# checks (#916). Ten registered suites exit 0 having never called pgc_summary;
+	# counting them among the suites that ran is the overcount #447 added this
+	# line to stop, one level further down, and printing the total without this
+	# breakdown leaves it exactly where it was. Raised by OffgridwithJD, who was
+	# right that the drift detector alone does not close it.
+	_acc_ran="$(grep -c . "$_acc_observed" 2>/dev/null || true)"
 	echo "  suites that ran: $suites_ran of ${#SUITES[@]} (skipped: $suites_skipped, incomplete: $suites_incomplete)"
+	echo "  of those, $_acc_ran accounted for their checks and $((suites_ran - _acc_ran)) did not"
 	if [ "$suites_skipped" != 0 ]; then
 		echo "  skipped:${skipped_names}"
 	fi
