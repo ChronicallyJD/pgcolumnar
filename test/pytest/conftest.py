@@ -9,10 +9,13 @@ guard is proven to REFUSE rather than assumed to.
 PSYCOPG IS IMPORTED INSIDE THE FIXTURES THAT USE IT, NOT HERE, AND THAT IS
 LOAD-BEARING RATHER THAN TIDINESS. conftest is imported before every run, so a
 module-scope `import psycopg` made a DATABASE DRIVER a hard requirement of the
-whole corpus -- including the tests that never open a connection. Measured on the
-corpus as it stands: with psycopg absent, 61 of 142 tests run and pass; with the
-import at module scope, zero do, and the failure is a conftest ImportError before
-collection.
+whole corpus -- including every test that never opens a connection. With the
+import at module scope NO test runs without the driver, and the failure is a
+conftest ImportError before collection rather than a failed test.
+
+No count is written here. Which files need no database is decided in
+test_harness_deps.py, from the corpus, and the gate's job prints what it ran:
+a number in this docstring would be a hand-maintained derived value (#908).
 
 That is the difference between "this harness needs Postgres" and "the tests that
 talk to Postgres need Postgres", and it is what lets the guard-testing half of

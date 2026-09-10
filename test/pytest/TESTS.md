@@ -59,7 +59,7 @@ behaviour, the source of that number is named.
 - [11. test_zonemap_boundaries.py: exact boundaries](#11-test_zonemap_boundariespy-exact-boundaries)
 - [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
-- [14. test_harness_deps.py: the harness must self-test without a database](#14-testharnessdepspy-the-harness-must-self-test-without-a-database)
+- [14. test_harness_deps.py: the harness must self-test without a database](#14-test_harness_depspy-the-harness-must-self-test-without-a-database)
 - [15. Adding a test](#15-adding-a-test)
 - [16. What this corpus does NOT yet refuse](#16-what-this-corpus-does-not-yet-refuse)
 - [17. Traps this corpus records](#17-traps-this-corpus-records)
@@ -1017,7 +1017,7 @@ domain is a changed READER at an unchanged layout.
 
 `conftest.py` imported psycopg at module scope, and conftest is imported before
 every run, so a **database driver was a hard requirement of the whole corpus** --
-including the 61 tests that never open a connection. With psycopg absent the run
+including every test that never opens a connection. With psycopg absent the run
 did not fail a test, it failed to COLLECT:
 
     ImportError while loading conftest '.../conftest.py'
@@ -1025,25 +1025,77 @@ did not fail a test, it failed to COLLECT:
         import psycopg
     E   ModuleNotFoundError: No module named 'psycopg'
 
-Measured: with the import deferred into the two fixtures that connect, **61 of
-142 tests run and pass with no driver installed**; with it at module scope, zero
+With the import deferred into the two fixtures that connect, the database-free
+files run and pass with no driver installed; with it at module scope, none of them
 do. That coupling is half of why the guard-testing part of this corpus cannot run
 where the gate runs (README.md, "This is not in the gate yet").
+
+**WHICH FILES NEED NO DATABASE IS DECIDED, NOT DECLAIMED.** `NO_CLUSTER` in that
+module is the declaration, and the gate's job runs exactly it. The property is
+computed from the corpus by an ast walk, and the two must agree in BOTH
+directions.
+
+The missing direction was the one that loses coverage. The only arm over the list
+asked whether the files it names EXIST, so a database-free file nobody added was
+simply absent from the job: every arm stayed green and nothing said so. It had
+already happened twice -- `test_build_refusal.py` and `test_layer.py` both need no
+database and neither was listed -- and a concurrent branch adds a third. A floor of four on the list length did not help: the list had four
+entries, so the floor was satisfied by the state it was meant to police.
+
+AN AST WALK RATHER THAN A LINE REGEX, because three shapes here defeat a grep: a
+file may name the driver in a docstring, discuss a cluster fixture in prose, or
+BUILD another test as a string for `pytester`. This layer has already paid for that
+lesson once -- the broad-except refusal was first written as a line regex and
+rejected its own tests, because the forbidden shape appears inside a
+`makepyfile` string.
+
+AND NEEDING A DATABASE IS NOT IMPORTING THE DRIVER. A test reaches a cluster
+through a FIXTURE and may import nothing, so a file is cluster-bound if it imports
+the driver at module scope (which kills collection outright), if any test or
+fixture in it requests -- directly or transitively -- a fixture that reaches a
+cluster, or if it DRIVES a cluster-bound file as a subprocess. The connecting
+fixtures are read off `conftest.py` rather than named in the classifier.
 
 | test | asserts |
 | --- | --- |
 | `test_the_guard_half_of_the_corpus_runs_without_a_database_driver` | the no-cluster files collect and pass with `import psycopg` shimmed to raise |
 | `test_a_cluster_test_still_needs_the_driver` | **control**: deferring made the IMPORT lazy, not the database optional |
 | `test_conftest_imports_no_database_driver_at_module_scope` | the regression named in one line, for whoever edits conftest next |
-| `test_the_no_cluster_list_still_names_files_that_exist` | the list is a hazard; it fails loudly rather than covering fewer files after a rename |
-| `test_ci_derives_the_file_list_rather_than_repeating_it` | the CI job asks this module for `NO_CLUSTER` and names no file literally |
+| `test_the_declaration_is_exactly_the_database_free_half` | `NO_CLUSTER` equals the property, both ways, so an undeclared database-free file is named |
+| `test_the_partition_accounts_for_every_file_in_the_corpus` | **premise**: every file lands in exactly one bucket, and neither bucket is the whole corpus |
+| `test_the_cluster_fixtures_are_read_off_conftest_rather_than_named_here` | the roots of the property are derived from `conftest.py`, not typed |
+| `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control, over a fixture corpus |
+| `test_the_classifier_follows_a_cluster_fixture_through_a_local_wrapper` | a module-local fixture wrapping `pgc_cluster` is followed |
+| `test_the_classifier_catches_a_module_scope_driver_import` | an eager import kills collection, so the file cannot run in the job |
+| `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver` | a docstring, a block-comment string, a generated test, and a file merely discussed |
+| `test_the_classifier_takes_a_fixture_that_provisions_without_connecting` | the second signal, isolated: a fixture that starts a cluster and imports no driver |
+| `test_the_classifier_follows_a_conftest_fixture_that_connects_indirectly` | a conftest fixture reaching a cluster through a sibling, importing nothing itself |
+| `test_the_classifier_does_not_read_a_helpers_parameter_as_a_fixture` | pytest resolves names for tests and fixtures, not for helpers |
+| `test_the_classifier_follows_a_file_that_drives_a_cluster_bound_file` | this file's own shape: driving a cluster-bound file inherits what it needs |
+| `test_the_membership_report_names_a_database_free_file_left_undeclared` | the hole itself, on a fixture, with the control beside it |
+| `test_the_membership_report_names_a_declared_file_that_needs_a_cluster` | the other direction: a listed file that starts using a cluster fixture |
+| `test_the_membership_report_names_a_declared_file_that_is_gone` | a rename is still caught, and as its own kind rather than as a cluster need |
+| `test_the_gate_runs_the_membership_decision_rather_than_only_this_file` | selftest 350 runs the decision, and the command line it uses works |
+| `test_ci_derives_the_file_list_rather_than_repeating_it` | the CI job asks this module for `NO_CLUSTER`, names no file literally, and states no count |
 | `test_the_job_installs_no_database_driver` | the job asserts psycopg is absent rather than assuming it |
 
 **THIS IS NOW IN THE GATE.** `.github/workflows/ci.yml` runs a `pytest-guards`
 job: no database, no build, an interpreter and the two pinned runner packages.
 The file list is derived from `NO_CLUSTER` in this module and the pins from
-`requirements-test.txt`, so neither is a second copy that can go stale -- and two
-arms above hold it to that. Measured in the job: 61 tests, ~3 seconds.
+`requirements-test.txt`, so neither is a second copy that can go stale -- and
+three arms above hold it to that. **The job states no count and neither does this
+section**: it prints how many files it ran and pytest prints how many tests
+passed, so the numbers reach a reader from the run. A written count is a
+hand-maintained derived value, and the one in the job's comment was wrong the day
+it was written (#908).
+
+BUT THE ARMS IN THIS FILE DO NOT RUN IN THE GATE, and that is why
+`test/selftest/350-the-pytest-corpus-must-be.sh` runs the membership decision
+through this module's command line. The corpus is not in `SUITES` (README.md), and
+the `pytest-guards` job runs the database-free files -- which this file is not,
+because its control arm needs a real cluster. A guard that does not run is a
+comment, so the decision has a copy with teeth, exactly as the documentation
+sweep in that part does.
 
 A SHIM RATHER THAN AN UNINSTALL. Uninstalling psycopg would test the machine
 rather than the harness, could not run beside anything else, and would leave the

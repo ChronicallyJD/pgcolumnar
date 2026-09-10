@@ -65,10 +65,15 @@ jobs:
 
   # The pytest harness's own guards, where they can actually run.
   #
-  # THIS RUNS NO DATABASE AND BUILDS NOTHING. test/pytest/ is 152 tests, and the
-  # majority of them test the HARNESS rather than the product -- they drive pytest
-  # inside pytest to prove a guard refuses what it claims to refuse. Those need an
-  # interpreter and nothing else.
+  # THIS RUNS NO DATABASE AND BUILDS NOTHING. Most of test/pytest/ tests the
+  # HARNESS rather than the product -- it drives pytest inside pytest to prove a
+  # guard refuses what it claims to refuse. Those tests need an interpreter and
+  # nothing else.
+  #
+  # NO COUNT IS WRITTEN HERE. One was, and it was wrong the day it was written:
+  # the comment said 152 against a corpus of 154. The step below prints how many
+  # files it ran and pytest prints how many tests passed, so the numbers reach a
+  # reader from the run instead of from a sentence (#908).
   #
   # README.md records why the corpus is not in `SUITES`: pgc_skip treats a missing
   # dependency as a failure rather than a skip, so registering it there would
@@ -105,7 +110,9 @@ jobs:
           cd test/pytest
           FILES="$(python3 -c 'import sys; sys.path.insert(0, "."); from test_harness_deps import NO_CLUSTER; print(" ".join(NO_CLUSTER))')"
           test -n "$FILES"
-          echo "running: $FILES"
+          # Printed, not stated: the count is a fact about the tree at this
+          # commit, so it belongs in the output rather than in a comment.
+          echo "running $(set -- $FILES; echo $#) database-free file(s): $FILES"
           PYTHONPATH=. /tmp/pgcvenv/bin/pytest -q $FILES
 
   # Build against every supported major. Fast, and it is what an API change

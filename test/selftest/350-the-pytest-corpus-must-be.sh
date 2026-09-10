@@ -196,7 +196,11 @@ _dcv_absent() {	# _dcv_absent DIR DOC -> "[]" or "[n: a b c]"
 	           } | sort -u )"
 	while IFS= read -r name; do
 		[ -n "$name" ] || continue
-		printf '%s\n' "$ondisk" | grep -qxF "$name" && continue
+		# grep -cxF on a here-string, NOT `printf ... | grep -qxF`: grep -q exits on
+		# the first match, printf takes EPIPE, and under this suite's pipefail the
+		# pipeline reports failure though the name WAS present. Selftest 080 states
+		# the rule; measured here at 10 spurious absences in 40 runs under load.
+		[ "$(grep -cxF "$name" <<<"$ondisk" || true)" != 0 ] && continue
 		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $name"
 	done < <(grep -oE '`test_[A-Za-z0-9_]*(\.py)?`' "$doc" 2>/dev/null \
 	         | tr -d '`' | sort -u)
@@ -268,11 +272,100 @@ check "control: distinct names in the same corpus report no duplicate" \
 unset -f _dcv_dupes
 
 
+# ---- and every table-of-contents link must RESOLVE ---------------------------
+#
+# WHY THIS EXISTS. TESTS.md's contents list gained an entry whose anchor stripped
+# the underscores out of the file name -- "#14-testharnessdepspy-..." against a
+# heading GitHub renders as "#14-test_harness_depspy-..." -- so the link silently
+# went nowhere. Eleven entries above it keep the underscores, so the document
+# already stated the convention and the new entry simply disagreed with it.
+#
+# NEITHER EXISTING ARM COULD SEE IT. Both sweep for NAMES; an anchor is not a
+# name, and a broken link is still a string containing the file name it points at.
+# A reader finds out by clicking.
+#
+# THE RULE IS GITHUB'S, and it is mechanical: lowercase the heading text, drop
+# every character that is not a letter, digit, space, hyphen or underscore, then
+# turn spaces into hyphens. So the dot in ".py" and the colon after it disappear
+# and the underscores stay. Over the three documents in this directory the sweep
+# reports nothing, and over the document as it shipped it reported exactly the one
+# entry -- which is the whole false-positive budget, measured rather than assumed.
+#
+# ONE DIRECTION ON PURPOSE: every link must reach a heading. The reverse, every
+# heading must be linked, is a different property, and "## Contents" is itself a
+# heading that no entry links to -- so the reverse needs an exemption list, which
+# is the hand-maintained value this file keeps removing.
+
+_toc_anchor() {	# _toc_anchor TEXT -> the anchor GitHub derives from it
+	printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's/[^a-z0-9 _-]//g' -e 's/ /-/g'
+}
+
+_toc_unresolved() {	# _toc_unresolved DOC -> "[]" or "[n: a b c]"
+	local doc="$1" anchor n=0 bad="" anchors
+	# Every anchor the document's own headings produce, one per line.
+	# Through _toc_anchor, so GitHub's rule has ONE definition here. The stream
+	# form was a second copy of the same sed program, and two copies drift.
+	anchors="$(while IFS= read -r _h; do [ -n "$_h" ] && _toc_anchor "$_h" && echo; done \
+		< <(grep -E '^#{2,} ' "$doc" 2>/dev/null | sed -e 's/^#* //'))"
+	while IFS= read -r anchor; do
+		[ -n "$anchor" ] || continue
+		# grep -cxF on a here-string, for the reason given in _dcv_absent above.
+		[ "$(grep -cxF "$anchor" <<<"$anchors" || true)" != 0 ] && continue
+		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $anchor"
+	done < <(grep -oE '\]\(#[A-Za-z0-9_-]+\)' "$doc" 2>/dev/null \
+	         | sed -e 's/^](#//' -e 's/)$//' | sort -u)
+	[ "$n" -eq 0 ] && { printf '[]'; return; }
+	printf '[%d:%s]' "$n" "$bad"
+}
+
+# PREMISE: the sweep found links at all. A document whose links it cannot parse
+# reports "nothing broken", which is what a correct document reports too.
+check "premise: the sweep reads the contents list's links" \
+	"$([ "$(grep -coE '\]\(#[A-Za-z0-9_-]+\)' "$_dcv_doc")" -ge 15 ] \
+		&& echo enough || echo too-few)" "enough"
+
+# AND THE SWEEP MUST HAVE SWEPT. Without nullglob an unmatched glob stays literal,
+# the [ -f ] skips it, and the loop below runs NO checks while the part still
+# reports every check it did run as passing. A clean sweep needs a coverage premise.
+_toc_n=0
+for _toc_f in "$_dcv_dir"/*.md; do
+	[ -f "$_toc_f" ] || continue
+	_toc_n=$((_toc_n + 1))
+	check "every in-document link in ${_toc_f##*/} reaches a heading" \
+		"$(_toc_unresolved "$_toc_f")" "[]"
+done
+check "premise: the link sweep saw the directory's documents" \
+	"$([ "$_toc_n" -ge 3 ] && echo enough || echo "$_toc_n")" "enough"
+unset _toc_f _toc_n
+
+# ---- and it must be able to FAIL, on a fixture rather than on the tree -------
+
+printf '## 14. test_harness_deps.py: the harness\n- [14. x](#14-test_harness_depspy-the-harness)\n' \
+	> "$_dcv_fix/ANCHOR_GOOD.md"
+check "control: an anchor that keeps the underscores resolves" \
+	"$(_toc_unresolved "$_dcv_fix/ANCHOR_GOOD.md")" "[]"
+
+# The exact shape that shipped: the underscores stripped out of the file name.
+printf '## 14. test_harness_deps.py: the harness\n- [14. x](#14-testharnessdepspy-the-harness)\n' \
+	> "$_dcv_fix/ANCHOR_BAD.md"
+check "an anchor that strips the underscores is named, not passed over" \
+	"$(_toc_unresolved "$_dcv_fix/ANCHOR_BAD.md")" \
+	"[1: 14-testharnessdepspy-the-harness]"
+
+# And the derivation itself, on the heading this defect was found in: the dot and
+# the colon go, the underscores stay.
+check "the anchor rule drops punctuation and keeps underscores" \
+	"$(_toc_anchor '14. test_harness_deps.py: the harness must self-test')" \
+	"14-test_harness_depspy-the-harness-must-self-test"
+
+unset -f _toc_anchor _toc_unresolved
+
+
 # ---- the harness must self-test without a database, and the gate must run it --
 #
 # conftest.py imported psycopg AT MODULE SCOPE, and conftest is imported before
 # every run, so a DATABASE DRIVER was a hard requirement of the whole corpus --
-# including the 61 tests that never open a connection. With psycopg absent the run
+# including every test that never opens a connection. With psycopg absent the run
 # did not fail a test, it failed to COLLECT.
 #
 # That coupling was half of why README.md says the corpus is "not in the gate
@@ -321,7 +414,70 @@ check "and it derives the file list rather than repeating it" \
 check "and derives the pins from requirements-test.txt" \
 	"$([ "$(grep -c 'requirements-test.txt' "$_hd_ci")" -ge 1 ] && echo yes || echo no)" "yes"
 
-unset _hd_conf _hd_ci
+# ---- and the DECLARATION must be decided, not declaimed ----------------------
+#
+# WHAT WAS WRONG. `NO_CLUSTER` in test_harness_deps.py says which files need no
+# database, and the job runs exactly those. The only arm over it asked whether the
+# files it names EXIST. That is one direction, and the missing direction is the one
+# that loses coverage: a database-free file nobody adds to the list is absent from
+# the job, every arm stays green, and NOTHING says so. It had already happened
+# twice -- test_build_refusal.py and test_layer.py both need no database and
+# neither was listed.
+#
+# The module decides the property from the corpus with an ast walk and requires set
+# equality with the list. WHY HERE: nothing in the gate runs pytest over that file.
+# The corpus is not in SUITES, and the pytest-guards job runs the database-free
+# files, which test_harness_deps.py is not -- its control arm needs a real cluster.
+# So the module exposes the decision on its command line and this part runs it.
+# Same move as the documentation sweep above: the corpus carries a twin, this copy
+# has the teeth.
+_hd_decide="$PGC_TESTDIR/pytest/test_harness_deps.py"
+
+check "premise: the membership decider is where this part thinks it is" \
+	"$([ -f "$_hd_decide" ] && echo yes || echo no)" "yes"
+
+check "every database-free file in the corpus is declared in NO_CLUSTER" \
+	"$(python3 "$_hd_decide" --disagree "$PGC_TESTDIR/pytest" 2>&1)" "[]"
+
+# PREMISE: the decider SPLIT the corpus. One that parsed nothing reports an empty
+# database-free set, which agrees with an empty list and looks like success; one
+# that called everything database-free would pass a one-directional check.
+_hd_part="$(python3 "$_hd_decide" --partition "$PGC_TESTDIR/pytest" 2>&1)"
+check "premise: the decider partitions the corpus into two non-empty halves" \
+	"$(printf '%s' "$_hd_part" | grep -cE 'free: test_[^|]+ \| bound: test_')" "1"
+
+echo "      CORPUS: $_hd_part"
+
+# ---- and that arm must be able to FAIL, on a fixture rather than on the tree --
+#
+# Everything above passes on a healthy tree, which is what a decider returning a
+# constant also does. The fixture is a two-file corpus with a conftest shaped like
+# the real one: one fixture imports the driver, one depends on it.
+_hd_fix="$PGC_WORKDIR/nocluster"; rm -rf "$_hd_fix"; mkdir -p "$_hd_fix"
+{
+	printf 'import pytest\n'
+	printf 'from pgc_cluster import make_cluster\n\n'
+	printf '@pytest.fixture\ndef pgc_conn():\n    import psycopg\n    yield make_cluster()\n'
+} > "$_hd_fix/conftest.py"
+printf 'def test_it(expect):\n    pass\n' > "$_hd_fix/test_free.py"
+printf 'def test_it(pgc_conn, expect):\n    pass\n' > "$_hd_fix/test_bound.py"
+
+check "the fixture corpus splits the way the property says" \
+	"$(python3 "$_hd_decide" --partition "$_hd_fix")" \
+	"free: test_free.py | bound: test_bound.py"
+
+check "a database-free file declared nowhere is named, not passed over" \
+	"$(python3 "$_hd_decide" --disagree "$_hd_fix" test_bound.py)" \
+	"[2: needs-a-cluster:test_bound.py undeclared:test_free.py]"
+
+check "control: the same corpus with the right declaration is clean" \
+	"$(python3 "$_hd_decide" --disagree "$_hd_fix" test_free.py)" "[]"
+
+check "a declared file that no longer exists is named" \
+	"$(python3 "$_hd_decide" --disagree "$_hd_fix" test_free.py test_renamed.py)" \
+	"[1: absent:test_renamed.py]"
+
+unset _hd_conf _hd_ci _hd_decide _hd_part _hd_fix
 
 unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix _dcv_ht
 unset -f _dcv_missing _dcv_count
