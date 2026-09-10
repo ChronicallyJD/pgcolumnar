@@ -134,6 +134,13 @@ def _empty(v):
     return v is None or (hasattr(v, "__len__") and len(v) == 0)
 
 
+def _is_sqlstate(v):
+    # Five characters of [0-9A-Z], per SQL/PostgreSQL. Explicit ranges rather than
+    # str.isdigit(), which is True for other scripts' digits.
+    return (isinstance(v, str) and len(v) == 5
+            and all(("0" <= c <= "9") or ("A" <= c <= "Z") for c in v))
+
+
 def _plan_nodes(node):
     """Every node of an EXPLAIN (FORMAT JSON) tree, as parsed by psycopg."""
     if isinstance(node, dict):
@@ -353,6 +360,68 @@ class Expect:
         self._counted()
         if got != want:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
+
+    # -- SQLSTATE ----------------------------------------------------------
+    def sqlstate(self, exc, want, name):
+        """Assert a raised database error carries EXACTLY this SQLSTATE.
+
+        `pytest.raises(psycopg.Error)` asserts that one of 254 SQLSTATEs arrived,
+        across 42 SQLSTATE classes -- measured against psycopg 3.3.5 in the audit
+        container by counting the classes in `psycopg.errors` that carry a
+        `sqlstate` and subclass `psycopg.Error`. An unrelated failure of the same
+        family satisfies it, and the worst case is not even a server error: a
+        connect to a socket that does not exist raises `OperationalError` with
+        `sqlstate` None, having never reached a server at all.
+
+        So this is the typed field that says WHICH error, and it is the same move
+        `plan_marker` makes: a typed field rather than a substring of a message.
+        `str(exc.value).count("does not exist")` is the grep this layer exists to
+        remove, wearing a different spelling.
+
+        `want` may be a tuple when an error code legitimately differs across
+        majors -- this tree supports 15 through 19. Every member is still checked
+        to be a real SQLSTATE, so a tuple widens the claim by exactly the codes it
+        names and no further.
+
+        Refuses, rather than compares:
+
+        - a `want` that is not five characters of [0-9A-Z]. `""` and `None` are
+          satisfied by nothing, and `"42"` is a SQLSTATE CLASS -- a prefix claim
+          wearing the spelling of an exact one.
+        - an `exc` with no `sqlstate` attribute at all. The usual cause is passing
+          pytest's `ExceptionInfo` instead of `exc.value`, which would otherwise
+          compare `None` against a real SQLSTATE for ever.
+        """
+        wants = tuple(want) if isinstance(want, (tuple, list)) else (want,)
+        if not wants:
+            raise VacuityError(
+                f"{name}: an empty set of SQLSTATEs is satisfied by nothing, so "
+                f"this could not have passed and asserts nothing about which "
+                f"error arrived."
+            )
+        for w in wants:
+            if not _is_sqlstate(w):
+                raise VacuityError(
+                    f"{name}: {w!r} is not a SQLSTATE. A SQLSTATE is five "
+                    f"characters of [0-9A-Z]; a two-character class is a prefix "
+                    f"claim, and an empty one names no error."
+                )
+        if not hasattr(exc, "sqlstate"):
+            raise VacuityError(
+                f"{name}: a {type(exc).__name__} carries no sqlstate, so this "
+                f"comparison is about the wrong object. Pass the exception itself: "
+                f"`exc.value` inside a `with pytest.raises(...) as exc` block, not "
+                f"`exc`."
+            )
+        self._counted()
+        got = exc.sqlstate
+        if got is None:
+            raise AssertionError(
+                f"{name}: a {type(exc).__name__} carrying no SQLSTATE, so the "
+                f"failure never reached the server: {exc}. Wanted {want!r}."
+            )
+        if got not in wants:
+            raise AssertionError(f"{name}: got SQLSTATE {got!r} want {want!r}")
 
     # -- plans -------------------------------------------------------------
     def plan_node(self, plan, node_type=None, provider=None, name=None):
@@ -945,6 +1014,255 @@ def _broad_except_sites(path):
     return out
 
 
+def _walk_own(node):
+    """Walk one function body, NOT descending into a nested def or lambda.
+
+    A nested function is its own scope. `ast.walk` would attribute its `with`
+    blocks to the outer function as well, reporting one site twice under two
+    different sets of pinned names.
+    """
+    stack = list(getattr(node, "body", []))
+    while stack:
+        child = stack.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        yield child
+        stack.extend(ast.iter_child_nodes(child))
+
+
+def _raises_class_names(arg):
+    """The tail identifiers a pytest.raises() first argument names.
+
+    `psycopg.Error` -> ["Error"]. `(ValueError, psycopg.Error)` -> both.
+
+    A TUPLE IS THE SHAPE PEOPLE ACTUALLY WRITE, and it is how a narrow claim gets
+    widened under pressure. The broad-except scan paid for that lesson already:
+    it looked only at a bare `ast.Name`, so `except Exception` was refused while
+    `except (ValueError, Exception)` passed (@jdatcmd, #905 review). Same hole,
+    same shape, closed here before it was shipped rather than after.
+    """
+    out = []
+    for node in (arg.elts if isinstance(arg, ast.Tuple) else [arg]):
+        if isinstance(node, ast.Name):
+            out.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            out.append(node.attr)
+    return out
+
+
+def _root_name(node):
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _sqlstate_pinned_names(fn):
+    """Names whose SQLSTATE this function body ASSERTS something about.
+
+    Two spellings, because both are honest and the scan must accept whichever the
+    caller chose:
+
+        expect.sqlstate(exc.value, "42883", name)        # the helper
+        expect.text(exc.value.sqlstate, "42883", name)   # the field, read directly
+
+    THE ATTRIBUTE HAS TO REACH A CALL. The first version counted any `ast.Attribute`
+    named `sqlstate` anywhere in the body, so MENTIONING the field switched the rule
+    off. Measured, both collecting clean against the first version and both being the
+    exact vacuity this rule is named for -- any of the 254 SQLSTATEs satisfies them:
+
+        exc.value.sqlstate                    # a bare expression, asserts nothing
+        code = exc.value.sqlstate             # assigned, never read
+
+    Reported by @jdatcmd, who ran the scanner over six constructed files rather than
+    reading it.
+
+    So a read counts when it is an ARGUMENT to a call, and one hop of assignment is
+    followed -- `code = exc.value.sqlstate` then `expect.text(code, ...)` is honest and
+    common, and refusing it would be a false positive on a form nobody should have to
+    stop writing. A second hop is not followed: this is a floor, and the floor is
+    stated rather than implied.
+    """
+    pinned = set()
+    # Names a sqlstate read was assigned to, and names that appear as call arguments.
+    assigned_from_sqlstate = {}
+    call_arg_names = set()
+    for node in _walk_own(fn):
+        if isinstance(node, ast.Call):
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                for sub in ast.walk(arg):
+                    if isinstance(sub, ast.Name):
+                        call_arg_names.add(sub.id)
+                    if isinstance(sub, ast.Attribute) and sub.attr == "sqlstate":
+                        root = _root_name(sub.value)
+                        if root:
+                            pinned.add(root)
+        if isinstance(node, ast.Assign):
+            for sub in ast.walk(node.value):
+                if isinstance(sub, ast.Attribute) and sub.attr == "sqlstate":
+                    root = _root_name(sub.value)
+                    for t in node.targets:
+                        if isinstance(t, ast.Name) and root:
+                            assigned_from_sqlstate[t.id] = root
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "sqlstate"):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name):
+                    pinned.add(sub.id)
+    # One hop: assigned from a sqlstate read, and later handed to a call.
+    for local, root in assigned_from_sqlstate.items():
+        if local in call_arg_names:
+            pinned.add(root)
+    return pinned
+
+
+def _raises_sites(path):
+    """Every `with pytest.raises(...)` in one file, and what is wrong with it.
+
+    PARSED, NOT GREPPED, and `test_layer.py` is why. The layer's own tests drive an
+    inner pytest run, so the forbidden shape appears inside a `pytester.makepyfile`
+    STRING in the very file that proves the guard. A line regex fires on it. That
+    is the false positive the broad-except scan already paid for once, and a guard
+    that rejects legitimate tests gets switched off -- after which the thing it
+    replaced is gone too. A call inside a string literal is not an `ast.Call`.
+
+    WHAT THIS DOES NOT SEE, stated because a guard's blind spots are part of its
+    meaning. It reads `with` blocks inside functions, so a `raises` at module level
+    or used as a plain call (`pytest.raises(E, fn, arg)`) is invisible. It counts
+    TOP-LEVEL statements in the block, so a single `for` or `if` holding several
+    statements counts as one, and a call to a helper that performs the setup counts
+    as one as well -- those two shapes are why `raises-catches-setup` stays open in
+    `VACUITY_MODES.md` section 3.4, and each has an arm in
+    `test_raises_sqlstate.py` asserting this scan reports nothing on it. It does
+    not follow a SQLSTATE pin into a helper, and it matches a pin by name, so an
+    unrelated argument that happens to share the bound name's spelling would
+    satisfy it. It is a floor, not a proof that the assertion is about the
+    statement under test.
+    """
+    # A BROAD pytest.raises IS SATISFIED BY AN UNRELATED FAILURE OF THE SAME FAMILY.
+    #
+    # Measured against psycopg 3.3.5 in the audit container, by counting the classes
+    # in `psycopg.errors` that carry a `sqlstate` and subclass each family:
+    #
+    #     psycopg.Error             254 SQLSTATEs   42 SQLSTATE classes
+    #     psycopg.DatabaseError     254             42
+    #     psycopg.OperationalError   88             15
+    #     psycopg.DataError          68              1
+    #     psycopg.ProgrammingError   57             10
+    #     psycopg.InternalError      20              5
+    #     psycopg.IntegrityError      7              1
+    #     psycopg.NotSupportedError   1              1
+    #     psycopg.Warning             0              0
+    #     psycopg.InterfaceError      0              0
+    #
+    # `pytest.raises(psycopg.Error)` therefore claims "one of 254 server errors
+    # arrived", and does not even claim that: measured on this tree, a connect to a
+    # socket that does not exist raises OperationalError with sqlstate None, so
+    #
+    #     with pytest.raises(psycopg.Error):
+    #         conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+    #         conn.execute("SELECT pgc_definitely_no_such_function()")
+    #
+    # reported `1 passed`, exit 0, with the statement under test never executed.
+    #
+    # WHY THIS LIST AND NOT THE WHOLE FAMILY, and it is the measurement above
+    # deciding it rather than taste. `Warning` and `InterfaceError` cover ZERO
+    # SQLSTATEs, so demanding one of them would be a guard nobody could satisfy --
+    # and an unsatisfiable guard is how a guard gets switched off. The four
+    # intermediate DB-API classes are not refused either: narrowing to one of them
+    # is already a real claim about the error, and OperationalError legitimately
+    # arrives with no SQLSTATE when the connection itself failed.
+    #
+    # WHY IT IS BOUND HERE AND NOT AT MODULE LEVEL. A rule's own parameters must not
+    # be reachable from the tree the rule polices. Any `conftest.py` under
+    # `test/pytest/` is imported before collection, so a module-level tuple can be
+    # rewritten from the corpus:
+    #
+    #     import pgc_vacuity
+    #     pgc_vacuity.<the tuple> = ()
+    #
+    # after which this scan reports zero offences for ever and the suite is green.
+    # Bound inside the function, those lines do nothing -- the name is not looked up
+    # in the module namespace at all. (Rebinding this FUNCTION from a conftest is
+    # still possible. That is true of every name in every Python plugin and is not
+    # something the placement of a tuple can fix. What notices a scan that stopped
+    # being CALLED is selftest 440, which requires the wiring line in the collection
+    # hook, plus the 5 arms in `test_raises_sqlstate.py` that match the refusal on
+    # stderr -- measured, as mutation M5 of that suite's removal proof: deleting the
+    # wiring reddens those same 5. `test_guards_pinned.py` is the layer's census of
+    # "every refusal pinned to its own message" and does NOT yet carry these two;
+    # adding them there is the honest next step, and saying so is better than citing
+    # a file that does not mention them.)
+    broad_families = ("Error", "DatabaseError", "Exception", "BaseException")
+
+    try:
+        tree = ast.parse(pathlib.Path(path).read_text())
+    except (OSError, SyntaxError):
+        return []
+    out = []
+    name = pathlib.Path(path).name
+    for fn in [n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        pinned = _sqlstate_pinned_names(fn)
+        for node in _walk_own(fn):
+            if not isinstance(node, (ast.With, ast.AsyncWith)):
+                continue
+            sites = []
+            for item in node.items:
+                call = item.context_expr
+                if not isinstance(call, ast.Call):
+                    continue
+                f = call.func
+                tail = (f.attr if isinstance(f, ast.Attribute)
+                        else f.id if isinstance(f, ast.Name) else None)
+                if tail != "raises":
+                    continue
+                # THE CLASS MAY ARRIVE BY KEYWORD. `not call.args` skipped the item
+                # BEFORE it was appended, so `pytest.raises(expected_exception=E)`
+                # was checked by neither rule -- and the statement rule was therefore
+                # silently conditional on the class being positional, which the
+                # documentation stated unconditionally. Reported by @jdatcmd, who
+                # built the positional and keyword forms as a pair that differ in
+                # nothing else: the positional one was an offence and the keyword one
+                # was clean.
+                expected = None
+                if call.args:
+                    expected = call.args[0]
+                else:
+                    for kw in call.keywords:
+                        if kw.arg == "expected_exception":
+                            expected = kw.value
+                            break
+                if expected is None:
+                    continue
+                sites.append(item)
+                bound = (item.optional_vars.id
+                         if isinstance(item.optional_vars, ast.Name) else None)
+                broad = [c for c in _raises_class_names(expected)
+                         if c in broad_families]
+                if broad and (bound is None or bound not in pinned):
+                    # THE OFFENCE PHRASE STAYS ON ONE SOURCE LINE. The message
+                    # assembly below filters for this exact substring, and selftest
+                    # 440 counts both copies to catch them drifting apart. Split as
+                    # `"... names no " f"SQLSTATE"` it reads identically at runtime
+                    # and the arm counts one where it wants two -- a guard that can
+                    # no longer see its own drift. Measured: that split is what
+                    # reddened 440 the first time this scan ran under it.
+                    where = f"{name}:{call.lineno}"
+                    out.append(
+                        f"{where} pytest.raises({broad[0]}) names no SQLSTATE"
+                    )
+            # THE RAISER HAS TO BE THE STATEMENT UNDER TEST. Once per `with`, not
+            # once per item: two raises in one `with` share one body.
+            if sites and len(node.body) != 1:
+                # One source line for this phrase too, for the reason above.
+                held = f"{name}:{node.lineno} the pytest.raises block holds"
+                out.append(
+                    f"{held} {len(node.body)} statements, "
+                    f"so which one raised is not pinned"
+                )
+    return out
+
+
 def pytest_collection_modifyitems(config, items):
     """Refuse a bare skip, which exits 0 and reads as success.
 
@@ -968,6 +1286,7 @@ def pytest_collection_modifyitems(config, items):
             for site in _broad_except_sites(f):
                 offenders.append(f"{site} catches Exception broadly")
             offenders.extend(_sorted_ordered_sites(f))
+            offenders.extend(_raises_sites(f))
 
     # An empty parametrize is not a bare skip and deserves its own message: pytest
     # generates ONE skipped placeholder for an empty argvalues list, so a corpus glob
@@ -996,6 +1315,9 @@ def pytest_collection_modifyitems(config, items):
         skips = [o for o in offenders if "@pytest.mark." in o]
         excepts = [o for o in offenders if "catches Exception broadly" in o]
         ordered = [o for o in offenders if "feeds an ordered claim" in o]
+        raises_broad = [o for o in offenders if "names no SQLSTATE" in o]
+        raises_setup = [o for o in offenders
+                        if "which one raised is not pinned" in o]
         parts = []
         if skips:
             parts.append(
@@ -1016,6 +1338,24 @@ def pytest_collection_modifyitems(config, items):
                 "ordering it asserts: "
                 + "; ".join(ordered)
                 + " -- pass the rows in the order the query returned them"
+            )
+        if raises_broad:
+            parts.append(
+                "pytest.raises over a whole error family is satisfied by an "
+                "unrelated failure of the same family, and psycopg.Error covers "
+                "254 SQLSTATEs while a failed connect carries none at all: "
+                + "; ".join(raises_broad)
+                + " -- pin the error with expect.sqlstate(exc.value, '42883', name)"
+                  ", or name the specific exception class"
+            )
+        if raises_setup:
+            parts.append(
+                "a pytest.raises block holding more than one statement cannot say "
+                "which statement raised, so a failure in the SETUP passes for a "
+                "failure in the statement under test: "
+                + "; ".join(raises_setup)
+                + " -- move the setup above the block, leaving the statement under "
+                  "test alone inside it"
             )
         raise pytest.UsageError(
             "the pgColumnar vacuity layer refuses this run: " + ". ".join(parts) + "."
