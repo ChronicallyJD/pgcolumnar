@@ -73,7 +73,7 @@ port_is_free() {
 		# EPIPE here answers "nothing is listening" for a port that IS taken,
 		# and the suite then starts a cluster on an occupied port.
 		_pif="$(ss -Htln "sport = :$1" 2>/dev/null || true)"
-		[ "$(grep -c ":$1" <<<"$_pif" || true)" = 0 ]
+		[ "$(grep -c ":$1" <<<"$_pif" || true)" -eq 0 ]
 	else
 		! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 	fi

@@ -335,6 +335,46 @@ true until the next version shipped.
 
 ### Fixed
 
+- A count `grep` never produced no longer reads as "present" (#929).
+
+  #922 replaced roughly 28 `producer | grep -q PAT` tests with
+  `[ "$(grep -c PAT ... || true)" != 0 ]`, which fixed a real EPIPE race (#486). The
+  replacement answered **present** where the original answered **absent** whenever grep
+  produced no stdout, and a pattern that does not compile is the way to get there:
+
+      grep -cE '[' file   ->  stdout is []   (empty, not "0")
+      [ "" != 0 ]         ->  TRUE           (a STRING comparison: "" is not "0")
+
+  So the test reported the pattern present for a question it never managed to ask.
+
+  Every pattern in the tree is valid today, so no site was wrong. The hazard is the
+  DIRECTION of the next edit: a premise arm phrased to want `present` -- and most are,
+  because a premise asserts the fixture really is in the state the test needs -- turns
+  GREEN when its pattern stops compiling. It passes BECAUSE the instrument broke, which
+  is the failure this harness spends most of its effort refusing. The old form failed
+  red.
+
+  **20 sites** compared a count as a string; they now compare numerically, which is
+  behaviour-preserving in every case that is not broken. Measured:
+
+      input                      [ "$n" != 0 ]   [ "$n" -ne 0 ]   stderr
+      a real count: 0            false           false            no
+      a real count: 3            true            true             no
+      EMPTY (grep usage error)    TRUE            false           YES
+
+  Both spellings failed the same way. `= 0` is an ABSENCE claim, and on an empty value
+  it is false -- which does not assert absence, and is the safe direction once it is
+  loud. All 20 sites pass exactly one input to grep, so the value is always a bare
+  number and a numeric comparison cannot be confused by `file:count` output.
+
+  The other 29 sites already compared numerically and were never affected.
+
+  `test/selftest/420-a-count-grep-never-produced.sh` holds the arms and a heredoc-aware
+  sweep requiring zero string comparisons on a `grep -c`, so the class is closed rather
+  than the 20 instances. The sweep skips comments as well as heredocs: a flat grep
+  counts the paragraph that documents the idiom, which is how a guard comes to flag its
+  own explanation.
+
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
 
