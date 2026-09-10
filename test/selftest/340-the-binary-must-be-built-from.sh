@@ -775,6 +775,56 @@ check "an unhashable tree has an empty manifest" \
 
 unset _mf _mf_lines _mf_hollow
 
+# ---------------------------------------------------------------------------
+# A SYMLINKED src/ MUST BE SKIPPED, LIKE EVERY OTHER SYMLINKED BUILD DIRECTORY.
+#
+# `build_dirs()` adds `root/"src"` unconditionally and then applies
+# `if not d.is_dir() or d.is_symlink(): continue` to every OTHER candidate --
+# so `src` is the one directory that bypasses its own rule. The shell this
+# replaced ran `find "$d" -maxdepth 1 -type f`, and `find -P` does not descend a
+# symlinked command-line argument, so it hashed nothing there.
+#
+# Measured on a tree whose src/ is a symlink:
+#
+#     find -P on the symlinked src/   printed nothing
+#     the module's manifest           src/a.c, src/h.h
+#     old shell fingerprint           9861a3f1fbd1
+#     module fingerprint              9eff36abd48e     <- diverges
+#
+# A stamp written before the port then reads `stale` on a tree that is clean,
+# which is the false FATAL the whole controller exists to prevent. The module's
+# own comment states the invariant it breaks here.
+
+_sl="$(mktemp -d "${TMPDIR:-/tmp}/pgc-symsrc.XXXXXX")"
+mkdir -p "$_sl/real" "$_sl/tree"
+printf 'int a;\n' > "$_sl/real/a.c"
+printf 'void h(void);\n' > "$_sl/real/h.h"
+ln -s "$_sl/real" "$_sl/tree/src"
+printf 'all:\n\ttrue\n' > "$_sl/tree/Makefile"
+printf 'x\n' > "$_sl/tree/pgcolumnar.control"
+
+check "PREMISE the fixture's src really is a symlink" \
+	"$([ -L "$_sl/tree/src" ] && echo yes || echo no)" "yes"
+check "PREMISE and the target really holds sources find would otherwise hash" \
+	"$(ls "$_sl/real" | tr '\n' ' ')" "a.c h.h "
+
+# find -P is the reference: it prints nothing for a symlinked directory argument.
+check "a symlinked src contributes nothing, as find -P contributes nothing" \
+	"$(pgc_source_manifest "$_sl/tree" | grep -c '^src/')" "0"
+check "so the tree still fingerprints from its root files alone" \
+	"$(pgc_source_manifest "$_sl/tree" | wc -l)" "2"
+
+# CONTROL: a REAL src directory must still be hashed, or the fix is "skip src".
+_slr="$(mktemp -d "${TMPDIR:-/tmp}/pgc-realsrc.XXXXXX")"
+mkdir -p "$_slr/src"
+printf 'int a;\n' > "$_slr/src/a.c"
+printf 'all:\n\ttrue\n' > "$_slr/Makefile"
+printf 'x\n' > "$_slr/pgcolumnar.control"
+check "control: a real src directory is still hashed" \
+	"$(pgc_source_manifest "$_slr" | grep -c '^src/a.c ')" "1"
+
+unset _sl _slr
+
 # The FATAL path's dump, driven rather than grepped for. A report nobody can run
 # is a report nobody knows is empty, and "the source says it calls it" is the kind
 # of claim this suite exists to refuse.

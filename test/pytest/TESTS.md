@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**123 tests in 10 files.** One hundred and eight of them test the harness rather than the
+**124 tests in 10 files.** One hundred and nine of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -632,6 +632,14 @@ another route would evade it. It carries three premises of its own — that the 
 recognises a write at `$PGC_SRCDIR`, that it recognises one through `$_bd_root`,
 and that a write into a COPY is *not* flagged — because a pattern that matches
 nothing would otherwise pass this arm silently.
+
+`test_a_symlinked_src_is_skipped_like_any_other_symlinked_build_dir` closes the
+one directory that was exempt from the module's own rule. `build_dirs()` added
+`root/"src"` unconditionally and applied the symlink test to every other
+candidate, so a tree whose `src/` is a symlink hashed differently across the
+port — `find -P` does not descend a symlinked directory argument, so the shell
+hashed nothing there while the module walked it. It carries a control, because
+"skip src entirely" would satisfy the arm without it.
 
 **What is still not guarded**, named here rather than left for someone to find: a
 TRUNCATED manifest — `find` returning fewer files rather than none — would produce
