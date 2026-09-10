@@ -1378,8 +1378,8 @@ over tests nothing ran.
 ## 18. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 28
-of them.** The other 44, of which 43 were demonstrated, are listed there with the
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 29
+of them.** The other 43, of which 42 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
 Read it before adding a test. One gap is most likely to affect a new test now.

@@ -47,8 +47,8 @@ recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 28 |
-| named in section 3, not refused | 44 |
+| named in section 2, refused today | 29 |
+| named in section 3, not refused | 43 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -65,7 +65,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-28 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+29 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -122,7 +122,7 @@ guard whose subject is false greens has no business emitting a false red.
 
 ## 3. What it does not refuse
 
-55 modes by the run's count, **44 of them named below**, **48 demonstrated by a run**. 51 have a refusal already designed.
+55 modes by the run's count, **43 of them named below**, **47 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -354,6 +354,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 28 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 29 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.
