@@ -82,20 +82,32 @@ def test_each_verdict_emits_one_record_carrying_its_fields(expect):
                           (' check "a name" x y', "FAIL")):
         recs = _records(call)
         expect.num(len(recs), 1, f"a {verdict} check emits exactly one record")
-        expect.text(recs[0].split("\t")[3], verdict, f"and its verdict field says {verdict}")
-    expect.text(_records(' check "a name" x x')[0].split("\t")[2], "a name",
+        expect.text(recs[0].split("\t")[4], verdict, f"and its verdict field says {verdict}")
+    expect.text(_records(' check "a name" x x')[0].split("\t")[3], "a name",
                 "and the name field keeps its spaces")
+
+    # WHICH PART asked it. The suite is not enough: harness_selftest sources
+    # 40-odd parts into one shell and its premises are phrased to be COPIED --
+    # "premise: the pytest layer is where THIS PART thinks it is" says "this part"
+    # so the same sentence works in any of them. So (suite, name) is a key of
+    # check NAMES, not of checks, and one sharer going red would mark them all.
+    # Derived from BASH_SOURCE rather than from a convention. Found by
+    # OffgridwithJD, whose own six branches were each adding more.
+    parts = {r.split("\t")[2] for r in _records(' check "a name" x x')}
+    expect.num(len(parts), 1, "the record names exactly one part")
+    expect.text("nonempty" if parts and next(iter(parts)) else "empty", "nonempty",
+                "and the part field is not blank")
 
     recs = _records(' check_unrunnable "a name" MISSING_DEPENDENCY "no jq"')
     expect.num(len(recs), 1, "an unrunnable check emits exactly one record")
-    expect.text(recs[0].split("\t")[3], "UNRUN",
+    expect.text(recs[0].split("\t")[4], "UNRUN",
                 "and its verdict is UNRUN, which is neither of the other two")
-    expect.text(recs[0].split("\t")[4], "MISSING_DEPENDENCY",
+    expect.text(recs[0].split("\t")[5], "MISSING_DEPENDENCY",
                 "and the REASON_CODE travels in the reason field, not in prose")
 
     # A reason the enum does not hold is already a FAIL. It must record the verdict it
     # produced, not the one it was asked for.
-    expect.text(_records(' check_unrunnable "n" NOT_A_REASON "x"')[0].split("\t")[3],
+    expect.text(_records(' check_unrunnable "n" NOT_A_REASON "x"')[0].split("\t")[4],
                 "FAIL", "a bogus reason code records FAIL, not UNRUN")
 
 
@@ -114,7 +126,7 @@ def test_every_helper_records_exactly_once(expect):
     for call, verdict in cases.items():
         recs = _records(" " + call)
         expect.num(len(recs), 1, f"{call.split()[0]} emits exactly one record")
-        expect.text(recs[0].split("\t")[3], verdict, f"and records {verdict}")
+        expect.text(recs[0].split("\t")[4], verdict, f"and records {verdict}")
 
 
 def test_the_human_lines_are_byte_identical(expect):
