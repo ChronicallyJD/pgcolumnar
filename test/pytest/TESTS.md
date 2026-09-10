@@ -63,6 +63,7 @@ behaviour, the source of that number is named.
 - [15. Adding a test](#15-adding-a-test)
 - [16. What this corpus does NOT yet refuse](#16-what-this-corpus-does-not-yet-refuse)
 - [17. Traps this corpus records](#17-traps-this-corpus-records)
+- [18. test_raises_sqlstate.py: which error, and which statement](#18-test_raises_sqlstatepy-which-error-and-which-statement)
 
 ## 1. How to read a test in here
 
@@ -1178,14 +1179,23 @@ story from #473 and #476.
 ## 16. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
-of them.** The other 47, of which 46 were demonstrated, are listed there with the
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 26
+of them.** The other 46, of which 45 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
-Read it before adding a test. The gaps most likely to affect a new test are that
-`pytest.raises` is still allowed to be broad enough that an unrelated failure of the
-same family satisfies it, and that a write is not required to have written anything.
-Both are named there with the refusal each needs.
+Read it before adding a test. Two gaps are most likely to affect a new test now.
+
+**A write is not required to have written anything.** `INSERT ... SELECT ... WHERE
+false` writes nothing, raises nothing, and leaves a `rowcount` of 0 that nobody
+reads.
+
+**A `pytest.raises` block can still catch a failure from its own setup.** Section 17
+closed `raises-too-broad` — a broad family with no SQLSTATE pinned does not collect —
+and only NARROWED `raises-catches-setup`. The block must hold one top-level
+statement, so two shapes still walk past it: a call to a helper that performs the
+setup, and a compound statement such as a `for` holding the setup and the statement
+under test. Both are pinned by arms that assert the scan reports nothing on them, and
+`VACUITY_MODES.md` section 3.4 says what would close the mode.
 
 ## 17. Traps this corpus records
 
@@ -1218,3 +1228,131 @@ process. Walking `/proc/<pid>/cmdline` is the reliable instrument.
 
 `test_one_tree_hashes_one_way_however_the_locale_is_set` requires one tree to
 give one fingerprint across every installed locale.
+
+## 18. test_raises_sqlstate.py: which error, and which statement
+
+Numbered 17 rather than inserted after section 4, where a reader looking for a
+per-file section would expect it. Renumbering twelve headings and their Contents
+anchors while sibling branches are editing this file buys a reader nothing and
+costs a merge; the Contents entry above is what makes it findable.
+
+**What this file is for.** `pytest.raises(psycopg.Error)` claims that one of 254
+SQLSTATEs arrived, across 42 SQLSTATE classes — counted against psycopg 3.3.5 by
+asking how many classes in `psycopg.errors` carry a `sqlstate` and subclass that
+family. It does not claim even that much. Measured on this tree before the guard
+landed:
+
+    with pytest.raises(psycopg.Error):
+        conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+        conn.execute("SELECT pgc_definitely_no_such_function()")
+    expect.num(1, 1, "the server rejected the call")
+
+reported `1 passed`, exit 0. What satisfied the claim was `OperationalError` with
+`sqlstate` None: the connect failed, nothing reached a server, and the statement the
+test is about never executed. Against a live PostgreSQL 18.4 the same shape raises
+`InvalidName` 42602 from the SETUP line while the statement under test raises
+`UndefinedObject` 42704 — two different SQLSTATEs, one `raises`, one green test.
+
+### Both directions are enforced, and they close different amounts
+
+A `pytest.raises` over `Error`, `DatabaseError`, `Exception` or `BaseException` must
+pin a SQLSTATE, and the block must hold exactly one top-level statement whatever the
+class. Neither is a convention: both are an `ast` walk in
+`pytest_collection_modifyitems`, so an offending file does not collect at all rather
+than collecting and passing.
+
+**The first rule closes `raises-too-broad`.** It moved to `VACUITY_MODES.md`
+section 2.
+
+**The second only MITIGATES `raises-catches-setup`, which stays in section 3.4.**
+It counts TOP-LEVEL statements, so it removes the spelling where the setup sits on
+the line above — and two shapes walk straight past it, each being one statement that
+performs the setup inside the block:
+
+- **a helper call.** `_setup_then_run(conn)` is one statement, and the setup runs
+  inside the helper.
+- **a compound statement.** A `for` over the setup and the statement under test is
+  one statement holding two; an `if`, a `with` or a `try` nests the same way.
+
+Measured against the shipped scan, both report `1 passed`, exit 0, and **zero
+offences**. `test_a_helper_hiding_the_setup_is_not_refused` and
+`test_a_compound_statement_hiding_the_setup_is_not_refused` assert exactly that, so
+the residual is a measurement rather than a sentence. Counting statements
+recursively would catch both and would also refuse a legitimate single-statement
+loop; what would close the mode is a claim about WHICH statement raised, and
+`VACUITY_MODES.md` section 5 carries it as the next entry.
+
+### Why the scan parses instead of grepping
+
+Every arm below writes the forbidden shape inside a `pytester.makepyfile` string,
+because that is how the layer's own tests drive an inner run. A line regex fires on
+those strings and refuses the file that proves the guard — the false positive the
+broad-`except` scan already paid for once. Swept over `test/pytest/*.py`, the AST
+finds **5** `pytest.raises` call sites and reports **0** offences, while a
+`pytest.raises(` line regex matches **35** lines, **30** of them inside a string
+literal or a comment. `test_the_raises_scan_reads_code_not_a_string_literal` pins
+it.
+
+### The rule's own parameters are not reachable from the corpus
+
+The list of broad families is bound **inside** the scan, not at module level. Every
+`conftest.py` under `test/pytest/` is imported before collection, so a module-level
+tuple is writable from the tree the rule polices — `import pgc_vacuity` then
+`pgc_vacuity.<the tuple> = ()` — after which the scan reports zero offences for ever
+and the suite is green with the guard switched off and nothing saying so.
+`test_a_conftest_cannot_switch_the_broad_family_list_off` writes three plausible
+spellings of the name onto the module and requires the refusal to still arrive.
+Rebinding the scan FUNCTION from a conftest is still possible; that is true of every
+name in every Python plugin, and `test_guards_pinned.py` is what
+notice a scan that stopped being called.
+
+### The static half
+
+**THE ARMS LIVE HERE AND NOWHERE ELSE.** An earlier version of this work carried a
+shell mirror, `test/selftest/440-a-raises-must-name-a-sqlstate.sh`, which checked this
+scan by grepping its source: 44 of its 55 checks were `grep -c` against the function's
+text and it invoked `python3` zero times. @jdatcmd showed what that cannot do —
+three faithful neuterings (`False and` prefixed, nothing renamed, every pinned
+substring left in place) left the part at 55 passed while the scan went blind.
+
+The mirror is gone, for two reasons that point the same way. A text pin cannot see a
+disabled arm, so the proof has to RUN the scan; and the shell harness and this corpus
+are **parallel in functionality without driving each other** — a shell part whose whole
+subject is this file's source text is a dependency, not a parallel guard. So the
+neutering proof is the two `test_disabling_*` arms above, which copy the layer, disable
+one condition faithfully, and require the copy to go blind.
+
+### The arms
+
+| test | what it pins |
+| --- | --- |
+| `test_raises_requires_a_sqlstate` | the red test `VACUITY_MODES.md` section 5 names, byte for byte the shape that reported `1 passed` on main |
+| `test_a_raises_that_pins_the_sqlstate_is_accepted` | the positive control that matters most: the honest form must still collect and pass |
+| `test_a_raises_pinned_by_reading_the_field_is_accepted` | the second honest spelling, `exc.value.sqlstate` read directly, is a claim about a typed field too |
+| `test_a_narrow_raises_needs_no_sqlstate` | scope control: a one-SQLSTATE class already names the error, so a second spelling would be noise |
+| `test_a_raises_tuple_hides_a_broad_member` | @jdatcmd's #905 hole, closed before shipping: `(ValueError, psycopg.Error)` is still broad |
+| `test_raises_exception_is_refused_like_a_broad_except` | `except Exception` was already uncollectable; `pytest.raises(Exception)` swallows the same failures |
+| `test_setup_inside_a_raises_block_is_refused` | two statements in the block: narrow and pinned, and still unable to say which raised |
+| `test_a_raises_block_with_one_statement_is_accepted` | the control for it, differing in exactly one property — the setup moved above the block |
+| `test_the_raises_scan_reads_code_not_a_string_literal` | the false positive the scan is AST-based to avoid, pinned so it cannot return |
+| `test_sqlstate_refuses_a_sqlstate_class_prefix` | `"42"` is a SQLSTATE CLASS — a prefix claim wearing the spelling of an exact one |
+| `test_sqlstate_refuses_an_empty_expectation` | an empty `want` names no error, so nothing could have failed it |
+| `test_sqlstate_refuses_an_object_carrying_no_sqlstate` | passing `exc` instead of `exc.value` would compare `None` against a real code for ever |
+| `test_sqlstate_fails_when_the_failure_never_reached_the_server` | the measured case: `OperationalError` with `sqlstate` None is a `psycopg.Error` that is no server error |
+| `test_sqlstate_fails_on_a_different_sqlstate` | the whole point: the setup raised 42602 and the statement under test raises 42704 |
+| `test_sqlstate_accepts_the_exact_sqlstate` | positive control for the refusals above |
+| `test_sqlstate_accepts_one_of_several_named_codes` | majors 15 through 19 can differ, so a tuple widens the claim by exactly the codes it names |
+| `test_sqlstate_refuses_an_empty_set_of_codes` | and an empty tuple is satisfied by nothing, so the hatch is not the hole |
+| `test_the_raises_scan_leaves_the_unrunnable_state_alone` | a documented hatch the corpus never exercises: `cannot_run` still prints `UNRUN`, counts it, and exits 67 with this scan loaded |
+| `test_the_raises_scan_does_not_touch_a_recorder_made_in_the_body` | a test that fetches `expect` itself still satisfies the layer, because this scan runs at collection time |
+| `test_a_helper_hiding_the_setup_is_not_refused` | **residual 1 of 2, pinned.** One statement, a narrow class, a pinned SQLSTATE, and the setup inside the helper still raised: `1 passed`, no offence |
+| `test_a_compound_statement_hiding_the_setup_is_not_refused` | **residual 2 of 2, pinned.** A `for` holding the setup and the statement under test is one top-level statement: `1 passed`, no offence |
+| `test_a_conftest_cannot_switch_the_broad_family_list_off` | the rule's own family list is not writable from the corpus it polices |
+| `test_a_bare_sqlstate_expression_does_not_pin_anything` | `exc.value.sqlstate` as a statement of its own asserts nothing, so mentioning the field is not pinning it |
+| `test_a_sqlstate_assigned_and_never_read_does_not_pin_anything` | the same hole one step on: bound to a name nothing uses |
+| `test_one_hop_through_a_local_name_is_an_honest_pin` | the cost side — `code = exc.value.sqlstate` then `expect.text(code, ...)` stays collectable |
+| `test_the_keyword_form_is_checked_by_both_rules` | `pytest.raises(expected_exception=...)` is not an exemption from either rule |
+| `test_the_keyword_form_with_a_pin_is_collectable` | and it is not refused merely for being the keyword form |
+| `test_disabling_the_sqlstate_rule_makes_the_scan_blind` | the neutering proof: a copy of the layer with `False and` prefixed, nothing renamed, goes blind while still containing the pinned text |
+| `test_disabling_the_statement_rule_makes_the_scan_blind` | the same for the second condition, so neither rule rests on the other's arm |
+| `test_the_mode_this_layer_only_narrows_is_still_listed_as_open` | `raises-catches-setup` must stay in section 3 of the mode inventory |
