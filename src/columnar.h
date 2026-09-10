@@ -667,6 +667,10 @@ extern void PgColumnarReadSetParallelCounter(PgColumnarReadState *readState,
  * scan's EXPLAIN output to show how many chunk groups the min/max skip lists
  * removed. total = read + skipped over the groups the scan has reached.
  */
+extern bool PgColumnarReadSetRuntimeRange(PgColumnarReadState *readState,
+										AttrNumber attno, Oid subtype,
+										Datum minimum, Datum maximum);
+extern uint64 PgColumnarRuntimeGroupsRemoved(PgColumnarReadState *readState);
 extern void PgColumnarReadStats(PgColumnarReadState *readState,
 							  uint64 *groupsRead, uint64 *groupsSkipped,
 							  uint64 *groupsTotal);
@@ -918,6 +922,11 @@ extern void PgColumnarSerializeFlushRows(uint64 storageId, const uint64 *rows,
  * a scanrelid==0 upper node is the vectorized aggregate.
  */
 extern const CustomScanMethods pgcolumnar_scan_methods;
+extern bool pgcolumnar_enable_join_runtime_filter;
+extern void PgColumnarRuntimeFilterInit(void);
+extern bool PgColumnarAttachRuntimeRange(PlanState *scanState,
+										 AttrNumber attno, Oid subtype,
+										 Datum minimum, Datum maximum);
 extern Node *PgColumnarCreateAggScanState(CustomScan *cscan);
 extern Node *PgColumnarCreateGroupAggScanState(CustomScan *cscan);
 

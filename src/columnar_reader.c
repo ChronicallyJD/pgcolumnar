@@ -68,6 +68,7 @@ typedef struct SkipPredicate
 	 * would have made on a group that is thrown away anyway.
 	 */
 	uint64		excludes;
+	bool		runtimeFilter;	/* owned by the join runtime filter */
 } SkipPredicate;
 
 struct PgColumnarReadState
@@ -136,6 +137,9 @@ struct PgColumnarReadState
 	/* chunk-group skip counters over the groups reached so far (spec 9) */
 	uint64		groupsRead;
 	uint64		groupsSkipped;
+	uint64		runtimeGroupsRemoved;
+	int			runtimePredicateStart;
+	int			runtimePredicateCount;
 
 	/*
 	 * Native format (PGCN v1) read state. The scan reads row groups and column
@@ -592,6 +596,7 @@ PgColumnarBeginReadWithStorage(Relation rel, Snapshot snapshot,
 
 	readState->started = false;
 	readState->exhausted = false;
+	readState->runtimeGroupsRemoved = 0;
 	readState->parallelScan = parallelScan;
 	readState->readContext = readContext;
 	readState->stripeContext = AllocSetContextCreate(readContext,
@@ -852,6 +857,85 @@ pgcolumnar_build_predicates(PgColumnarReadState *readState, int nkeys, ScanKey k
 	 */
 	for (int i = 0; i < readState->numPredicates; i++)
 		readState->predOrder[i] = i;
+}
+
+
+/*
+ * PgColumnarReadSetRuntimeRange
+ *		Attach or replace the two conservative bounds derived from a fully
+ *		spooled hash-join build side.  The bounds use the same predicate builder
+ *		as ordinary scan keys, so cross-type comparison and domain handling have
+ *		exactly one implementation.
+ */
+bool
+PgColumnarReadSetRuntimeRange(PgColumnarReadState *readState,
+							  AttrNumber attno, Oid subtype,
+							  Datum minimum, Datum maximum)
+{
+	ScanKeyData keys[2];
+	SkipPredicate built[2];
+	SkipPredicate *predicates;
+	int		   *order;
+	int			oldCount = readState->numPredicates;
+	int			start = readState->runtimePredicateStart;
+	int			builtCount;
+	MemoryContext oldContext;
+
+	MemSet(keys, 0, sizeof(keys));
+	MemSet(built, 0, sizeof(built));
+	ScanKeyEntryInitialize(&keys[0], 0, attno,
+						   BTGreaterEqualStrategyNumber, InvalidOid,
+						   InvalidOid, InvalidOid, minimum);
+	keys[0].sk_subtype = subtype;
+	ScanKeyEntryInitialize(&keys[1], 0, attno,
+						   BTLessEqualStrategyNumber, InvalidOid,
+						   InvalidOid, InvalidOid, maximum);
+	keys[1].sk_subtype = subtype;
+
+	builtCount = pgcolumnar_make_predicates(built, 2, keys,
+										readState->tupdesc,
+										readState->natts,
+										readState->readContext);
+	if (builtCount != 2)
+		return false;
+
+	if (readState->runtimePredicateCount == 2)
+	{
+		built[0].runtimeFilter = true;
+		built[1].runtimeFilter = true;
+		readState->predicates[start] = built[0];
+		readState->predicates[start + 1] = built[1];
+		return true;
+	}
+
+	oldContext = MemoryContextSwitchTo(readState->readContext);
+	predicates = palloc0(sizeof(SkipPredicate) * (oldCount + 2));
+	order = palloc0(sizeof(int) * (oldCount + 2));
+	if (oldCount > 0)
+	{
+		memcpy(predicates, readState->predicates,
+			   sizeof(SkipPredicate) * oldCount);
+		memcpy(order, readState->predOrder, sizeof(int) * oldCount);
+	}
+	built[0].runtimeFilter = true;
+	built[1].runtimeFilter = true;
+	predicates[oldCount] = built[0];
+	predicates[oldCount + 1] = built[1];
+	order[oldCount] = oldCount;
+	order[oldCount + 1] = oldCount + 1;
+	readState->predicates = predicates;
+	readState->predOrder = order;
+	readState->numPredicates = oldCount + 2;
+	readState->runtimePredicateStart = oldCount;
+	readState->runtimePredicateCount = 2;
+	MemoryContextSwitchTo(oldContext);
+	return true;
+}
+
+uint64
+PgColumnarRuntimeGroupsRemoved(PgColumnarReadState *readState)
+{
+	return readState == NULL ? 0 : readState->runtimeGroupsRemoved;
 }
 
 /*
@@ -1498,6 +1582,8 @@ pgcolumnar_predicate_excluded(PgColumnarReadState *rs, int oi)
 	int			ahead;
 
 	rs->predicates[here].excludes++;
+	if (rs->predicates[here].runtimeFilter)
+		rs->runtimeGroupsRemoved++;
 
 	if (oi == 0)
 		return;
@@ -4495,6 +4581,7 @@ PgColumnarRescanRead(PgColumnarReadState *readState)
 	MemoryContextReset(readState->stripeContext);
 	readState->started = false;
 	readState->exhausted = false;
+	readState->runtimeGroupsRemoved = 0;
 
 	/*
 	 * Reclaim the previous start's row-group list (#734). Clearing the pointer

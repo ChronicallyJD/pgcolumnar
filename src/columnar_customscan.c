@@ -123,6 +123,7 @@ typedef struct PgColumnarCustomScanState
 	Datum	   *projValues;			/* scratch, length K+1 (index 0 = rownumber) */
 	bool	   *projNulls;
 	PgColumnarLivenessCache *livenessCache;	/* cached base liveness for the scan */
+	bool		runtimeRangeAttached;
 } PgColumnarCustomScanState;
 
 /* path -> plan */
@@ -3709,7 +3710,37 @@ PgColumnarExplainCustomScan(CustomScanState *node, List *ancestors,
 		ExplainPropertyInteger("Columnar Rows Filtered Before Materialization", NULL,
 							   (int64) PgColumnarRowsFilteredEarly(cstate->readState),
 							   es);
+		if (cstate->runtimeRangeAttached)
+			ExplainPropertyInteger("Runtime Filter Groups Removed", NULL,
+								   (int64) PgColumnarRuntimeGroupsRemoved(cstate->readState),
+								   es);
 	}
+}
+
+/*
+ * PgColumnarAttachRuntimeRange
+ *		Publish a completed build-side hull to a direct base scan before its
+ *		first tuple is requested.  Projection scans are excluded by the planner;
+ *		checking again here turns a planner mistake into an error, not a wrong
+ *		answer.
+ */
+bool
+PgColumnarAttachRuntimeRange(PlanState *scanState, AttrNumber attno, Oid subtype,
+							 Datum minimum, Datum maximum)
+{
+	PgColumnarCustomScanState *state;
+
+	if (!IsA(scanState, CustomScanState))
+		elog(ERROR, "pgcolumnar runtime range expected a custom scan");
+	state = (PgColumnarCustomScanState *) scanState;
+	if (state->css.methods != &pgcolumnar_exec_methods || state->projScan ||
+		state->readState == NULL)
+		elog(ERROR, "pgcolumnar runtime range expected a direct base scan");
+
+	state->runtimeRangeAttached =
+		PgColumnarReadSetRuntimeRange(state->readState, attno, subtype,
+									  minimum, maximum);
+	return state->runtimeRangeAttached;
 }
 
 /* -------------------------------------------------------------------------
