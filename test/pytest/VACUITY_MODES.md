@@ -47,8 +47,8 @@ recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 27 |
-| named in section 3, not refused | 45 |
+| named in section 2, refused today | 28 |
+| named in section 3, not refused | 44 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -65,7 +65,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-27 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+28 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -87,6 +87,7 @@ test in `test_layer.py` that fails without it.
 | an empty parameter set fails the run, with its own message | `empty-parametrize-is-a-silent-skip` |
 | a skip during fixture setup fails the run | `session-fixture-skip-greens-the-whole-suite` |
 | a broad `pytest.raises` must pin a SQLSTATE, found by AST | `raises-too-broad` |
+| a `pytest.raises` block may not hold a compound statement or call a function this file defines | `raises-catches-setup` |
 | every comparison refuses a value carrying the `QUERY_ERROR` prefix, on either side | `error-swallowed-to-empty` |
 
 Three of those were added after checking this layer against the inventory rather
@@ -120,7 +121,7 @@ guard whose subject is false greens has no business emitting a false red.
 
 ## 3. What it does not refuse
 
-55 modes by the run's count, **45 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
+55 modes by the run's count, **44 of them named below**, **48 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -185,33 +186,33 @@ Still open in this family:
 `DatabaseError`, `Exception` or `BaseException` does not collect unless the block
 binds the exception and the body pins its SQLSTATE. See section 2.
 
-- `raises-catches-setup` — **still open, and the statement rule only narrows it.**
-  The scan refuses a `pytest.raises` block holding more than one TOP-LEVEL
-  statement, so the spelling where the setup sits on the line above the statement
-  under test is gone. Two shapes walk straight past a count of top-level
-  statements, and each is one statement that performs the setup inside the block:
+**`raises-catches-setup` is now closed.** The statement COUNT rule refused a block
+  holding more than one top-level statement, and two shapes are ONE statement that still
+  performs the setup inside the block:
 
       with pytest.raises(psycopg.errors.UndefinedObject) as exc:
           _setup_then_run(conn)          # a HELPER CALL: one statement
-      expect.sqlstate(exc.value, "42704", "the ALTER was refused")
 
       with pytest.raises(psycopg.errors.UndefinedObject) as exc:
           for stmt in (setup_sql, sql_under_test):   # a COMPOUND STATEMENT: one
               conn.execute(stmt)                     # statement holding two
-      expect.sqlstate(exc.value, "42704", "the ALTER was refused")
 
-  Measured against the shipped scan: both report `1 passed`, exit 0, **zero
+  Both were measured against the shipped scan reporting `1 passed`, exit 0, **zero
   offences**, with the setup raising and the statement under test never running.
-  An `if`, a `with` or a `try` nests the same way. Counting statements RECURSIVELY
-  would catch these and would also refuse a legitimate single-statement loop, so
-  the fix is not a deeper count — it is a claim about WHICH statement raised: a
-  position, or a helper that runs exactly one statement and owns the assertion.
 
-  `test_a_helper_hiding_the_setup_is_not_refused` and
-  `test_a_compound_statement_hiding_the_setup_is_not_refused` in
-  `test_raises_sqlstate.py` assert the scan reports nothing on these two shapes, so
-  the gap is a measurement rather than a sentence, and `test_raises_sqlstate.py` requires both
-  arms plus this entry to still exist.
+  THE FIX IS NOT A DEEPER COUNT, for the reason this entry always gave: counting
+  recursively would also refuse a legitimate single-statement loop. It is a claim about
+  WHICH statement raised, in two rules — no compound statement (all nine kinds, looked
+  up by name so a missing `TryStar` or `Match` cannot silently narrow the rule), and no
+  call to a function DEFINED IN THE SAME FILE, anywhere in the statement. A call to an
+  IMPORTED function or to a METHOD is the thing under test and stays allowed, which is
+  what makes the budget zero: measured over the corpus, five `pytest.raises` blocks —
+  four calling an imported function, one calling a method — and no offence on any.
+
+  THE RESIDUAL IS A METHOD. A method that performs setup and then the statement is
+  invisible to this rule, and no static rule can see inside it. The two arms that used
+  to assert these shapes were NOT refused now assert that they are, so the closure is a
+  measurement rather than a sentence. See TESTS.md section 20.
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
   `zero-on-both-arms`, `tuple-assert-always-true`, `approx-of-nothing`
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
@@ -332,6 +333,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 27 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 28 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.

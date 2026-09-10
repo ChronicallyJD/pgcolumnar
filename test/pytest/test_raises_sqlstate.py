@@ -26,8 +26,8 @@ last three arms exist. Property 1 CLOSES `raises-too-broad`: a broad family with
 nothing pinned cannot be collected. Property 2 only MITIGATES
 `raises-catches-setup`, because it counts TOP-LEVEL statements: a call to a helper
 that performs the setup is one statement, and so is a `for` holding the setup and
-the statement under test. `test_a_helper_hiding_the_setup_is_not_refused` and
-`test_a_compound_statement_hiding_the_setup_is_not_refused` assert this scan
+the statement under test. `test_a_helper_hiding_the_setup_is_refused` and
+`test_a_compound_statement_hiding_the_setup_is_refused` assert this scan
 reports NOTHING on those two shapes, which is why `raises-catches-setup` stays in
 `VACUITY_MODES.md` section 3.4 rather than moving to section 2.
 
@@ -408,20 +408,19 @@ def test_the_raises_scan_does_not_touch_a_recorder_made_in_the_body(pytester, ex
 # below are one top-level statement that performs the setup inside the block.
 # ---------------------------------------------------------------------------
 
-def test_a_helper_hiding_the_setup_is_not_refused(pytester, expect):
-    """Residual shape 1 of 2: a CALL TO A HELPER that performs the setup.
+def test_a_helper_hiding_the_setup_is_refused(pytester, expect):
+    """Shape 1 of the two `raises-catches-setup` residuals: a CALL TO A HELPER.
 
-    One statement, a narrow class, a pinned SQLSTATE, and the setup still raised.
-    The block holds one top-level statement, so the statement rule is satisfied;
-    the class names a single SQLSTATE and the test pins it, so the SQLSTATE rule is
-    satisfied; and the error came from inside the helper rather than from the
-    statement the test is about. Against this guard: `1 passed`, exit 0, and the
-    scan reported no offence.
+    One top-level statement, a narrow class, a pinned SQLSTATE -- and the setup
+    raised while the statement the test names never ran. The statement COUNT cannot
+    see this, because a helper call is one statement.
 
-    What would close it is a claim about WHICH statement raised -- a position, or a
-    helper that runs exactly one statement and owns the assertion -- and this scan
-    makes no such claim. So `raises-catches-setup` stays in `VACUITY_MODES.md`
-    section 3.4.
+    THE RULE IS NOT A DEEPER COUNT. Counting recursively would also refuse a
+    legitimate single-statement loop. The claim is about which statement raised, so
+    the block may not call a function DEFINED IN THE SAME FILE: such a function can
+    run any number of statements, and nothing in the block says which of them failed.
+    A call to an imported function or to a method is the thing under test and stays
+    allowed -- that is the shape all five `pytest.raises` blocks in this corpus use.
     """
     result = _inner(pytester, '''
         import psycopg
@@ -437,54 +436,130 @@ def test_a_helper_hiding_the_setup_is_not_refused(pytester, expect):
                 _do_the_thing(True)
             expect.sqlstate(exc.value, "42704", "the statement under test")
         ''')
-    expect.outcomes(result, "the setup hidden in a helper is NOT refused -- the "
-                            "first residual this guard leaves open",
-                    passed=1, failed=0)
-    # `passed=1` IS THE ZERO-OFFENCE ASSERTION, and it is the whole of it. An
-    # offence makes the layer raise pytest.UsageError, which collects nothing and
-    # exits 4, so `passed=1` is reachable only when the scan reported nothing at
-    # all. A `result.stderr.no_fnmatch_line("*names no SQLSTATE*")` after this line
-    # was tried and removed: `expect.outcomes` fails first in the only case where an
-    # offence could appear, so the extra line can never execute and reads as a check
-    # while being none. Measured -- under a mutation that flags every block, both
-    # residual arms redden on `outcomes` and the stderr lines are never reached.
+    expect.run_failed(result, "a helper call inside the block must not be collectable")
+    result.stderr.fnmatch_lines(["*calls _do_the_thing(), defined in this file*"])
 
 
-def test_a_compound_statement_hiding_the_setup_is_not_refused(pytester, expect):
-    """Residual shape 2 of 2: a COMPOUND STATEMENT holding the setup and the
-    statement under test.
+def test_a_compound_statement_hiding_the_setup_is_refused(pytester, expect):
+    """Shape 2 of the two: a COMPOUND STATEMENT holding setup and the statement.
 
-    A `for` over two statements is ONE top-level statement, so `len(node.body) == 1`
-    and the rule is satisfied. The loop raises on its FIRST iteration -- the setup --
-    and the statement the test names never runs. Measured here as `1 passed`, exit 0,
-    with the scan reporting no offence, which is the same failure
-    `test_setup_inside_a_raises_block_is_refused` catches when the two statements sit
-    side by side instead.
-
-    An `if`, a `with`, or a `try` nests the same way. Counting statements RECURSIVELY
-    would catch this and would also refuse a legitimate single-statement loop, so the
-    fix is not a deeper count; it is a claim about which statement raised.
+    A `for` over two statements is ONE top-level statement, so the count rule was
+    satisfied while the loop raised on its first iteration -- the setup -- and the
+    statement the test names never ran.
     """
     result = _inner(pytester, '''
         import psycopg
         import pytest
 
-        def _run(stmt):
-            if stmt.startswith("SET"):
-                raise psycopg.errors.UndefinedObject("no such GUC")
-            raise psycopg.errors.UndefinedFunction("the statement under test")
-
         def test_the_alter_is_refused(expect):
             with pytest.raises(psycopg.errors.UndefinedObject) as exc:
                 for stmt in ("SET pgcolumnar.no_such_guc = 1",
                              "ALTER TABLE t SET ACCESS METHOD no_such_am"):
-                    _run(stmt)
+                    raise psycopg.errors.UndefinedObject("no such object: " + stmt)
             expect.sqlstate(exc.value, "42704", "the statement under test")
         ''')
-    expect.outcomes(result, "a compound statement hiding the setup is NOT refused "
-                            "-- the second residual this guard leaves open",
+    expect.run_failed(result, "a loop inside the block must not be collectable")
+    result.stderr.fnmatch_lines(["*holds a For, so which statement inside it raised*"])
+
+
+def test_a_helper_hidden_in_an_assignment_is_refused_too(pytester, expect):
+    """The rule looks ANYWHERE in the statement, not only at the whole of it.
+
+    `x = _helper()` hides the setup exactly as well as a bare `_helper()` does, and a
+    rule that matched only `Expr` would leave the assignment spelling open. Without
+    this arm, narrowing the search to a bare call changes nothing and the narrowing
+    is invisible -- which is how the `for` spelling came to be the only one the
+    inventory named.
+    """
+    result = _inner(pytester, '''
+        import psycopg
+        import pytest
+
+        def _setup_then_run():
+            raise psycopg.errors.UndefinedObject("SET pgcolumnar.no_such_guc")
+
+        def test_the_alter_is_refused(expect):
+            with pytest.raises(psycopg.errors.UndefinedObject) as exc:
+                outcome = _setup_then_run()
+            expect.sqlstate(exc.value, "42704", "the statement under test")
+        ''')
+    expect.run_failed(result, "a helper hidden in an assignment must not be collectable")
+    result.stderr.fnmatch_lines(["*calls _setup_then_run(), defined in this file*"])
+
+
+def test_every_compound_statement_is_refused_not_only_a_loop(pytester, expect):
+    """`if`, `while`, `with` and `try` nest exactly as `for` does.
+
+    The inventory named the `for` spelling. A rule that caught only that one would
+    leave three spellings of the same shape, which is the difference between closing
+    a mode and closing an example of it.
+    """
+    bodies = {
+        "If":    'if True:\n                    raise psycopg.errors.UndefinedObject("x")',
+        "While": 'while True:\n                    raise psycopg.errors.UndefinedObject("x")',
+        "With":  'with open("/dev/null"):\n                    raise psycopg.errors.UndefinedObject("x")',
+        "Try":   'try:\n                    raise psycopg.errors.UndefinedObject("x")\n                finally:\n                    pass',
+    }
+    for kind, body in bodies.items():
+        result = _inner(pytester, f'''
+        import psycopg
+        import pytest
+
+        def test_the_alter_is_refused(expect):
+            with pytest.raises(psycopg.errors.UndefinedObject) as exc:
+                {body}
+            expect.sqlstate(exc.value, "42704", "the statement under test")
+        ''')
+        expect.run_failed(result, f"a {kind} inside the block must not be collectable")
+        result.stderr.fnmatch_lines([f"*holds a {kind}, so which statement inside it raised*"])
+
+
+def test_a_raises_block_calling_an_imported_function_is_accepted(pytester, expect):
+    """The false-positive budget, and it is the shape the corpus actually uses.
+
+    Four of the five `pytest.raises` blocks in `test/pytest/` call
+    `build_and_install(...)`, imported from the module under test. Refusing a call
+    because it is a call would refuse every one of them, so the rule turns on where
+    the function is DEFINED rather than on the statement being a call.
+    """
+    result = _inner(pytester, '''
+        import psycopg
+        import pytest
+        from json import loads
+
+        def test_the_thing_under_test_raises(expect):
+            with pytest.raises(ValueError) as exc:
+                loads("{not json")
+            expect.at_least(len(str(exc.value)), 1, "the imported call raised")
+        ''')
+    expect.outcomes(result, "a call to an IMPORTED function is the thing under test",
                     passed=1, failed=0)
-    # Zero offences, by the argument given in the arm above.
+
+
+def test_a_raises_block_calling_a_method_is_accepted(pytester, expect):
+    """The fifth block's shape: a method call on an object.
+
+    A method cannot be matched against this file's function definitions, and the
+    object it belongs to is usually the thing under test. This is a stated residual
+    rather than an oversight: a method that performs setup and then the statement is
+    invisible to this rule, and no static rule can see inside it.
+    """
+    result = _inner(pytester, '''
+        import psycopg
+        import pytest
+
+        class _Conn:
+            def execute(self, sql):
+                raise psycopg.errors.UndefinedObject("no such object: " + sql)
+
+        def test_the_alter_is_refused(expect):
+            conn = _Conn()
+            with pytest.raises(psycopg.errors.UndefinedObject) as exc:
+                conn.execute("ALTER TABLE t SET ACCESS METHOD no_such_am")
+            expect.sqlstate(exc.value, "42704", "the ALTER was refused")
+        ''')
+    expect.outcomes(result, "a method call is accepted, and why is recorded",
+                    passed=1, failed=0)
 
 
 # ---------------------------------------------------------------------------
