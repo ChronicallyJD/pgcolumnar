@@ -290,3 +290,253 @@ def test_layer_rejects_a_broad_except_in_a_test_file(pytester, expect):
     result = pytester.runpytest("-p", "pgc_vacuity")
     expect.run_failed(result, "a broad except must not be collectable")
     result.stderr.fnmatch_lines(["*catches Exception broadly*"])
+
+# ---- an A/B whose arms do not differ measures nothing -------------------------
+#
+# `mutation-arm-unobservable` in VACUITY_MODES.md section 3.5: both arms of an A/B
+# produce the identical answer and both are green, because the assertion that would
+# catch it -- that the arms must DIFFER -- is the one nobody writes.
+#
+# Measured before building: the layer had EIGHT helpers asserting equality and ONE
+# asserting inequality, `ordering_observable`, which is specific to a forward/reverse
+# pair. Two sites in the corpus hand-rolled the general case as
+# `expect.num(int(after != before), 1, ...)`, which throws both values away: when it
+# fails it says `got 0 want 1` and the reader cannot see what the two arms were.
+
+
+def test_layer_requires_ab_arms_to_differ(pytester, expect):
+    """Two arms that agree cannot show that the thing between them did anything.
+
+    Bare pytest: the test passes, because nothing was asserted about the pair.
+    """
+    pytester.makeconftest("pytest_plugins = ['pgc_vacuity']")
+    pytester.makepyfile(
+        """
+        def test_the_mutation_changed_nothing(expect):
+            baseline = [(1, 'a'), (2, 'b')]
+            mutated = [(1, 'a'), (2, 'b')]
+            expect.differ(baseline, mutated, "the mutation moved the result")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    # `expect.refusal` rather than `fnmatch_lines`, and one token per call. The raw
+    # matcher searches the inner run's WHOLE stdout, and pytest prints the failing
+    # function's SOURCE in the traceback -- so a pattern naming a value in the test
+    # matches the source line rather than anything the guard produced. The arm below
+    # passed that way before this change, against a layer with no `differ` at all.
+    expect.refusal(result, "two identical arms do not pass", r"arms-do-not-differ")
+
+
+def test_differ_names_both_arms_when_they_agree(pytester, expect):
+    """The hand-rolled idiom this replaces printed `got 0 want 1`.
+
+    A reader of that cannot tell whether the arms were both empty, both wrong, or
+    correctly identical -- which is three different defects with one message.
+    """
+    pytester.makepyfile(
+        """
+        def test_identical_arms(expect):
+            expect.differ("PLAN-A", "PLAN-A", "the GUC changed the plan")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    # ANCHORED, because the value is written in the test body: with `fnmatch_lines`
+    # this arm passed against an AttributeError from a `differ` that did not exist,
+    # satisfied by its own source printed in the traceback. Measured, not reasoned.
+    expect.refusal(result, "the refusal names the value both arms carried", r"PLAN-A")
+    expect.refusal(result, "and names the mode", r"arms-do-not-differ")
+
+
+def test_differ_passes_when_the_arms_differ(pytester, expect):
+    """The positive control. A guard that rejects real A/B tests gets switched off."""
+    pytester.makepyfile(
+        """
+        def test_arms_differ(expect):
+            expect.differ([(1,), (2,)], [(2,), (1,)], "reversing changes the order")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "differing arms pass", passed=1, failed=0)
+
+
+def test_differ_counts_as_an_assertion(pytester, expect):
+    """A test whose only assertion is `differ` has concluded something.
+
+    Without this the no-assertion guard fires instead, and the arm above would pass
+    for the wrong reason -- a failure, but not the one it names.
+    """
+    pytester.makepyfile(
+        """
+        def test_only_a_differ(expect):
+            expect.differ(1, 2, "one is not two")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "differ alone is a counted assertion", passed=1, failed=0)
+
+
+def test_differ_refuses_a_failed_query_on_either_side(pytester, expect):
+    """TWO FAILED QUERIES ARE NOT TWO OBSERVABLE ARMS, and this is the inverse of the
+    trap #930 closed.
+
+    `query_error()` produces a value unique per occurrence, precisely so that two
+    failures cannot compare EQUAL and pass an equality assertion. That uniqueness
+    makes them compare UNEQUAL, so an arms-differ assertion passes on a pair of
+    statements that both blew up -- the same defect arriving through the fix for it.
+
+    Measured: `query_error()` twice gives `QUERY_ERROR.1.<detail>` and
+    `QUERY_ERROR.2.<detail>`, which are `!=`.
+    """
+    for side in ("left", "right"):
+        pytester.makeconftest("pytest_plugins = ['pgc_vacuity']")
+        args = ('pgc_vacuity.query_error("a"), "PLAN-B"' if side == "left"
+                else '"PLAN-A", pgc_vacuity.query_error("b")')
+        pytester.makepyfile(
+            f"""
+            import pgc_vacuity
+
+            def test_one_arm_failed(expect):
+                expect.differ({args}, "the arms differ")
+            """
+        )
+        result = pytester.runpytest("-p", "pgc_vacuity")
+        expect.refusal(result, f"a failed query on the {side} is not an arm",
+                       r"failed query")
+
+
+def test_differ_refuses_two_failed_queries(pytester, expect):
+    """The shape the uniqueness fix created, written out.
+
+    Both arms raised, both sentinels are distinct, and without the refusal the
+    assertion reports that the mutation was observable.
+    """
+    pytester.makeconftest("pytest_plugins = ['pgc_vacuity']")
+    pytester.makepyfile(
+        """
+        import pgc_vacuity
+
+        def test_both_arms_failed(expect):
+            a = pgc_vacuity.query_error("baseline blew up")
+            b = pgc_vacuity.query_error("mutated blew up")
+            expect.differ(a, b, "the mutation moved the result")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.refusal(result, "two failures are not two arms", r"failed query")
+
+# ---- and the hand-rolled idiom cannot come back --------------------------------
+#
+# A helper nobody is required to use is a convention, not a mechanism, and this
+# directory has a standing rule that a mode counts as refused only when a mechanism
+# refuses it. `differ` on its own leaves the old spelling available, so the scan below
+# makes the class unavailable rather than fixing the two instances -- which is the same
+# argument as "fix the class, not the instance".
+#
+# AST, NOT A LINE REGEX. The two paragraphs in this tree that DESCRIBE the old idiom
+# quote it verbatim, so a text sweep flags its own documentation; `ast` sees code only.
+# That is the same trap the `pytest.raises` scan records, where a regex version
+# refused the layer's own test suite with 22 invented offences.
+
+_INEQ_MSG = "int() of a comparison, passed to an expect call"
+
+
+def _hand_rolled_inequalities(source, filename="<probe>"):
+    """-> ["file:line", ...] for `expect.X(int(a != b), ...)` and friends.
+
+    The shape is `int(<Compare>)` appearing as an ARGUMENT to a call on `expect`. A
+    bare `int(a != b)` assigned to a name is not flagged: it asserts nothing by
+    itself, and flagging it would be a claim about arithmetic rather than about an
+    assertion.
+    """
+    import ast
+
+    found = []
+
+    class V(ast.NodeVisitor):
+        def visit_Call(self, node):
+            target = node.func
+            is_expect = (isinstance(target, ast.Attribute)
+                         and isinstance(target.value, ast.Name)
+                         and target.value.id in ("expect", "e"))
+            if is_expect:
+                for arg in node.args:
+                    if (isinstance(arg, ast.Call)
+                            and isinstance(arg.func, ast.Name)
+                            and arg.func.id == "int"
+                            and len(arg.args) == 1
+                            and isinstance(arg.args[0], ast.Compare)
+                            and any(isinstance(op, (ast.NotEq, ast.Eq))
+                                    for op in arg.args[0].ops)):
+                        found.append(f"{filename}:{arg.lineno}")
+            self.generic_visit(node)
+
+    V().visit(ast.parse(source))
+    return found
+
+
+def test_the_inequality_scan_finds_a_planted_offence(expect):
+    """The scan must fire on the exact shape the two converted sites used."""
+    planted = _hand_rolled_inequalities(
+        "def test_x(expect):\n"
+        "    expect.num(int(after != before), 1, 'moved')\n",
+        "planted.py")
+    expect.num(len(planted), 1, "the scan finds a hand-rolled inequality")
+    expect.text(planted[0], "planted.py:2", "and names where it is")
+    # at_least as well as num, because the other converted site used that one.
+    expect.num(len(_hand_rolled_inequalities(
+        "def test_y(expect):\n"
+        "    expect.at_least(int(a != b), 1, 'moved')\n")), 1,
+        "and finds it through at_least too")
+    # THE INVERTED SPELLING, which is the one the manual count missed. The third site
+    # wrote `int(stated == disk) == 0` -- the same assertion with the comparison
+    # flipped -- so a scan that looked only for `!=` would have left it in place and
+    # reported a clean corpus. Without this arm, dropping `ast.Eq` from the scan is
+    # invisible.
+    expect.num(len(_hand_rolled_inequalities(
+        "def test_z(expect):\n"
+        "    expect.num(int(stated == disk), 0, 'disagrees')\n")), 1,
+        "and finds the int(a == b) spelling, not only int(a != b)")
+
+
+def test_the_inequality_scan_does_not_flag_honest_code(expect):
+    """The false-positive budget, which a static guard needs before it ships."""
+    for label, src in (
+        ("a bare int()", "def t(expect):\n    expect.num(int(x), 1, 'n')\n"),
+        ("a comparison not wrapped in int()",
+         "def t(expect):\n    expect.differ(a, b, 'arms')\n"),
+        ("an int(compare) bound to a name first",
+         "def t(expect):\n    flag = int(a != b)\n    expect.num(flag, 1, 'n')\n"),
+        # PASSED TO A CALL THAT IS NOT AN ASSERTION, which is what makes the
+        # expect-context condition load-bearing. Without this shape, dropping that
+        # condition changed nothing and the arm stayed green -- found by mutating it.
+        # The scan's subject is assertions, not arithmetic: `print(int(a != b))`
+        # asserts nothing and flagging it would be a false red.
+        ("an int(compare) passed to a call that is not an expect",
+         "def t(expect):\n    print(int(a != b))\n    expect.num(1, 1, 'n')\n"),
+        ("the idiom inside a comment",
+         "def t(expect):\n    # expect.num(int(a != b), 1, 'moved')\n"
+         "    expect.num(1, 1, 'n')\n"),
+        ("the idiom inside a string",
+         "def t(expect):\n    s = \"expect.num(int(a != b), 1, 'x')\"\n"
+         "    expect.text(s, s, 'n')\n"),
+    ):
+        expect.num(len(_hand_rolled_inequalities(src)), 0,
+                   f"not flagged: {label}")
+
+
+def test_no_test_in_this_corpus_hand_rolls_an_inequality(expect):
+    """The population, which is what makes the two arms above worth having.
+
+    Two sites used the idiom before `differ` existed. Both are converted, so this is
+    zero -- and the arms above are why a zero here means the scan looked rather than
+    that it cannot see.
+    """
+    import pathlib
+
+    here = pathlib.Path(__file__).parent
+    files = sorted(here.glob("test_*.py"))
+    expect.at_least(len(files), 10, "premise: the scan has a corpus to read")
+    offences = []
+    for f in files:
+        offences += _hand_rolled_inequalities(f.read_text(encoding="utf-8"), f.name)
+    expect.text(repr(offences), "[]", "no test hand-rolls an inequality")
