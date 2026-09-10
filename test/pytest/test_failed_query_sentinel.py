@@ -56,7 +56,7 @@ def test_the_comparison_surface_is_what_this_file_thinks_it_is(expect):
     names = [n for n, _ in _comparisons()]
     expect.at_least(len(names), 5, "the layer offers at least five (got, want) comparisons")
     for required in ("hash", "text", "rows", "row_set", "ordered_rows",
-                     "ordering_observable"):
+                     "ordering_observable", "differ"):
         expect.num(names.count(required), 1, f"{required} is one of them")
 
 
@@ -82,7 +82,22 @@ VALID = {
     # Forward and reverse must DIFFER, or the assertion refuses the fixture for a
     # different reason and the arm would pass without testing the sentinel.
     "ordering_observable": ([(1,), (2,)], [(2,), (1,)]),
+    # The two arms must DIFFER for the same reason, and for `differ` the sentinel is
+    # the INVERSE trap: `query_error()` makes each failure unique so two failures
+    # cannot compare equal, which makes them compare UNEQUAL -- so without its
+    # refusal this assertion reports two blown-up statements as an observable
+    # difference. The fix for one direction opened the other.
+    "differ":        ("abc", "xyz"),
 }
+
+# NOT EVERY ASSERTION IS IN THIS SWEEP, and the reason is worth stating because the
+# exclusion is currently an accident of naming rather than a judgement. The
+# derivation keys on the first two parameter names, so `wrote(cur, want, name)` is
+# outside it: its left side is a CURSOR rather than a value a query returned, and a
+# sentinel cannot arrive there -- the count comes from `cur.rowcount`. That happens to
+# be the right answer, but a future assertion whose first parameter is not called
+# `got` would be excluded just as silently and for no good reason. A declared
+# exclusion list with a reason per entry is the fix; it is not in this commit.
 
 # How a sentinel arrives for each: bare for a scalar comparison, and as a CELL for a
 # row comparison, because that is what a one-column query that failed looks like

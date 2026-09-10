@@ -233,9 +233,27 @@ binds the exception and the body pins its SQLSTATE. See section 2.
   against a pgcolumnar table: DDL reports `CREATE TABLE`/`SET`/`TRUNCATE TABLE` with
   `rowcount` `-1`, an `INSERT ... WHERE false` reports `INSERT 0 0` with 0, and
   `UPDATE 0` and `DELETE 0` likewise. This guard therefore never parses SQL.
-- `mutation-arm-unobservable` — both arms of an A/B produce the identical answer and
-  both are green. The assertion that would catch it, that the arms must **differ**,
-  is the one nobody writes.
+- `mutation-arm-unobservable` — **narrowed, not closed.** The assertion now exists and
+  the old spelling of it is unavailable. `expect.differ(a, b, name)` refuses two arms
+  that agree and names the value they shared; `expect.num(int(after != before), 1, ...)`
+  and its `int(a == b) == 0` twin are refused by an AST scan over the corpus, so the
+  class is closed rather than the three instances. It also refuses a failed query on
+  either arm, which is the INVERSE of the trap #930 closed: `query_error()` makes each
+  failure unique so two failures cannot compare equal, and that uniqueness makes them
+  compare UNEQUAL — so an arms-differ assertion passed on a pair of statements that
+  both blew up. Measured: two calls give `QUERY_ERROR.1.<detail>` and
+  `QUERY_ERROR.2.<detail>`.
+
+  WHAT IS NOT CLOSED is the omission. The layer cannot know which two values in a test
+  are arms, so a test that runs an A/B and asserts nothing about the pair is still
+  vacuous and nothing refuses it. What has gone is writing the assertion wrongly;
+  what remains is not writing it at all. See TESTS.md section 3.
+
+  THE SCAN FOUND A SITE THE MANUAL COUNT MISSED, which is the argument for it. I
+  measured the population by grepping for before/after naming and found two. The AST
+  scan found three: the third was in `test_docs_cover_the_corpus.py` and spelled
+  `int(stated == disk) == 0`, the same assertion with the comparison inverted, which no
+  search for `!=` would reach.
 **`error-swallowed-to-empty` is now closed.** Every comparison in the layer refuses a
   value carrying the `QUERY_ERROR` prefix, on either side, at any depth — so two
   queries that both failed cannot compare equal, whatever a helper turned them into.
@@ -333,7 +351,12 @@ Each entry names the red test to write first.
    does, through a real `INSERT ... WHERE false`. Splitting them was not tidiness:
    #917's pytest twin tested a function's body and left its CALL SITE uncovered, so
    deleting the call kept that half green while the shell half went red.
-3. `test_layer_requires_ab_arms_to_differ` — closes `mutation-arm-unobservable`.
+3. ~~`test_layer_requires_ab_arms_to_differ` — closes `mutation-arm-unobservable`.~~
+   **Done, and it NARROWS rather than closes** — 3.5 says what remains. The assertion
+   exists, refuses a failed arm on either side, and the hand-rolled spelling is refused
+   by an AST scan so the class cannot come back. What no mechanism can do is notice a
+   test that runs an A/B and asserts nothing about the pair, because nothing tells the
+   layer which two values are arms.
 4. ~~`test_raises_requires_a_sqlstate` — closes `raises-too-broad`.~~ **Done.**
    It closes `raises-too-broad` and narrows `raises-catches-setup`, which stays
    open in 3.4 with the two shapes it cannot see named there. What would close the
