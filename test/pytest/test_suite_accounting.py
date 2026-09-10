@@ -130,6 +130,18 @@ def test_the_accounting_line_is_read_on_every_exit_path(tmp_path, expect):
     expect.text(_call("pgc_log_shows_accounting", str(tmp_path / "gone.log"))[0].strip(),
                 "no", "an absent log shows none rather than erroring")
 
+    # THE ^ ANCHOR, which nothing above exercises: the prose fixture is refused by
+    # the regex SHAPE, not by the anchor, so removing ^ from the reader left every
+    # arm here green. Reported by OffgridwithJD. The distinguishing input is a
+    # well-formed accounting line that does not start its line.
+    indented = _write(tmp_path, "indented.log",
+                      "  accounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n")
+    expect.num(pathlib.Path(indented).read_text()
+               .count("accounting: 3 passed + 0 failed + 0 unrunnable = 3"), 1,
+               "premise: the fixture carries a well-formed line, just indented")
+    expect.text(_call("pgc_log_shows_accounting", indented)[0].strip(), "no",
+                "an accounting line that does not start its line is refused")
+
 
 def test_the_reader_accepts_the_line_the_producer_actually_emits(tmp_path, expect):
     """Every log above is a literal typed into this file, and the shell half types the
@@ -290,8 +302,18 @@ def test_the_partition_over_the_registered_suites_adds_up(expect):
                               capture_output=True, text=True).stdout.split()
 
     yes, no = verdicts.count("yes"), verdicts.count("no")
-    print(f"  registered={len(listed)} | declares={yes}, does not={no} | sum={yes + no}")
-    expect.num(yes + no, len(listed), "the partition covers every registered suite")
+    absent = verdicts.count("absent")
+    print(f"  registered={len(listed)} | declares={yes}, does not={no}, "
+          f"absent={absent} | sum={yes + no + absent}")
+    # A COVERAGE check, and only that. It fails when the classification does not
+    # see every registered suite -- a dropped path, a list that changed between
+    # the two reads. It is NOT a check on the reader's correctness: the two arms
+    # below, which require both buckets occupied, are what catch a reader that
+    # answers the same way for everything. The population is counted from the
+    # runner's own list, a different route from the verdicts.
+    expect.num(yes + no + absent, len(listed),
+               "the partition covers every registered suite")
+    expect.num(absent, 0, "every registered suite has a file")
     expect.at_least(no, 1, "the reader does not answer yes for every suite")
     expect.at_least(yes, 1, "nor no for every one of them")
 

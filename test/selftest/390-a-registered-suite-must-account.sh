@@ -186,6 +186,20 @@ printf 'this suite prints the word accounting: in prose\n' > "$_acc/prose.log"
 check "and prose containing the word does not count as the line" \
 	"$(pgc_log_shows_accounting "$_acc/prose.log")" "no"
 
+# THE ^ ANCHOR, which nothing above exercises. The prose fixture is refused by the
+# regex SHAPE, not by the anchor, so removing ^ from the reader left every arm
+# green -- reported by OffgridwithJD. The distinguishing input is a well-formed
+# accounting line that does NOT start the line, which is what a nested or indented
+# suite run produces. Inert on real data today (0 non-line-start occurrences
+# across 246 PG17 logs and 244 PG18), so this closes a coverage gap rather than a
+# live defect.
+printf '  accounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n' \
+	> "$_acc/indented_acc.log"
+check "premise: the fixture carries a well-formed accounting line, just indented" \
+	"$(grep -c 'accounting: 3 passed + 0 failed + 0 unrunnable = 3' "$_acc/indented_acc.log")" "1"
+check "an accounting line that does not start its line is refused" \
+	"$(pgc_log_shows_accounting "$_acc/indented_acc.log")" "no"
+
 check "an absent log shows no accounting rather than erroring" \
 	"$(pgc_log_shows_accounting "$_acc/absent.log")" "no"
 
@@ -392,9 +406,22 @@ check "and the real function reconciles the same input, so the arm is not noise"
 # THREE buckets, not two. Folding "absent" into "does not declare" is the
 # conflation the reader was just fixed for, and repeating it here would leave the
 # real population the one place it still happened.
-_reg=0; _decl_n=0; _exempt_n=0; _absent_n=0
+# The population is counted by a SECOND ROUTE, not by the loop that classifies it.
+# The first version incremented _reg in the same loop body as the buckets, so the
+# sum equalled it for ANY reader -- OffgridwithJD proved it passes with an
+# always-yes reader and with an always-no reader alike. A total derived from the
+# loop that produces the buckets is an identity, which is the shape this file
+# spends its length refusing.
+#
+# WHAT THIS ARM IS, said plainly so the next reader does not overrate it: a
+# COVERAGE check. It fails when the classification loop does not see every
+# registered suite -- a future `continue`, a read that drops a line, a list that
+# changes between the two reads. It is NOT a check on the reader's correctness;
+# the two arms below it, which require both buckets to be occupied, are what
+# catch a reader answering the same way for everything.
+_reg="$(listed_suites | grep -c . || true)"
+_decl_n=0; _exempt_n=0; _absent_n=0
 while IFS= read -r _s; do
-	_reg=$((_reg + 1))
 	case "$(pgc_suite_declares_accounting "$PGC_TESTDIR/${_s}.sh")" in
 		yes)	_decl_n=$((_decl_n + 1)) ;;
 		absent)	_absent_n=$((_absent_n + 1)); echo "    registered but has no file: $_s.sh" ;;
