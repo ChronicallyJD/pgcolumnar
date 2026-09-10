@@ -58,7 +58,7 @@ if ! pgc_is_number "$srv"; then
 	pgc_summary
 fi
 if [ "$srv" -lt 190000 ]; then
-	echo "SKIP  REPACK requires PostgreSQL 19 (server_version_num=$srv)"
+	check_skip "REPACK" "SKIP  REPACK requires PostgreSQL 19 (server_version_num=$srv)" "requires PostgreSQL 19"
 	pgc_summary
 fi
 

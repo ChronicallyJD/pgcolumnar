@@ -47,8 +47,8 @@ recollection of the run:
 
 | | modes |
 | --- | ---: |
-| named in section 2, refused today | 25 |
-| named in section 3, not refused | 47 |
+| named in section 2, refused today | 27 |
+| named in section 3, not refused | 45 |
 | **named in this document** | **72** |
 | produced by the enumeration run | 79 |
 | **named nowhere here** | **7** |
@@ -65,7 +65,7 @@ an id can be read, argued with and turned into a test, and a number cannot.
 
 ## 2. What the layer refuses today
 
-25 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
+27 of the 79, counted by section 1a's rule. Each is enforced by a mechanism, not a convention, and each has a red
 test in `test_layer.py` that fails without it.
 
 | mechanism | modes it closes |
@@ -86,6 +86,8 @@ test in `test_layer.py` that fails without it.
 | the reported node-id set is reconciled against the collected one | `crashed-worker-silently-loses-tests` |
 | an empty parameter set fails the run, with its own message | `empty-parametrize-is-a-silent-skip` |
 | a skip during fixture setup fails the run | `session-fixture-skip-greens-the-whole-suite` |
+| a broad `pytest.raises` must pin a SQLSTATE, found by AST | `raises-too-broad` |
+| every comparison refuses a value carrying the `QUERY_ERROR` prefix, on either side | `error-swallowed-to-empty` |
 
 Three of those were added after checking this layer against the inventory rather
 than reasoning about it, and all three had passed silently before:
@@ -118,7 +120,7 @@ guard whose subject is false greens has no business emitting a false red.
 
 ## 3. What it does not refuse
 
-55 modes by the run's count, **47 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
+55 modes by the run's count, **45 of them named below**, **49 demonstrated by a run**. 51 have a refusal already designed.
 Grouped by what a reader needs to decide about them.
 
 ### 3.1 The run can lose tests and still exit 0
@@ -179,8 +181,39 @@ Still open in this family:
 
 ### 3.4 The assertion is shaped so it cannot fail
 
-- `raises-too-broad`, `raises-catches-setup` — `pytest.raises(psycopg.Error)` is
-  satisfied by an unrelated failure of the same family.
+**`raises-too-broad` is now closed.** A `pytest.raises` over `Error`,
+`DatabaseError`, `Exception` or `BaseException` does not collect unless the block
+binds the exception and the body pins its SQLSTATE. See section 2.
+
+- `raises-catches-setup` — **still open, and the statement rule only narrows it.**
+  The scan refuses a `pytest.raises` block holding more than one TOP-LEVEL
+  statement, so the spelling where the setup sits on the line above the statement
+  under test is gone. Two shapes walk straight past a count of top-level
+  statements, and each is one statement that performs the setup inside the block:
+
+      with pytest.raises(psycopg.errors.UndefinedObject) as exc:
+          _setup_then_run(conn)          # a HELPER CALL: one statement
+      expect.sqlstate(exc.value, "42704", "the ALTER was refused")
+
+      with pytest.raises(psycopg.errors.UndefinedObject) as exc:
+          for stmt in (setup_sql, sql_under_test):   # a COMPOUND STATEMENT: one
+              conn.execute(stmt)                     # statement holding two
+      expect.sqlstate(exc.value, "42704", "the ALTER was refused")
+
+  Measured against the shipped scan: both report `1 passed`, exit 0, **zero
+  offences**, with the setup raising and the statement under test never running.
+  An `if`, a `with` or a `try` nests the same way. Counting statements RECURSIVELY
+  would catch these and would also refuse a legitimate single-statement loop, so
+  the fix is not a deeper count — it is a claim about WHICH statement raised: a
+  position, or a helper that runs exactly one statement and owns the assertion.
+
+  `test_a_helper_hiding_the_setup_is_not_refused` and
+  `test_a_compound_statement_hiding_the_setup_is_not_refused` in
+  `test_raises_sqlstate.py` assert the scan reports nothing on these two shapes, so
+  the gap is a measurement rather than a sentence, and `test_raises_sqlstate.py` requires both
+  arms plus this entry to still exist.
+- `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
+  `zero-on-both-arms`, `tuple-assert-always-true`, `approx-of-nothing`
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
   `zero-on-both-arms`, `tuple-assert-always-true`, `approx-of-nothing`
 
@@ -191,10 +224,21 @@ Still open in this family:
 - `mutation-arm-unobservable` — both arms of an A/B produce the identical answer and
   both are green. The assertion that would catch it, that the arms must **differ**,
   is the one nobody writes.
-- `error-swallowed-to-empty` — two queries raise, a helper turns each into the same
-  falsy value, and they compare equal. `lib.sh` closed this deliberately with a
-  unique `QUERY_ERROR.$seq` per failure. **The port has the sentinel constant but
-  nothing produces it.**
+**`error-swallowed-to-empty` is now closed.** Every comparison in the layer refuses a
+  value carrying the `QUERY_ERROR` prefix, on either side, at any depth — so two
+  queries that both failed cannot compare equal, whatever a helper turned them into.
+  `query_error()` produces a value unique per occurrence, as `lib.sh`'s
+  `QUERY_ERROR.$seq` does, for the paths that compare without the layer. See
+  section 2 and TESTS.md section 18.
+
+  THE EARLIER VERSION OF THIS PARAGRAPH SAID "the port has the sentinel constant but
+  nothing produces it", AND THAT WAS WRONG IN BOTH HALVES. Two sites did produce
+  sentinels by hand (`test_hilbert_locality.py`, one of them from inside SQL), and the
+  thing actually missing was not a producer: it was the refusal in four of the five
+  comparisons. `expect.text`, `expect.rows`, `expect.row_set` and `expect.ordered_rows`
+  each passed with a sentinel on both sides; only `expect.hash` refused. A map that
+  names the wrong gap is worse than one that admits it does not know, so the
+  measurement is recorded here rather than quietly replaced.
 - `guc-set-but-path-never-engaged`, `aggregate-masks-empty-fixture`,
   `db-derived-empty-parametrize`, `null-filter-matches-nothing`,
   `loop-over-zero-rows`, `assert-inside-a-loop-over-zero-rows`
@@ -215,8 +259,14 @@ the sentinels that close the other half, empty compared with empty.
 
 ### 3.7 The guard itself goes quiet
 
-- `guard-as-teardown-fixture-still-reports-passed` — a guard implemented as a
-  teardown fixture leaves the test reporting PASSED.
+- `guard-as-teardown-fixture-still-reports-passed` — **narrowed, not closed.** Measured:
+  the same `AssertionError` raised from a `pytest_runtest_call` wrapper gives `1 failed`,
+  and raised from a fixture teardown gives `1 passed, 1 error` — the test's own outcome
+  stays `passed`, so anything counting passes sees a pass. This layer's vacuity guard is
+  in the call-phase wrapper, and two arms in `test_runshape.py` now pin that placement
+  with a control, so a refactor into a teardown reddens rather than going quiet. What is
+  NOT closed is the general shape: a guard anyone adds later in a teardown still cannot
+  fail its test, and nothing refuses that. See TESTS.md section 10.
 - `session-accounting-guard`, `session-exit-rewrite-masks-a-real-failure`,
   `description-guard-reopens-psycopg-raise`,
   `mitigations-measured-and-the-one-that-does-not-work`
@@ -236,6 +286,25 @@ now parses with `ast`, where a handler inside a string literal is not an
 `ExceptHandler` node. **A line regex over source cannot tell code from a string, which
 is the same mistake as matching a plan by substring.**
 
+The `raises` scan was written with `ast` for the same reason, and the cost of the
+alternative is measured rather than argued. Swept over
+`test/pytest/*.py` — 16 files, a superset of the 12 the collection hook reaches,
+because a module that is not collected today can be collected tomorrow:
+
+| | count |
+| --- | ---: |
+| `pytest.raises` call sites the AST finds | 5 |
+| offences the scan reports on them | **0** |
+| lines a `pytest.raises(` line regex would match | 35 |
+| of those, inside a string literal or a comment | 30 |
+
+The 30 are not hypothetical. 22 are in `test_raises_sqlstate.py`, which writes the
+forbidden shape inside a `pytester.makepyfile` string in every arm, and 8 are in
+`pgc_vacuity.py` itself, where the scan's own comments quote what it refuses.
+Replacing `ast.parse` with a line regex is mutation M11 of the removal proof: the
+layer then refuses **its own test suite** with 22 invented offences, `pytest.UsageError`,
+exit 4, and no tests run at all.
+
 ## 5. What to add next, in order
 
 Each entry names the red test to write first.
@@ -244,7 +313,13 @@ Each entry names the red test to write first.
    `QUERY_ERROR.<seq>`; the constant exists and nothing writes it.
 2. `test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.
 3. `test_layer_requires_ab_arms_to_differ` — closes `mutation-arm-unobservable`.
-4. `test_raises_requires_a_sqlstate` — closes `raises-too-broad`.
+4. ~~`test_raises_requires_a_sqlstate` — closes `raises-too-broad`.~~ **Done.**
+   It closes `raises-too-broad` and narrows `raises-catches-setup`, which stays
+   open in 3.4 with the two shapes it cannot see named there. What would close the
+   sibling is the next entry:
+5. `test_layer_requires_the_raiser_to_be_the_statement_under_test` — closes
+   `raises-catches-setup`. It needs a claim about WHICH statement raised, not a
+   deeper statement count; 3.4 says why a recursive count is the wrong fix.
 
 The three that turned a whole run green rather than one test are done. What remains
 is per-assertion work, so the ordering matters less: take the sentinel first, since
@@ -257,6 +332,6 @@ have tried to defeat them did not run. Every design states its own residual, and
 those residuals are the authors' own, unchallenged.
 
 So treat §2 as measured, §3 as measured, and §5 as a plan that has not yet met an
-adversary. The layer is known to refuse 25 demonstrated modes -- the ids named in section 2,
+adversary. The layer is known to refuse 27 demonstrated modes -- the ids named in section 2,
 not the run's larger total, for the reason section 1a gives. It is not known to be
 undefeatable on any of them.

@@ -60,11 +60,15 @@ behaviour, the source of that number is named.
 - [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
 - [14. test_suite_accounting.py: the matrix accounting for its own suites](#14-test_suite_accountingpy-the-matrix-accounting-for-its-own-suites)
-- [15. test_check_results_are_machine_readable.py: one counter, one record](#15-test_check_results_are_machine_readablepy-one-counter-one-record)
-- [16. test_mutation_ledger.py: which checks have ever been red](#16-test_mutation_ledgerpy-which-checks-have-ever-been-red)
+- [15. test_harness_deps.py: the harness must self-test without a database](#15-test_harness_depspy-the-harness-must-self-test-without-a-database)
+- [16. test_harness_deps_classifier.py: the classifier, in the file the gate runs](#16-test_harness_deps_classifierpy-the-classifier-in-the-file-the-gate-runs)
 - [17. Adding a test](#17-adding-a-test)
 - [18. What this corpus does NOT yet refuse](#18-what-this-corpus-does-not-yet-refuse)
 - [19. Traps this corpus records](#19-traps-this-corpus-records)
+- [20. test_raises_sqlstate.py: which error, and which statement](#20-test_raises_sqlstatepy-which-error-and-which-statement)
+- [21. test_failed_query_sentinel.py: a failed query is not a comparison](#21-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
+- [22. test_check_results_are_machine_readable.py: one counter, one record](#22-test_check_results_are_machine_readablepy-one-counter-one-record)
+- [23. test_mutation_ledger.py: which checks have ever been red](#23-test_mutation_ledgerpy-which-checks-have-ever-been-red)
 
 ## 1. How to read a test in here
 
@@ -734,6 +738,7 @@ many times.
 | `test_the_readme_and_the_inventory_agree_on_what_is_refused` | README.md quotes the inventory's number, so the two cannot drift apart again |
 | `test_the_inventory_accounts_for_every_mode_the_run_found` | the admitted gap row is the run's total minus what is written down |
 | `test_the_prose_totals_match_the_counted_modes` | every sentence stating what the layer refuses today carries the counted number, not just the table |
+| `test_the_two_halves_of_the_refused_sentence_sum_to_the_named_total` | TESTS.md states the split twice in one sentence, and BOTH halves are checked against the inventory's own count — the gated half alone let 26 + 47 = 73 past a named total of 72 |
 | `test_an_undocumented_file_is_caught_with_the_tests_inside_it` | how 29 tests went missing at once |
 | `test_a_document_with_no_totals_line_states_none` | absent totals report `None`, which must not read as "they match" |
 | `test_a_stated_total_that_disagrees_with_disk_is_visible` | the count arm's own red |
@@ -936,6 +941,36 @@ they drive. The corpus reported 44 passed and exited 1.
 The empty-parametrize refusal carries its own message rather than folding into the
 bare-skip refusal. When a corpus glob matches nothing, the cause the reader needs to
 see is the corpus, not the marker.
+
+### Where a guard runs decides what the run reports
+
+A guard implemented as a **fixture teardown** cannot fail the test it guards. pytest has
+already recorded the call phase as passed, so the refusal arrives as a separate `ERROR`
+on the same node-id and the test's own outcome stays `passed`. Anything counting
+passes — `--pgc-expect-tests`, a CI summary, a human reading "N passed" — sees a pass.
+
+Measured, the same `AssertionError` raised from each place:
+
+| raised from | the run reports |
+| --- | --- |
+| a `pytest_runtest_call` wrapper | `1 failed` |
+| a fixture teardown | `1 passed, 1 error` |
+
+This layer's vacuity guard is in a `pytest_runtest_call` wrapper, which is why a test
+that concludes nothing is *failed* rather than passed-with-an-error. Two arms keep that
+from being an accident, and the second is the control: without it the first passes
+whatever phase the guard is in, because "a vacuous test fails" is equally true of a
+correctly-placed guard and of no guard at all beside an unrelated failure.
+
+| test | what it asserts | how it fails |
+| --- | --- | --- |
+| `test_the_vacuity_guard_fails_the_test_rather_than_erroring_beside_it` | a test concluding nothing is `failed`, with no error | moving the guard into the `expect` fixture's teardown reddens it |
+| `test_a_guard_in_a_teardown_would_report_a_pass_which_is_why_it_is_not_there` | a teardown refusal leaves the test reported `passed` with an error beside it | the mode stated as a measurement rather than a warning |
+
+This closes the part of `guard-as-teardown-fixture-still-reports-passed`
+(`VACUITY_MODES.md` 3.7) that is about **this layer's own guard placement**. It does not
+close the family: a guard anyone adds later in a teardown is still a guard that cannot
+fail its test, and nothing refuses that shape in general.
 
 ## 11. test_zonemap_boundaries.py: exact boundaries
 
@@ -1150,7 +1185,436 @@ reproduces on long files and not short ones -- it passed every fixture and faile
 on the real population, naming two of the longest suites. Selftest 040 carries the same
 story from #473 and #476.
 
-## 15. test_check_results_are_machine_readable.py: one counter, one record
+## 15. test_harness_deps.py: the harness must self-test without a database
+
+`conftest.py` imported psycopg at module scope, and conftest is imported before
+every run, so a **database driver was a hard requirement of the whole corpus** --
+including every test that never opens a connection. With psycopg absent the run
+did not fail a test, it failed to COLLECT:
+
+    ImportError while loading conftest '.../conftest.py'
+    conftest.py:15: in <module>
+        import psycopg
+    E   ModuleNotFoundError: No module named 'psycopg'
+
+With the import deferred into the two fixtures that connect, the database-free
+files run and pass with no driver installed; with it at module scope, none of them
+do. That coupling is half of why the guard-testing part of this corpus cannot run
+where the gate runs (README.md, "This is not in the gate yet").
+
+**WHICH FILES NEED NO DATABASE IS DECIDED, NOT DECLAIMED.** `NO_CLUSTER` in that
+module is the declaration, and the gate's job runs exactly it. The property is
+computed from the corpus by an ast walk, and the two must agree in BOTH
+directions.
+
+The missing direction was the one that loses coverage. The only arm over the list
+asked whether the files it names EXIST, so a database-free file nobody added was
+simply absent from the job: every arm stayed green and nothing said so. It had
+already happened twice -- `test_build_refusal.py` and `test_layer.py` both need no
+database and neither was listed -- and a concurrent branch adds a third. A floor of four on the list length did not help: the list had four
+entries, so the floor was satisfied by the state it was meant to police.
+
+AN AST WALK RATHER THAN A LINE REGEX, because three shapes here defeat a grep: a
+file may name the driver in a docstring, discuss a cluster fixture in prose, or
+BUILD another test as a string for `pytester`. This layer has already paid for that
+lesson once -- the broad-except refusal was first written as a line regex and
+rejected its own tests, because the forbidden shape appears inside a
+`makepyfile` string.
+
+AND NEEDING A DATABASE IS NOT IMPORTING THE DRIVER. A test reaches a cluster
+through a FIXTURE and may import nothing, so a file is cluster-bound if it imports
+the driver at module scope (which kills collection outright), if any test or
+fixture in it requests -- directly or transitively -- a fixture that reaches a
+cluster, or if it DRIVES a cluster-bound file as a subprocess. The connecting
+fixtures are read off `conftest.py` rather than named in the classifier.
+
+| test | asserts |
+| --- | --- |
+| `test_the_guard_half_of_the_corpus_runs_without_a_database_driver` | the no-cluster files collect and pass with `import psycopg` shimmed to raise |
+| `test_a_cluster_test_still_needs_the_driver` | **control**: deferring made the IMPORT lazy, not the database optional |
+| `test_conftest_imports_no_database_driver_at_module_scope` | the regression named in one line, for whoever edits conftest next |
+| `test_the_declaration_is_exactly_the_database_free_half` | `NO_CLUSTER` equals the property, both ways, so an undeclared database-free file is named |
+| `test_the_partition_accounts_for_every_file_in_the_corpus` | **premise**: every file lands in exactly one bucket, and neither bucket is the whole corpus |
+| `test_the_cluster_fixtures_are_read_off_conftest_rather_than_named_here` | the roots of the property are derived from `conftest.py`, not typed |
+| `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control, over a fixture corpus |
+| `test_the_classifier_follows_a_cluster_fixture_through_a_local_wrapper` | a module-local fixture wrapping `pgc_cluster` is followed |
+| `test_the_classifier_catches_a_module_scope_driver_import` | an eager import kills collection, so the file cannot run in the job |
+| `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver` | a docstring, a block-comment string, a generated test, and a file merely discussed |
+| `test_the_classifier_takes_a_fixture_that_provisions_without_connecting` | the second signal, isolated: a fixture that starts a cluster and imports no driver |
+| `test_the_classifier_follows_a_conftest_fixture_that_connects_indirectly` | a conftest fixture reaching a cluster through a sibling, importing nothing itself |
+| `test_the_classifier_does_not_read_a_helpers_parameter_as_a_fixture` | pytest resolves names for tests and fixtures, not for helpers |
+| `test_the_classifier_follows_a_file_that_drives_a_cluster_bound_file` | this file's own shape: driving a cluster-bound file inherits what it needs |
+| `test_the_membership_report_names_a_database_free_file_left_undeclared` | the hole itself, on a fixture, with the control beside it |
+| `test_the_membership_report_names_a_declared_file_that_needs_a_cluster` | the other direction: a listed file that starts using a cluster fixture |
+| `test_the_membership_report_names_a_declared_file_that_is_gone` | a rename is still caught, and as its own kind rather than as a cluster need |
+| `test_the_gate_runs_the_membership_decision_rather_than_only_this_file` | selftest 350 runs the decision, and the command line it uses works |
+| `test_ci_derives_the_file_list_rather_than_repeating_it` | the CI job asks this module for `NO_CLUSTER`, names no file literally, and states no count |
+| `test_the_job_installs_no_database_driver` | the job asserts psycopg is absent rather than assuming it |
+
+**THIS IS NOW IN THE GATE.** `.github/workflows/ci.yml` runs a `pytest-guards`
+job: no database, no build, an interpreter and the two pinned runner packages.
+The file list is derived from `NO_CLUSTER` in this module and the pins from
+`requirements-test.txt`, so neither is a second copy that can go stale -- and
+three arms above hold it to that. **The job states no count and neither does this
+section**: it prints how many files it ran and pytest prints how many tests
+passed, so the numbers reach a reader from the run. A written count is a
+hand-maintained derived value, and the one in the job's comment was wrong the day
+it was written (#908).
+
+BUT THE ARMS IN THIS FILE DO NOT RUN IN THE GATE, and that is why
+`test/selftest/350-the-pytest-corpus-must-be.sh` runs the membership decision
+through this module's command line. The corpus is not in `SUITES` (README.md), and
+the `pytest-guards` job runs the database-free files -- which this file is not,
+because its control arm needs a real cluster. A guard that does not run is a
+comment, so the decision has a copy with teeth, exactly as the documentation
+sweep in that part does.
+
+A SHIM RATHER THAN AN UNINSTALL. Uninstalling psycopg would test the machine
+rather than the harness, could not run beside anything else, and would leave the
+environment broken if the test died. A module that raises on import, first on the
+path, is the same observation and reversible by construction. Both behavioural
+arms assert the shim actually bites before believing anything it produces.
+
+## 16. test_harness_deps_classifier.py: the classifier, in the file the gate runs
+
+`test_harness_deps.py` defines the classifier that decides which files the
+`pytest (harness guards, no database)` job runs — and that file is itself classified
+cluster-bound, correctly, because it hands real cluster-bound file names to pytest in
+a subprocess. So the job's file list is `NO_CLUSTER`, and the code that computes
+`NO_CLUSTER` was the one thing the job never ran.
+
+@linuxhikerpm measured the consequence: disabling transitive conftest-fixture closure
+left shell selftest 350 green and every CI-selected test passing, and only the excluded
+targeted test failed. A load-bearing branch could break with both real gates green.
+
+These arms drive a corpus they write in `tmp_path` and read nothing from the real tree,
+so this file needs no database and is declared in `NO_CLUSTER`. It imports the
+classifier as a **library**, which does not make it cluster-bound: the propagation rule
+reads string constants naming corpus files, not imports.
+
+### The classifier's branches
+
+| test | what it asserts |
+| --- | --- |
+| `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control |
+| `test_the_classifier_follows_a_cluster_fixture_through_a_local_wrapper` | a local fixture wrapping a conftest root |
+| `test_the_classifier_catches_a_module_scope_driver_import` | importing the driver at module scope is enough |
+| `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver` | a docstring naming psycopg is not an import |
+| `test_the_classifier_takes_a_fixture_that_provisions_without_connecting` | a fixture that provisions but never connects is still a root |
+| `test_the_classifier_follows_a_conftest_fixture_that_connects_indirectly` | the transitive closure inside conftest, which is the branch that was ungated |
+| `test_the_classifier_does_not_read_a_helpers_parameter_as_a_fixture` | a helper's parameter is not a request |
+| `test_the_classifier_follows_a_file_that_drives_a_cluster_bound_file` | driving another file inherits what it needs |
+
+### Ordinary pytest dependency forms
+
+The classifier read module-level `def`s and positional parameters. pytest resolves a
+fixture through five more shapes, and @linuxhikerpm built a direct fixture in each:
+every one was classified database-free and then failed under the no-driver shim.
+Measured against the classifier as it was:
+
+| form | before | after |
+| --- | --- | --- |
+| a test method inside a class | **free** | bound |
+| `@pytest.mark.usefixtures` | **free** | bound |
+| a keyword-only fixture parameter | **free** | bound |
+| `request.getfixturevalue` | **free** | bound |
+| an aliased cluster root in `conftest.py` | **free** | bound |
+| module-level positional | bound | bound |
+
+The fifth needed a shape the review did not give. An alias on the *test* side is caught
+anyway, because the underlying fixture still takes the root positionally; it is an alias
+on the **root**, in conftest, that hides it — the root was recorded under the def's name
+while a test requests it under the alias. Measured: `roots=['_mk']` before, `roots=['conn']` after.
+
+`request.getfixturevalue` is not supported and not banned. The name is computed at run
+time, so no AST can resolve it, and such a file is classified **cluster-bound** —
+wrong in the direction that costs CI time rather than the direction that greens a gate
+over tests nothing ran.
+
+| test | what it asserts |
+| --- | --- |
+| `test_a_test_method_inside_a_class_is_a_fixture_request` | pytest collects `test_*` methods of a class |
+| `test_usefixtures_is_a_fixture_request_without_a_parameter` | a dependency with no parameter |
+| `test_a_keyword_only_parameter_is_a_fixture_request` | `def test_x(*, pgc_conn)` |
+| `test_a_dynamic_request_is_treated_as_cluster_bound` | unresolvable means conservative, not free |
+| `test_an_aliased_cluster_root_is_found_under_the_name_tests_request` | the root is read under its requestable name |
+| `test_a_plain_test_and_a_helpers_parameter_stay_database_free` | the cost side: a rule that calls everything bound would empty the gate |
+| `test_usefixtures_on_a_class_reaches_its_methods` | pytest applies a class decorator to every method, which is the form class-method descent exists to serve |
+| `test_a_module_level_pytestmark_reaches_every_test` | `pytestmark = pytest.mark.usefixtures(...)` is a dependency of every test in the file and of no signature |
+| `test_a_pytestmark_written_as_a_list_reaches_every_test_too` | the list form is what a file uses once it has two marks |
+| `test_an_unrelated_class_decorator_does_not_bind_anything` | the cost side: only `usefixtures` is a dependency, or every parametrised class would be cluster-bound |
+| `test_a_file_whose_generated_tests_import_the_driver_is_driver_dependent` | cluster-free and still unrunnable where there is no driver, so the job's list is the intersection of two properties |
+| `test_a_file_that_only_PARSES_a_driver_import_is_job_runnable` | the control: a driver import in a string nothing runs is not a dependency, and reading only the string would exclude this very file |
+| `test_prose_naming_the_driver_is_not_a_driver_dependency` | a docstring naming psycopg is a sentence about code |
+
+## 17. Adding a test
+
+0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
+   test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
+   other. Only the `.sh` half runs in the gate today, and only the pytest half gets
+   typed results and a real connection, so a test that exists in one harness is not
+   finished. Where the two differ in force, say which is which in both headers.
+1. Write the failing test first and run it. Confirm it fails for the reason you
+   intend, not because a helper or module is missing. A red on `ImportError` proves
+   only that a file is absent.
+2. Give every assertion a name. Porting a bash check means reusing its exact name
+   string.
+3. Assert the premise. If a fixture is supposed to write rows, assert that it did.
+4. If the test needs an escape hatch, give it a reason rather than a flag.
+5. Run `compare_to_bash.py` if you are porting, and expect it to report every bash
+   property as covered.
+6. Run serially and with `-n 4`. A test that passes only in one of those is
+   order-dependent or shares state.
+7. If you add a guard, add the red test that proves it fires, and a control that
+   proves it does not fire on a legitimate test.
+8. Run `test/harness_selftest.sh`. **The harness's own selftests police this
+   directory too.** `test/selftest/300-a-test-script-must-be-runnable.sh` requires
+   that any file declaring an interpreter be executable, and the first version of
+   `compare_to_bash.py` was mode 644 with a `#!/usr/bin/env python3` line. That
+   failed the selftest on both majors of the matrix, which is how it was found. A
+   new directory under `test/` inherits every rule the old ones follow.
+
+## 18. What this corpus does NOT yet refuse
+
+`VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 27
+of them.** The other 45, of which 44 were demonstrated, are listed there with the
+refusal design each would need and the order worth building them in.
+
+Read it before adding a test. Two gaps are most likely to affect a new test now.
+
+**A write is not required to have written anything.** `INSERT ... SELECT ... WHERE
+false` writes nothing, raises nothing, and leaves a `rowcount` of 0 that nobody
+reads.
+
+**A `pytest.raises` block can still catch a failure from its own setup.** Section 17
+closed `raises-too-broad` — a broad family with no SQLSTATE pinned does not collect —
+and only NARROWED `raises-catches-setup`. The block must hold one top-level
+statement, so two shapes still walk past it: a call to a helper that performs the
+setup, and a compound statement such as a `for` holding the setup and the statement
+under test. Both are pinned by arms that assert the scan reports nothing on them, and
+`VACUITY_MODES.md` section 3.4 says what would close the mode.
+
+## 19. Traps this corpus records
+
+Recorded because each one produced a confident wrong result before it was caught,
+and all are the same family as the defect the layer exists to prevent.
+
+**A `UsageError` is written to stderr.** Two of the layer's tests assert on a
+message and both were checking stdout at first. They still exited non-zero, so
+`assert result.ret != 0` passed and the tests looked correct. Every message
+assertion here now names its stream.
+
+**A red test can fail for the wrong reason.** The first guard's red state was
+`ImportError: No module named 'pgc_vacuity'`. The module had to exist and simply
+not guard yet before the red meant anything.
+
+**`git checkout` restores source, not the installed library.** After the mutation
+arm, the source was clean and `/usr/local/pg18a` still held the mutated `.so`, so
+the next run tested a mutated binary against clean sources. The harness prints its
+`.so` fingerprint on every run, which is the only reason this was visible.
+
+**Counting is a fragile instrument.** A `grep -c " PASSED"` reported 6 of 7 tests,
+because the first test's outcome shares a line with a fixture's print. A `head` in
+the differential truncated its own summary line. Both produced a report that looked
+complete. This is why the property comparison reads names.
+
+**`ps | grep "[p]attern"` can match its own shell.** The bracket protects the
+enclosing command line only while the plain word appears nowhere else in it. A probe
+whose body also contained `/tmp/pgc-pytest-*` counted its own invocation as a leaked
+process. Walking `/proc/<pid>/cmdline` is the reliable instrument.
+
+`test_one_tree_hashes_one_way_however_the_locale_is_set` requires one tree to
+give one fingerprint across every installed locale.
+
+## 20. test_raises_sqlstate.py: which error, and which statement
+
+Numbered 17 rather than inserted after section 4, where a reader looking for a
+per-file section would expect it. Renumbering twelve headings and their Contents
+anchors while sibling branches are editing this file buys a reader nothing and
+costs a merge; the Contents entry above is what makes it findable.
+
+**What this file is for.** `pytest.raises(psycopg.Error)` claims that one of 254
+SQLSTATEs arrived, across 42 SQLSTATE classes — counted against psycopg 3.3.5 by
+asking how many classes in `psycopg.errors` carry a `sqlstate` and subclass that
+family. It does not claim even that much. Measured on this tree before the guard
+landed:
+
+    with pytest.raises(psycopg.Error):
+        conn = psycopg.connect("host=/nonexistent-socket-dir dbname=pgc")
+        conn.execute("SELECT pgc_definitely_no_such_function()")
+    expect.num(1, 1, "the server rejected the call")
+
+reported `1 passed`, exit 0. What satisfied the claim was `OperationalError` with
+`sqlstate` None: the connect failed, nothing reached a server, and the statement the
+test is about never executed. Against a live PostgreSQL 18.4 the same shape raises
+`InvalidName` 42602 from the SETUP line while the statement under test raises
+`UndefinedObject` 42704 — two different SQLSTATEs, one `raises`, one green test.
+
+### Both directions are enforced, and they close different amounts
+
+A `pytest.raises` over `Error`, `DatabaseError`, `Exception` or `BaseException` must
+pin a SQLSTATE, and the block must hold exactly one top-level statement whatever the
+class. Neither is a convention: both are an `ast` walk in
+`pytest_collection_modifyitems`, so an offending file does not collect at all rather
+than collecting and passing.
+
+**The first rule closes `raises-too-broad`.** It moved to `VACUITY_MODES.md`
+section 2.
+
+**The second only MITIGATES `raises-catches-setup`, which stays in section 3.4.**
+It counts TOP-LEVEL statements, so it removes the spelling where the setup sits on
+the line above — and two shapes walk straight past it, each being one statement that
+performs the setup inside the block:
+
+- **a helper call.** `_setup_then_run(conn)` is one statement, and the setup runs
+  inside the helper.
+- **a compound statement.** A `for` over the setup and the statement under test is
+  one statement holding two; an `if`, a `with` or a `try` nests the same way.
+
+Measured against the shipped scan, both report `1 passed`, exit 0, and **zero
+offences**. `test_a_helper_hiding_the_setup_is_not_refused` and
+`test_a_compound_statement_hiding_the_setup_is_not_refused` assert exactly that, so
+the residual is a measurement rather than a sentence. Counting statements
+recursively would catch both and would also refuse a legitimate single-statement
+loop; what would close the mode is a claim about WHICH statement raised, and
+`VACUITY_MODES.md` section 5 carries it as the next entry.
+
+### Why the scan parses instead of grepping
+
+Every arm below writes the forbidden shape inside a `pytester.makepyfile` string,
+because that is how the layer's own tests drive an inner run. A line regex fires on
+those strings and refuses the file that proves the guard — the false positive the
+broad-`except` scan already paid for once. Swept over `test/pytest/*.py`, the AST
+finds **5** `pytest.raises` call sites and reports **0** offences, while a
+`pytest.raises(` line regex matches **35** lines, **30** of them inside a string
+literal or a comment. `test_the_raises_scan_reads_code_not_a_string_literal` pins
+it.
+
+### The rule's own parameters are not reachable from the corpus
+
+The list of broad families is bound **inside** the scan, not at module level. Every
+`conftest.py` under `test/pytest/` is imported before collection, so a module-level
+tuple is writable from the tree the rule polices — `import pgc_vacuity` then
+`pgc_vacuity.<the tuple> = ()` — after which the scan reports zero offences for ever
+and the suite is green with the guard switched off and nothing saying so.
+`test_a_conftest_cannot_switch_the_broad_family_list_off` writes three plausible
+spellings of the name onto the module and requires the refusal to still arrive.
+Rebinding the scan FUNCTION from a conftest is still possible; that is true of every
+name in every Python plugin, and `test_guards_pinned.py` is what
+notice a scan that stopped being called.
+
+### The static half
+
+**THE ARMS LIVE HERE AND NOWHERE ELSE.** An earlier version of this work carried a
+shell mirror, `test/selftest/440-a-raises-must-name-a-sqlstate.sh`, which checked this
+scan by grepping its source: 44 of its 55 checks were `grep -c` against the function's
+text and it invoked `python3` zero times. @jdatcmd showed what that cannot do —
+three faithful neuterings (`False and` prefixed, nothing renamed, every pinned
+substring left in place) left the part at 55 passed while the scan went blind.
+
+The mirror is gone, for two reasons that point the same way. A text pin cannot see a
+disabled arm, so the proof has to RUN the scan; and the shell harness and this corpus
+are **parallel in functionality without driving each other** — a shell part whose whole
+subject is this file's source text is a dependency, not a parallel guard. So the
+neutering proof is the two `test_disabling_*` arms above, which copy the layer, disable
+one condition faithfully, and require the copy to go blind.
+
+### The arms
+
+| test | what it pins |
+| --- | --- |
+| `test_raises_requires_a_sqlstate` | the red test `VACUITY_MODES.md` section 5 names, byte for byte the shape that reported `1 passed` on main |
+| `test_a_raises_that_pins_the_sqlstate_is_accepted` | the positive control that matters most: the honest form must still collect and pass |
+| `test_a_raises_pinned_by_reading_the_field_is_accepted` | the second honest spelling, `exc.value.sqlstate` read directly, is a claim about a typed field too |
+| `test_a_narrow_raises_needs_no_sqlstate` | scope control: a one-SQLSTATE class already names the error, so a second spelling would be noise |
+| `test_a_raises_tuple_hides_a_broad_member` | @jdatcmd's #905 hole, closed before shipping: `(ValueError, psycopg.Error)` is still broad |
+| `test_raises_exception_is_refused_like_a_broad_except` | `except Exception` was already uncollectable; `pytest.raises(Exception)` swallows the same failures |
+| `test_setup_inside_a_raises_block_is_refused` | two statements in the block: narrow and pinned, and still unable to say which raised |
+| `test_a_raises_block_with_one_statement_is_accepted` | the control for it, differing in exactly one property — the setup moved above the block |
+| `test_the_raises_scan_reads_code_not_a_string_literal` | the false positive the scan is AST-based to avoid, pinned so it cannot return |
+| `test_sqlstate_refuses_a_sqlstate_class_prefix` | `"42"` is a SQLSTATE CLASS — a prefix claim wearing the spelling of an exact one |
+| `test_sqlstate_refuses_an_empty_expectation` | an empty `want` names no error, so nothing could have failed it |
+| `test_sqlstate_refuses_an_object_carrying_no_sqlstate` | passing `exc` instead of `exc.value` would compare `None` against a real code for ever |
+| `test_sqlstate_fails_when_the_failure_never_reached_the_server` | the measured case: `OperationalError` with `sqlstate` None is a `psycopg.Error` that is no server error |
+| `test_sqlstate_fails_on_a_different_sqlstate` | the whole point: the setup raised 42602 and the statement under test raises 42704 |
+| `test_sqlstate_accepts_the_exact_sqlstate` | positive control for the refusals above |
+| `test_sqlstate_accepts_one_of_several_named_codes` | majors 15 through 19 can differ, so a tuple widens the claim by exactly the codes it names |
+| `test_sqlstate_refuses_an_empty_set_of_codes` | and an empty tuple is satisfied by nothing, so the hatch is not the hole |
+| `test_the_raises_scan_leaves_the_unrunnable_state_alone` | a documented hatch the corpus never exercises: `cannot_run` still prints `UNRUN`, counts it, and exits 67 with this scan loaded |
+| `test_the_raises_scan_does_not_touch_a_recorder_made_in_the_body` | a test that fetches `expect` itself still satisfies the layer, because this scan runs at collection time |
+| `test_a_helper_hiding_the_setup_is_not_refused` | **residual 1 of 2, pinned.** One statement, a narrow class, a pinned SQLSTATE, and the setup inside the helper still raised: `1 passed`, no offence |
+| `test_a_compound_statement_hiding_the_setup_is_not_refused` | **residual 2 of 2, pinned.** A `for` holding the setup and the statement under test is one top-level statement: `1 passed`, no offence |
+| `test_a_conftest_cannot_switch_the_broad_family_list_off` | the rule's own family list is not writable from the corpus it polices |
+| `test_a_bare_sqlstate_expression_does_not_pin_anything` | `exc.value.sqlstate` as a statement of its own asserts nothing, so mentioning the field is not pinning it |
+| `test_a_sqlstate_assigned_and_never_read_does_not_pin_anything` | the same hole one step on: bound to a name nothing uses |
+| `test_one_hop_through_a_local_name_is_an_honest_pin` | the cost side — `code = exc.value.sqlstate` then `expect.text(code, ...)` stays collectable |
+| `test_the_keyword_form_is_checked_by_both_rules` | `pytest.raises(expected_exception=...)` is not an exemption from either rule |
+| `test_the_keyword_form_with_a_pin_is_collectable` | and it is not refused merely for being the keyword form |
+| `test_disabling_the_sqlstate_rule_makes_the_scan_blind` | the neutering proof: a copy of the layer with `False and` prefixed, nothing renamed, goes blind while still containing the pinned text |
+| `test_disabling_the_statement_rule_makes_the_scan_blind` | the same for the second condition, so neither rule rests on the other's arm |
+| `test_the_mode_this_layer_only_narrows_is_still_listed_as_open` | `raises-catches-setup` must stay in section 3 of the mode inventory |
+## 21. test_failed_query_sentinel.py: a failed query is not a comparison
+
+`error-swallowed-to-empty`: two queries raise, a helper turns each into the same
+value, and they compare equal. The test is green and has asserted nothing about
+either query.
+
+`lib.sh` closed this by PRODUCING the sentinel with a sequence number per failure,
+`res="QUERY_ERROR.$seq"`, so two failures can never compare equal. The port had the
+constant `QUERY_ERROR = "QUERY_ERROR"`, a comment claiming it was "unique per
+occurrence" — which is false of a constant — and a refusal in exactly one assertion.
+
+Measured before this file existed, with a sentinel on both sides:
+
+| assertion | before | after |
+| --- | --- | --- |
+| `expect.hash` | refused | refused |
+| `expect.text` | **passed** | refused |
+| `expect.rows` | **passed** | refused |
+| `expect.row_set` | **passed** | refused |
+| `expect.ordered_rows` | **passed** | refused |
+| `expect.num`, `at_least`, `rowcount` | refused, by their type guards | unchanged |
+
+So four of the five comparisons accepted two failed queries as agreement.
+
+**The mechanism is the refusal; `query_error()` is the second line.** A non-unique
+sentinel is safe against the layer, because no comparison accepts one at all. It is
+not safe against a helper that compares by hand, which is why the producer exists and
+why new code should use it. The SQL-side sentinel in `test_hilbert_locality.py`
+cannot use it — it is produced by `coalesce(...)` inside the query — and does not need
+to, for the same reason.
+
+| test | what it asserts | how it could fail |
+| --- | --- | --- |
+| `test_the_comparison_surface_is_what_this_file_thinks_it_is` | the derivation finds the layer's `(got, want)` assertions | a renamed or removed assertion makes the arm below vacuous |
+| `test_the_shape_table_covers_every_comparison_the_layer_offers` | every derived comparison has a declared valid pair | an assertion added to the layer is silently outside the arm below |
+| `test_every_comparison_refuses_a_failed_query_on_either_side` | each comparison refuses a sentinel on the left and on the right | a comparison that compares instead of refusing; the arm distinguishes "refused" from "failed" |
+| `test_row_set_refuses_before_it_maps_rather_than_after` | `row_set` refuses a sentinel that arrived as a cell | `row_set` reprs its rows before delegating, so a refusal only in `rows` cannot see it |
+| `test_the_producer_is_unique_per_occurrence` | fifty calls are fifty distinct values, all carrying the prefix | a producer that returns a constant, which is what the comment used to claim |
+| `test_the_constant_alone_is_not_unique_which_is_why_the_producer_exists` | the control: the bare constant equals itself | compared in plain Python, because the layer now refuses to compare two sentinels |
+| `test_the_refusal_cannot_be_switched_off_from_the_corpus_it_polices` | sentinels minted WHILE ARMED are still refused after the global is rewritten | every conftest is imported before collection, so a module global is writable by the corpus the rule polices |
+| `test_a_hardcoded_sentinel_survives_the_same_rewrite` | a sentinel no producer minted — the corpus writes three, one from inside SQL — is still refused after a rewrite | a matcher reading a rewritable global would stop seeing them |
+| `test_the_ordering_premise_refuses_a_failed_reading` | `ordering_observable` refuses a failed reading on either side | with the old shared constant two failed readings were identical and it went RED; unique sentinels differ, so it passed and greenlit every ordered assertion resting on it |
+| `test_a_legitimate_comparison_is_untouched` | equal text, rows, sets and numbers still pass | a refusal that also refuses real data is not a refusal |
+
+**Each refusal is proved load-bearing.** Removing the one call from each assertion,
+one at a time, with `__pycache__` cleared between runs:
+
+| refusal removed from | the arm names | arms reddened |
+| --- | --- | --- |
+| `row_set` | `row_set COMPARED a failed query` | 2 (also the delegation arm) |
+| `ordered_rows` | `ordered_rows COMPARED a failed query` | 1 |
+| `rows` | `rows COMPARED a failed query` | 1 |
+| `hash` | `hash COMPARED a failed query` | 1 |
+| `text` | `text COMPARED a failed query` | 2 (also the hatch arm, which is phrased over `text`) |
+
+The cache matters: the five deleted lines are byte-identical, so three of the five
+mutations leave the file the same size and Python reuses the stale bytecode. Without
+`rm -rf __pycache__` between runs, mutations 3, 4 and 5 report the same failure and
+the table reads as though two refusals did not bite.
+
+## 22. test_check_results_are_machine_readable.py: one counter, one record
 
 Check results were prose. `check`, `check_num` and `check_text` printed `PASS` or
 `FAIL` and nothing else, so proving that a mutation reddened one **named** check meant
@@ -1249,7 +1713,7 @@ a helper that prints an outcome without recording it. A log with no count at all
 reached its summary -- a different fault from a miscount, and not a clean
 reconciliation.
 
-## 16. test_mutation_ledger.py: which checks have ever been red
+## 23. test_mutation_ledger.py: which checks have ever been red
 
 Nothing recorded whether a check had ever been red. That is the gap that let **39 checks
 across 35 suites** ship unable to fail, three of them inside the suite whose whole
@@ -1332,73 +1796,3 @@ If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so
 gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
 which falls as suites are seeded.
 
-## 17. Adding a test
-
-0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
-   test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
-   other. Only the `.sh` half runs in the gate today, and only the pytest half gets
-   typed results and a real connection, so a test that exists in one harness is not
-   finished. Where the two differ in force, say which is which in both headers.
-1. Write the failing test first and run it. Confirm it fails for the reason you
-   intend, not because a helper or module is missing. A red on `ImportError` proves
-   only that a file is absent.
-2. Give every assertion a name. Porting a bash check means reusing its exact name
-   string.
-3. Assert the premise. If a fixture is supposed to write rows, assert that it did.
-4. If the test needs an escape hatch, give it a reason rather than a flag.
-5. Run `compare_to_bash.py` if you are porting, and expect it to report every bash
-   property as covered.
-6. Run serially and with `-n 4`. A test that passes only in one of those is
-   order-dependent or shares state.
-7. If you add a guard, add the red test that proves it fires, and a control that
-   proves it does not fire on a legitimate test.
-8. Run `test/harness_selftest.sh`. **The harness's own selftests police this
-   directory too.** `test/selftest/300-a-test-script-must-be-runnable.sh` requires
-   that any file declaring an interpreter be executable, and the first version of
-   `compare_to_bash.py` was mode 644 with a `#!/usr/bin/env python3` line. That
-   failed the selftest on both majors of the matrix, which is how it was found. A
-   new directory under `test/` inherits every rule the old ones follow.
-
-## 18. What this corpus does NOT yet refuse
-
-`VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
-of them.** The other 47, of which 46 were demonstrated, are listed there with the
-refusal design each would need and the order worth building them in.
-
-Read it before adding a test. The gaps most likely to affect a new test are that
-`pytest.raises` is still allowed to be broad enough that an unrelated failure of the
-same family satisfies it, and that a write is not required to have written anything.
-Both are named there with the refusal each needs.
-
-## 19. Traps this corpus records
-
-Recorded because each one produced a confident wrong result before it was caught,
-and all are the same family as the defect the layer exists to prevent.
-
-**A `UsageError` is written to stderr.** Two of the layer's tests assert on a
-message and both were checking stdout at first. They still exited non-zero, so
-`assert result.ret != 0` passed and the tests looked correct. Every message
-assertion here now names its stream.
-
-**A red test can fail for the wrong reason.** The first guard's red state was
-`ImportError: No module named 'pgc_vacuity'`. The module had to exist and simply
-not guard yet before the red meant anything.
-
-**`git checkout` restores source, not the installed library.** After the mutation
-arm, the source was clean and `/usr/local/pg18a` still held the mutated `.so`, so
-the next run tested a mutated binary against clean sources. The harness prints its
-`.so` fingerprint on every run, which is the only reason this was visible.
-
-**Counting is a fragile instrument.** A `grep -c " PASSED"` reported 6 of 7 tests,
-because the first test's outcome shares a line with a fixture's print. A `head` in
-the differential truncated its own summary line. Both produced a report that looked
-complete. This is why the property comparison reads names.
-
-**`ps | grep "[p]attern"` can match its own shell.** The bracket protects the
-enclosing command line only while the plain word appears nowhere else in it. A probe
-whose body also contained `/tmp/pgc-pytest-*` counted its own invocation as a leaked
-process. Walking `/proc/<pid>/cmdline` is the reliable instrument.
-
-`test_one_tree_hashes_one_way_however_the_locale_is_set` requires one tree to
-give one fingerprint across every installed locale.

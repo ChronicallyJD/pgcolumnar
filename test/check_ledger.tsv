@@ -266,12 +266,16 @@ harness_selftest	330-the-incomplete-path-must-run-whole	control: and still annou
 harness_selftest	330-the-incomplete-path-must-run-whole	control: and still records that it ran, and how	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	control: and the major reports PASS	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	control: the same loop leaves a passing suite passing	never	-
+harness_selftest	330-the-incomplete-path-must-run-whole	every function the collect loop calls is defined here	never	-
+harness_selftest	330-the-incomplete-path-must-run-whole	premise: all five runner functions were extracted, not empty ranges	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: all three runner functions were extracted, not empty ranges	never	-
+harness_selftest	330-the-incomplete-path-must-run-whole	premise: and all five are callable	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: and all three are callable	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: and each extraction ends at its own closing brace	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: the major-verdict branch was extracted, not an empty range	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: the runner's collect loop was extracted, not an empty range	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: the selftest has a workdir to build fixtures in	never	-
+harness_selftest	330-the-incomplete-path-must-run-whole	premise: the sweep found the loop's callers to check	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	running the real loop over both fixtures fails the major	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	the loop delegates each verdict to pgc_tally_suite	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	the runner classifies the file that suite actually produced	never	-
@@ -377,34 +381,46 @@ harness_selftest	350-the-pytest-corpus-must-be	a stated total that disagrees wit
 harness_selftest	350-the-pytest-corpus-must-be	a stated total that disagrees with the ids is visible	never	-
 harness_selftest	350-the-pytest-corpus-must-be	an absent prose total is empty rather than a stray number	never	-
 harness_selftest	350-the-pytest-corpus-must-be	an absent total is empty rather than a number that happens to match	never	-
+harness_selftest	350-the-pytest-corpus-must-be	an anchor that strips the underscores is named, not passed over	never	-
 harness_selftest	350-the-pytest-corpus-must-be	an id named twice counts once	never	-
 harness_selftest	350-the-pytest-corpus-must-be	an id of fewer than three words is not counted as a mode	never	-
 harness_selftest	350-the-pytest-corpus-must-be	an unbackticked name in prose is not treated as a claim	never	-
 harness_selftest	350-the-pytest-corpus-must-be	an undocumented file is caught along with the tests inside it	never	-
 harness_selftest	350-the-pytest-corpus-must-be	an undocumented test is named rather than passed over	never	-
+harness_selftest	350-the-pytest-corpus-must-be	and derives the pins from requirements-test.txt	never	-
+harness_selftest	350-the-pytest-corpus-must-be	and it derives the file list rather than repeating it	never	-
 harness_selftest	350-the-pytest-corpus-must-be	and the same comparison agrees on the fixture that is right	never	-
 harness_selftest	350-the-pytest-corpus-must-be	control: a document naming only what exists is clean	never	-
 harness_selftest	350-the-pytest-corpus-must-be	control: a fully documented corpus reports nothing missing	never	-
+harness_selftest	350-the-pytest-corpus-must-be	control: an anchor that keeps the underscores resolves	never	-
 harness_selftest	350-the-pytest-corpus-must-be	control: distinct names in the same corpus report no duplicate	never	-
+harness_selftest	350-the-pytest-corpus-must-be	every in-document link in README.md reaches a heading	never	-
+harness_selftest	350-the-pytest-corpus-must-be	every in-document link in TESTS.md reaches a heading	never	-
+harness_selftest	350-the-pytest-corpus-must-be	every in-document link in VACUITY_MODES.md reaches a heading	never	-
 harness_selftest	350-the-pytest-corpus-must-be	every test file and every test in the corpus is named in TESTS.md	never	-
 harness_selftest	350-the-pytest-corpus-must-be	every test the document names exists in the corpus	never	-
 harness_selftest	350-the-pytest-corpus-must-be	no test name is defined twice in the corpus	never	-
+harness_selftest	350-the-pytest-corpus-must-be	premise: the CI workflow is where this part thinks it is	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the corpus carries the documentation this part polices	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the counting rule finds modes at all	never	-
+harness_selftest	350-the-pytest-corpus-must-be	premise: the link sweep saw the directory's documents	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the mode inventory is where this part thinks it is	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the pytest corpus is where this part thinks it is	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the reader still finds a totals line when one is there	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the reverse sweep reads backticked names at all	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the sweep found the corpus rather than an empty glob	never	-
+harness_selftest	350-the-pytest-corpus-must-be	premise: the sweep reads the contents list's links	never	-
 harness_selftest	350-the-pytest-corpus-must-be	section 1a's document total is the sum of its two sections	never	-
 harness_selftest	350-the-pytest-corpus-must-be	section 1a's not-refused total is the count of ids in section 3	never	-
 harness_selftest	350-the-pytest-corpus-must-be	section 1a's refused total is the count of ids in section 2	never	-
 harness_selftest	350-the-pytest-corpus-must-be	section 2's opening states the counted number of refused modes	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the admitted gap is the run total minus what is written down	never	-
+harness_selftest	350-the-pytest-corpus-must-be	the anchor rule drops punctuation and keeps underscores	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the closing paragraph states the counted number too	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the counter counts a fixture's section 2	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the counter counts a fixture's section 3	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the counter stops at the next heading	never	-
+harness_selftest	350-the-pytest-corpus-must-be	the gate runs the harness guards	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the row's value is read, not a digit inside its label	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the sweep counts the fixture's tests and files	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	a comparison on the exit status is not counted as an assignment	never	-
@@ -551,9 +567,13 @@ harness_selftest	400-a-check-result-must-be-machine	a log with fewer records tha
 harness_selftest	400-a-check-result-must-be-machine	a log with more records than it claims is caught too	never	-
 harness_selftest	400-a-check-result-must-be-machine	a passing check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	a passing check still prints its old line	never	-
+harness_selftest	400-a-check-result-must-be-machine	a record carrying extra fields does not reconcile	never	-
+harness_selftest	400-a-check-result-must-be-machine	a record missing fields does not reconcile	never	-
 harness_selftest	400-a-check-result-must-be-machine	a skipped ratio check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	a skipped timing check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	a suite that skipped every check did not pass	never	-
+harness_selftest	400-a-check-result-must-be-machine	a verdict pgc_record cannot emit does not reconcile	never	-
+harness_selftest	400-a-check-result-must-be-machine	an empty check name does not reconcile	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check still prints its old line	never	-
 harness_selftest	400-a-check-result-must-be-machine	and is counted as a pass, not a skip	never	-
@@ -565,6 +585,8 @@ harness_selftest	400-a-check-result-must-be-machine	and its verdict field says F
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says PASS	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says UNRUN, which is neither of the other two	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict is SKIP	never	-
+harness_selftest	400-a-check-result-must-be-machine	and leaves one whose variable is assigned earlier	never	-
+harness_selftest	400-a-check-result-must-be-machine	and leaves one whose variable is the loop it sits in	never	-
 harness_selftest	400-a-check-result-must-be-machine	and names its own cause instead	never	-
 harness_selftest	400-a-check-result-must-be-machine	and not a check after a one-line piped loop that already closed	never	-
 harness_selftest	400-a-check-result-must-be-machine	and not a piped loop with no check in it	never	-
@@ -584,18 +606,29 @@ harness_selftest	400-a-check-result-must-be-machine	check_ratio that forms a rat
 harness_selftest	400-a-check-result-must-be-machine	check_ratio with a zero side emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_text on an empty side emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_text's empty-side line is unchanged	never	-
+harness_selftest	400-a-check-result-must-be-machine	control: a well-formed record still reconciles	never	-
 harness_selftest	400-a-check-result-must-be-machine	fewer records than counted checks is not described as a subshell	never	-
 harness_selftest	400-a-check-result-must-be-machine	lib.sh bumps PGC_CHECKS in exactly one place	never	-
 harness_selftest	400-a-check-result-must-be-machine	more records than counted checks names the cause, not just the arithmetic	never	-
+harness_selftest	400-a-check-result-must-be-machine	no check_skip reads a name its own file never assigns	never	-
+harness_selftest	400-a-check-result-must-be-machine	no file that calls check prints a SKIP outcome the count cannot see	never	-
 harness_selftest	400-a-check-result-must-be-machine	no suite calls a check inside a piped loop	never	-
 harness_selftest	400-a-check-result-must-be-machine	pgc_fail emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	pgc_pass emits one record	never	-
+harness_selftest	400-a-check-result-must-be-machine	premise: and it would name a file that calls check and echoes a SKIP	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: and that is this fragment, not the suite	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: it is callable	never	-
+harness_selftest	400-a-check-result-must-be-machine	premise: it names a check_skip reading an unassigned variable	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: lib.sh is where the check helpers live	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: the fixtures carry the shapes this sweep is about	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: the probe ran every helper shape once	never	-
+harness_selftest	400-a-check-result-must-be-machine	premise: the sweep classified a corpus of check-calling files	never	-
+harness_selftest	400-a-check-result-must-be-machine	premise: while a file that calls no check is not its business	never	-
 harness_selftest	400-a-check-result-must-be-machine	the accounting line reconciles four outcomes against the count	never	-
+harness_selftest	400-a-check-result-must-be-machine	the reconciliation accepts the verdict FAIL, which pgc_record emits	never	-
+harness_selftest	400-a-check-result-must-be-machine	the reconciliation accepts the verdict PASS, which pgc_record emits	never	-
+harness_selftest	400-a-check-result-must-be-machine	the reconciliation accepts the verdict SKIP, which pgc_record emits	never	-
+harness_selftest	400-a-check-result-must-be-machine	the reconciliation accepts the verdict UNRUN, which pgc_record emits	never	-
 harness_selftest	400-a-check-result-must-be-machine	the record count equals the counter the summary reports	never	-
 harness_selftest	400-a-check-result-must-be-machine	the record names the part the check was asked from	never	-
 harness_selftest	400-a-check-result-must-be-machine	the runner calls the record reconciliation, not merely defines it	never	-

@@ -175,6 +175,71 @@ outside the gate. Writing both keeps the two harnesses honest about each other:
 where they disagree, one of them is wrong, and that is worth finding at the time
 rather than during a port.
 
+**The two harnesses are parallel in functionality, and independent in
+implementation. They must not call, import or reference each other.** Owner's
+rule, 2026-09-10. Documentation is the only exception: prose, comments and
+docstrings may name the other harness freely.
+
+This follows from the paragraph above. Two harnesses can only disagree if they
+are two measurements. A pytest test that drives `test/lib.sh` by subprocess is
+not a second measurement of the property -- it is the first measurement wearing a
+Python wrapper, so it agrees with the shell by construction and can never report
+the shell wrong. The coupling turns the twin from evidence into a mirror, and a
+mirror is what the twin rule exists to avoid.
+
+So each harness asserts the property against **the product**, in its own terms,
+never against the other harness's implementation. Building a throwaway fixture
+that merely resembles the other side -- writing a fake `lib.sh` into a `tmp_path`
+-- is not a reference to it; sourcing the real one is. If a property can only be
+expressed by driving the other side, that is a signal it belongs to one harness
+alone: say which, and say why, rather than reaching across.
+
+**The counting rule, so the inventory can be re-derived.** A **reference** is an
+executable line that names a file belonging to the other harness *as it exists in
+this tree* -- sourcing it, importing it, running it, or reading its text. Three
+things are not references, in the order they get confused:
+
+1. prose. Comments, docstrings and help strings may name the other harness freely.
+2. a file the test **builds itself** under a `tmp_path`, even with the same name.
+3. a word that merely looks like a filename. `sharedir` is not a `.sh` file.
+
+**Count files, not lines.** A line total moves with any refactor and with the
+exact pattern used, and three different patterns gave three different totals when
+this was first counted. The file is the stable unit, so each file below is named
+with the mechanism that makes it a reference -- which is also what has to change
+for it to stop being one.
+
+**The debt this starts with, on 2026-09-10: 3 python files and 7 shell files**,
+with a fourth python file arriving in PR #923.
+
+Python that reaches into shell:
+
+- `test_build_refusal.py` -- sources the real `test/lib.sh` in three helpers
+  (`_sh`, `_sh_fp`, `_sh_fp_as`), behind 36 calls. The largest of these. Counted
+  with `ast`, not `grep`: the pattern `[^_a-z]_sh(` also matches `def _sh(`, which
+  is how the first draft said 39 -- 36 calls plus the 3 definitions. Reported by
+  @OffgridwithJD. Rule 3 above, caught in the very entry that states it.
+- `test_suite_accounting.py` -- reads `run_all_versions.sh`'s text, sources the
+  real `lib.sh` from a suite it writes, and executes the real runner.
+- `pgc_cluster.py` -- sources the real `test/lib.sh`.
+- `test_check_results_are_machine_readable.py` -- sources `./lib.sh`. Arrives
+  with PR #923; not on `main` yet.
+
+Shell whose subject is python: `lib.sh`, and `selftest/030`, `040`, `350`, `360`,
+`370`, `380`.
+
+**`test_build_refusal.py` is the example worth studying, because it does both.**
+It writes a fake `test/lib.sh` into a `tmp_path` and drives that -- rule 2, not a
+reference -- and it *also* sources the real one three times. The first draft of
+this section read the fake tree, called the file "not debt", and used it as the
+illustration of what the rule permits. It is in fact the largest single item in
+the list. Reported by @OffgridwithJD, who checked the inventory instead of
+believing it. Judge a file by what it executes, not by the fixture it builds.
+
+None of that is fixed by this section. It records which direction those files are
+expected to move, and makes the inventory falsifiable rather than a vague sense
+that some coupling exists.
+
 **A sequencing note that will stop being true.** As of 2026-09-09 the pytest
 harness is PR #897 and is not on `main`, so this rule cannot be satisfied for a
 test written today. Until it lands, write the `.sh` suite, write the pytest twin

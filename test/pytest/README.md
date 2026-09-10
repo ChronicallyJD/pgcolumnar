@@ -5,7 +5,7 @@ This is the issue #432 pilot. It runs beside `test/*.sh`, and replaces nothing.
 - `TESTS.md` in this directory documents every test and every assertion helper.
 - `VACUITY_MODES.md` is the inventory of ways a pytest harness can report a false
   pass: 79 modes produced by the enumeration, 72 of them named in that
-  file, 73 demonstrated by a run, and 25 refused by this layer today.
+  file, 73 demonstrated by a run, and 27 refused by this layer today.
   VACUITY_MODES.md section 1a gives the counting rule and reconciles the
   run's totals against what is actually written down.
 - `design/ISSUE_432_PYTEST_HARNESS.md` holds the design and the measurements

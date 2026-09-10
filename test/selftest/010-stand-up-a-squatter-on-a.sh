@@ -16,7 +16,7 @@ for _try in $(seq 1 20); do
 	fi
 done
 if [ "$SQ_PORT" = 0 ]; then
-	echo "SKIP  could not find a free port for the squatter cluster"
+	check_skip "the squatter cluster" "SKIP  could not find a free port for the squatter cluster" "no free port"
 	rm -rf "$SQ_DIR"
 	exit 0
 fi
@@ -50,7 +50,7 @@ sq_datadir() {
 }
 
 if [ -z "$(sq_datadir)" ]; then
-	echo "SKIP  could not stand up a squatter cluster to test against"
+	check_skip "the squatter cluster" "SKIP  could not stand up a squatter cluster to test against" "could not stand it up"
 	squatter_down
 	exit 0
 fi

@@ -1049,8 +1049,14 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	done
 
 	printf '%s\n' "$_display"
-	# Tabs in a field would split it. Nothing in the tree puts one in a check
-	# name, and this makes that true rather than assumed.
+	# Tabs in a field would split it, and a NEWLINE splits the whole record just
+	# as completely -- it ends the line, so what follows becomes a second line the
+	# reader cannot key. Nothing in the tree puts either in a check name, and this
+	# makes that true rather than assumed. The tab was stripped here from the
+	# first version; the newline was not, which @linuxhikerpm named on #917: the
+	# reason already written for the tab is the reason for both. Measured before
+	# the fix, a newline in the name gave a record of 4 fields plus two stray
+	# lines; after it, 6 fields and one line.
 	#
 	# PARAMETER EXPANSION, not `printf | tr` in a command substitution. The first
 	# version paid four forks per record -- two subshells and two tr processes --
@@ -1059,12 +1065,15 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	# an idle box, 2,000 calls, identical output on every input including a real
 	# tab: 3.1577 ms per call against 0.0096 ms, 331x, or 11.9 seconds of pure
 	# fork overhead across a full suite against 36 ms. Reported by OffgridwithJD.
+	local _nl_name="${_name//$'\t'/ }" _nl_reason="${_reason//$'\t'/ }"
+	_nl_name="${_nl_name//$'\n'/ }"; _nl_reason="${_nl_reason//$'\n'/ }"
+	_nl_name="${_nl_name//$'\r'/ }"; _nl_reason="${_nl_reason//$'\r'/ }"
 	printf 'RESULT\t%s\t%s\t%s\t%s\t%s\n' \
 		"${PGC_SUITE:-unknown}" \
 		"${_part:-${PGC_SUITE:-unknown}}" \
-		"${_name//$'\t'/ }" \
+		"${_nl_name}" \
 		"$_v" \
-		"${_reason//$'\t'/ }"
+		"${_nl_reason}"
 }
 
 pgc_pass() {	# pgc_pass NAME
@@ -1253,6 +1262,26 @@ pgc_require_tools() {
 # So the ratio is skipped and the rest of the suite runs. A skip is announced
 # rather than silent, and it is not counted as a pass, because a count that
 # includes checks nobody ran is the thing this project keeps having to unlearn.
+# A named check that could not run HERE, for a reason the suite knows.
+#
+# WHY THIS EXISTS. `echo "SKIP  ..."` printed a line a reader sees and left
+# PGC_CHECKS alone, so the outcome existed for a human and for nobody else: no
+# record, no count, and nothing for `pgc_reconcile_records` to reconcile. The
+# tree's own comment at native_index_projection.sh said why that mattered -- "the
+# skip must be visible: a check that reports nothing is indistinguishable from a
+# check that passes" -- and that was TRUE while the human line WAS the record. It
+# stopped being true when the RESULT stream became the machine-readable one, and
+# 22 sites were left behind on the wrong side of the change. Named by
+# @linuxhikerpm on #917; the owner asked for every site, not the three examples.
+#
+# DISPLAY IS PASSED WHOLE, exactly as pgc_record takes it, so every existing
+# human line stays byte-identical. These messages are individually worded and a
+# reader greps them; recomposing them here would change what people see for no
+# gain, which is the same reason pgc_record does not compose PASS lines either.
+check_skip() {	# check_skip NAME DISPLAY [REASON]
+	pgc_record SKIP "$1" "$2" "${3:-}"
+}
+
 check_timing() {
 	local name="$1" got="$2" want="$3"
 
@@ -1555,7 +1584,12 @@ pgc_skip() {  # pgc_skip <capability> <message>
 	cap="$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')"
 	allow_one="PGC_ALLOW_MISSING_$cap"
 	if [ "${PGC_ALLOW_MISSING:-0}" = 1 ] || [ "${!allow_one:-0}" = 1 ]; then
-		echo "SKIP  $2 (waived by $allow_one or PGC_ALLOW_MISSING)"
+		# The unwaived branch below records a FAIL. This one printed and left
+		# PGC_CHECKS at zero, so waiving a dependency also erased the outcome --
+		# the same asymmetry check_timing had, in the function whose whole
+		# subject is "a missing dependency is not a pass".
+		check_skip "$2" "SKIP  $2 (waived by $allow_one or PGC_ALLOW_MISSING)" \
+			"waived by $allow_one or PGC_ALLOW_MISSING"
 		pgc_summary
 	fi
 	pgc_record FAIL "$2" "FAIL  $2"

@@ -176,7 +176,7 @@ for pair in "text key:$Q_TEXTKEY" "expression key:$Q_EXPRKEY" \
 	else
 		# The node itself declined the shape; there is no fold line to read and
 		# nothing for this suite to gate. Say so rather than assert a missing line.
-		echo "SKIP  $label: the grouped node is not planned for this shape"
+		check_skip "$label" "SKIP  $label: the grouped node is not planned for this shape" "the grouped node is not planned for this shape"
 	fi
 	agree "$label: answers match the heap mirror" "$tmpl"
 done

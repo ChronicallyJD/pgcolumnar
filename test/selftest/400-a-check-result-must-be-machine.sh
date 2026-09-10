@@ -166,28 +166,182 @@ eval "$(sed -n '/^pgc_reconcile_records()/,/^}/p' "$_rv")"
 check "premise: it is callable" "$(type -t pgc_reconcile_records)" "function"
 
 _rl="$PGC_WORKDIR/rec.log"
-printf 'RESULT\ts\ta\tPASS\t\nRESULT\ts\tb\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nchecks run: 2\n' > "$_rl"
 check "a log whose records match its stated count reconciles" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "ok"
 
-printf 'RESULT\ts\ta\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 2\n' > "$_rl"
 check "a log with fewer records than it claims is caught" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 check "and the two numbers are named, not just the verdict" \
 	"$(pgc_reconcile_records "$_rl" 2>&1 | grep -c 'records=1 .*checks run: 2')" "1"
 
-printf 'RESULT\ts\ta\tPASS\t\nRESULT\ts\tb\tPASS\t\nRESULT\ts\tc\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nRESULT\ts\tp\tc\tPASS\t\nchecks run: 2\n' > "$_rl"
 check "a log with more records than it claims is caught too" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 
 # A log with no `checks run:` line at all did not reach its summary. That is a
 # different fault from a miscount and must not read as a clean reconciliation.
-printf 'RESULT\ts\ta\tPASS\t\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\n' > "$_rl"
 check "a log that never stated a count is not silently accepted" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 
 check "the runner calls the record reconciliation, not merely defines it" \
 	"$(grep -c '[^_[:alnum:]]pgc_reconcile_records "' "$_rv")" "1"
+
+# THE COUNT IS NOT THE SCHEMA. Counting `^RESULT<TAB>` lines and comparing to
+# `checks run:` accepted every malformed record below, each against a well-formed
+# control that reconciled the same way -- so the function returned 0 whether the
+# record parsed or not. Named by @linuxhikerpm on #917.
+#
+# The control comes FIRST and is asserted, because five arms that all say
+# "mismatch" prove nothing if the function has simply started refusing
+# everything. That is the shape this suite exists to catch.
+printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 1\n' > "$_rl"
+check "control: a well-formed record still reconciles" \
+	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "ok"
+
+_rq_bad() {	# _rq_bad RECORD -> ok|mismatch, with the count always matching
+	printf '%s\nchecks run: 1\n' "$1" > "$_rl"
+	pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch
+}
+
+check "a record missing fields does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\ta')")" "mismatch"
+
+check "a record carrying extra fields does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tPASS\tr\textra\tmore')")" "mismatch"
+
+check "a verdict pgc_record cannot emit does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tBOGUS\t')")" "mismatch"
+
+check "an empty check name does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\t\tPASS\t')")" "mismatch"
+
+# The four verdicts are the emitter's own list. If pgc_record grows a fifth and
+# this one does not, this arm goes red rather than the vocabulary drifting.
+for _rq_v in PASS FAIL UNRUN SKIP; do
+	check "the reconciliation accepts the verdict $_rq_v, which pgc_record emits" \
+		"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\t%s\t' "$_rq_v")")" "ok"
+done
+unset -f _rq_bad
+unset _rq_v
+
+# ---- a named SKIP is an outcome, so it is counted and recorded --------------
+#
+# `echo "SKIP  ..."` printed a line a reader sees and left PGC_CHECKS alone, so
+# 22 sites across 20 files reported an outcome that no count and no record ever
+# saw. The tree's own comment said why that mattered -- "the skip must be
+# visible: a check that reports nothing is indistinguishable from a check that
+# passes" -- and it was true while the human line WAS the record.
+#
+# THE EXEMPTION IS DERIVED, NOT A FILENAME LIST. A file that calls `check` is a
+# suite or a part, and its skips are check outcomes. run_all_versions.sh calls
+# `check` zero times because it is the runner: its one `echo "SKIP"` declines a
+# whole PostgreSQL major before any suite exists, so there is no PGC_CHECKS for
+# it to belong to. That distinction is read off the files rather than written
+# here, so a new runner or a new suite is classified without editing this arm.
+_sk_offenders=""
+for _sk_f in "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh; do
+	[ -e "$_sk_f" ] || continue
+	# A comment is not a statement, so the pattern anchors to the line start
+	# after whitespace only. Measured: this arm's own prose above says
+	# echo "SKIP" and is not matched, which a looser pattern would flag.
+	[ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_f")" -gt 0 ] || continue
+	if [ "$(grep -cE '^[[:space:]]*echo "SKIP' "$_sk_f")" -gt 0 ]; then
+		_sk_offenders="$_sk_offenders ${_sk_f##*/}"
+	fi
+done
+check "no file that calls check prints a SKIP outcome the count cannot see" \
+	"$(printf '%s' "$_sk_offenders" | wc -w | tr -d ' ')" "0"
+[ -z "$_sk_offenders" ] || printf '      %s\n' $_sk_offenders
+
+# The sweep has to be looking at something, and it has to be able to find one.
+_sk_seen=0
+for _sk_f in "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh; do
+	[ -e "$_sk_f" ] || continue
+	[ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_f")" -gt 0 ] && _sk_seen=$((_sk_seen + 1))
+done
+check "premise: the sweep classified a corpus of check-calling files" \
+	"$([ "$_sk_seen" -ge 50 ] && echo yes || echo "no ($_sk_seen)")" "yes"
+
+_sk_fix="$PGC_WORKDIR/skipsweep"; rm -rf "$_sk_fix"; mkdir -p "$_sk_fix"
+printf 'check "x" a a\necho "SKIP  a bare skip"\n' > "$_sk_fix/offender.sh"
+check "premise: and it would name a file that calls check and echoes a SKIP" \
+	"$([ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_fix/offender.sh")" -gt 0 ] \
+	   && [ "$(grep -cE '^[[:space:]]*echo "SKIP' "$_sk_fix/offender.sh")" -gt 0 ] \
+	   && echo caught || echo missed)" "caught"
+
+printf 'echo "SKIP  a bare skip"\n' > "$_sk_fix/runner.sh"
+check "premise: while a file that calls no check is not its business" \
+	"$([ "$(grep -cE '^[[:space:]]*check(_[a-z_]+)? ' "$_sk_fix/runner.sh")" -gt 0 ] \
+	   && echo caught || echo "not a suite")" "not a suite"
+
+unset _sk_offenders _sk_f _sk_seen _sk_fix
+
+# ---- a check_skip must not read a name its own file never assigns ----------
+#
+# I SHIPPED THIS DEFECT AND THIS ARM IS WHY IT CANNOT COME BACK. Converting the
+# skips, I wrote `check_skip "the amcheck oracle for $idx"` into
+# native_index_projection.sh. The loop variable is `ix`, in the OTHER branch, and
+# `$idx` appeared nowhere else in the file. Every suite runs under `set -u`, so on
+# any box without amcheck the else branch died with "idx: unbound variable" at
+# rc=1, before pgc_summary and before any `checks run:` line. CI never saw it: the
+# PGDG packages carry amcheck, so CI always takes the then branch. Found by
+# @OffgridwithJD on a container without it.
+#
+# `bash -n` cannot see this -- the syntax is fine -- and neither can any arm that
+# only runs the branch CI happens to take. So the check is static and reads the
+# text: every name a check_skip line expands must be assigned somewhere in that
+# same file, or be one of the harness globals lib.sh exports.
+_us_globals=" PGC_MAJOR PGC_SUITE PGC_DB PGC_PORT PGC_BINDIR PGC_TESTDIR PGC_WORKDIR PGC_SRCDIR PGC_ALLOW_MISSING "
+_us_unbound() {	# _us_unbound FILE -> lines naming a variable the file never assigns
+	local _f="$1" _line _v _n
+	grep -nE '^[[:space:]]*check_skip ' "$_f" 2>/dev/null | while IFS= read -r _line; do
+		_n="${_line%%:*}"
+		for _v in $(printf '%s' "${_line#*:}" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | tr -d '${'); do
+			case "$_us_globals" in *" $_v "*) continue ;; esac
+			grep -qE "(^|[[:space:]]|;)$_v=" "$_f" && continue
+			# BRACES, because `$_v[` reads as an array expansion: shellcheck
+			# SC1087 at -S error, which is the CI gate for this harness. It is
+			# lint-only -- bash cannot take `[` as part of a name, so both
+			# spellings expand identically and this arm worked before the fix --
+			# but it is the tidiest example of what the arm is for: the guard
+			# against a variable-expansion mistake carried one, in the very
+			# regex that looks for the for-loop assigning the name. Noticed by
+			# @OffgridwithJD, who also measured that the two expansions match.
+			grep -qE "for[[:space:]]+${_v}[[:space:]]+in[[:space:]]" "$_f" && continue
+			grep -qE "local[[:space:]][^#]*\b$_v\b" "$_f" && continue
+			printf '%s:%s:%s\n' "${_f##*/}" "$_n" "$_v"
+		done
+	done
+}
+
+_us_bad=""
+for _us_f in "$PGC_TESTDIR"/*.sh "$PGC_TESTDIR"/selftest/*.sh; do
+	[ -e "$_us_f" ] || continue
+	_us_bad="$_us_bad$(_us_unbound "$_us_f")"
+done
+check "no check_skip reads a name its own file never assigns" \
+	"$(printf '%s' "$_us_bad" | grep -c . || true)" "0"
+[ -z "$_us_bad" ] || printf '      %s\n' $_us_bad
+
+# The sweep must be able to find one, and must not flag a name that IS assigned.
+_us_fix="$PGC_WORKDIR/unbound"; rm -rf "$_us_fix"; mkdir -p "$_us_fix"
+printf 'check_skip "the oracle for $idx" "SKIP  x" "y"\n' > "$_us_fix/bad.sh"
+check "premise: it names a check_skip reading an unassigned variable" \
+	"$(_us_unbound "$_us_fix/bad.sh" | grep -c . || true)" "1"
+
+printf 'for ix in a b; do\ncheck_skip "the oracle for $ix" "SKIP  x" "y"\ndone\n' > "$_us_fix/good.sh"
+check "and leaves one whose variable is the loop it sits in" \
+	"$(_us_unbound "$_us_fix/good.sh" | grep -c . || true)" "0"
+
+printf 'idx=w_k\ncheck_skip "the oracle for $idx" "SKIP  x" "y"\n' > "$_us_fix/assigned.sh"
+check "and leaves one whose variable is assigned earlier" \
+	"$(_us_unbound "$_us_fix/assigned.sh" | grep -c . || true)" "0"
+
+unset -f _us_unbound
+unset _us_bad _us_f _us_fix _us_globals
 
 # ---- the timing helpers reported an outcome that nothing counted -------------
 #

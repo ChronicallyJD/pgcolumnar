@@ -172,7 +172,7 @@ objstore_teardown() { restore_module; pgc_teardown; }
 trap objstore_teardown EXIT INT TERM
 
 if ! mv "$MOD" "$MOD.probe" 2>/dev/null; then
-	echo "SKIP  cannot move $MOD, so the absent and broken paths are untested here"
+	check_skip "the absent and broken module paths" "SKIP  cannot move $MOD, so the absent and broken paths are untested here" "cannot move $MOD"
 	pgc_summary
 	exit 0
 fi
