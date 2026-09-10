@@ -56,10 +56,15 @@ def undocumented(directory, doc_path):
     return sorted(missing)
 
 
+def stated_totals_in(text):
+    """-> (tests, files) the TEXT claims, or None if it states none."""
+    m = TOTALS.search(text)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
 def stated_totals(doc_path):
     """-> (tests, files) the document claims, or None if it states none."""
-    m = TOTALS.search(pathlib.Path(doc_path).read_text())
-    return (int(m.group(1)), int(m.group(2))) if m else None
+    return stated_totals_in(pathlib.Path(doc_path).read_text())
 
 
 def _fixture(tmp_path, doc_body):
@@ -125,11 +130,13 @@ def documented_but_absent(directory, doc):
     on_disk_fns = {n for names in found.values() for n in names}
     on_disk_files = set(found)
     named = set(re.findall(r"`(test_[A-Za-z0-9_]*(?:\.py)?)`", doc.read_text()))
-    bad = sorted({n for n in named if n.endswith(".py")} - on_disk_files) \
-        + sorted({n for n in named if not n.endswith(".py")} - on_disk_fns)
-    if not bad:
-        return "[]"
-    return "[%d:%s]" % (len(bad), "".join(" " + b for b in bad[:6]))
+    # A SORTED LIST, like undocumented() beside it. It returned a preformatted
+    # "[n: a b c]" string first, copying the bash twin's shape rather than its
+    # Python neighbour's, and the two-return-types-one-concept split immediately
+    # cost something real: a check written against it read `x in ("[]", "")`,
+    # which is False for an empty LIST, and reported a defect as unreproducible.
+    return sorted({n for n in named if n.endswith(".py")} - on_disk_files) \
+         + sorted({n for n in named if not n.endswith(".py")} - on_disk_fns)
 
 
 def test_a_documented_test_that_does_not_exist_is_named(expect):
@@ -143,7 +150,7 @@ def test_a_documented_test_that_does_not_exist_is_named(expect):
     had never been written, and every other arm in this file passed over them --
     which is the point.
     """
-    expect.text(documented_but_absent(HERE, DOC), "[]",
+    expect.text(", ".join(documented_but_absent(HERE, DOC)) or "none", "none",
                 "every test the document names exists in the corpus")
 
 
@@ -156,10 +163,10 @@ def test_a_document_naming_a_test_that_was_deleted_is_caught(tmp_path, expect):
     (tmp_path / "test_one.py").write_text("def test_alpha(expect):\n    pass\n")
     doc = tmp_path / "DOC.md"
     doc.write_text("**1 tests in 1 files.**\n`test_one.py`: `test_alpha` and `test_beta`\n")
-    expect.text(documented_but_absent(tmp_path, doc), "[1: test_beta]",
+    expect.text(", ".join(documented_but_absent(tmp_path, doc)), "test_beta",
                 "a documented test that does not exist is named, not passed over")
     doc.write_text("**1 tests in 1 files.**\n`test_one.py`: `test_alpha`\n")
-    expect.text(documented_but_absent(tmp_path, doc), "[]",
+    expect.text(", ".join(documented_but_absent(tmp_path, doc)) or "none", "none",
                 "control: a document naming only what exists is clean")
 
 
@@ -168,25 +175,109 @@ def test_a_documented_file_that_does_not_exist_is_caught(tmp_path, expect):
     (tmp_path / "test_one.py").write_text("def test_alpha(expect):\n    pass\n")
     doc = tmp_path / "DOC.md"
     doc.write_text("`test_one.py` and `test_gone.py`: `test_alpha`\n")
-    expect.text(documented_but_absent(tmp_path, doc), "[1: test_gone.py]",
+    expect.text(", ".join(documented_but_absent(tmp_path, doc)), "test_gone.py",
                 "a documented file that does not exist is named")
 
 
-def test_the_stated_totals_are_the_totals_on_disk(expect):
-    """Neither arm above would catch a wrong count: a document can name every test
-    and still miscount them, which is exactly what the stale header did."""
-    stated = stated_totals(DOC)
-    expect.text(repr(stated is not None), "True",
-                "TESTS.md states its totals in a form that can be read back")
+def test_no_test_name_is_defined_twice_in_the_corpus(expect):
+    """The premise the set-equality argument needs, and it was missing (@jdatcmd).
+
+    #919 argues that removing the totals line costs nothing because the two
+    sweeps give set EQUALITY between the document and the corpus. That is true of
+    NAMES and it is not true of DEFINITION COUNTS, which is what a total counts:
+
+        two files defining test_shared_shape
+            definitions on disk           2
+            distinct names                1
+            undocumented()                clean
+            documented_but_absent()       clean
+            -> BOTH ARMS GREEN, and the counts differ
+
+    Measured, not argued. It cannot happen today -- 139 definitions against 139
+    distinct names, zero duplicates -- so the conclusion was true in fact but not
+    by construction, which is the difference between an argument and a guard.
+
+    IT CLOSES SOMETHING REAL BEYOND THE ARGUMENT. `undocumented()` asks whether a
+    name appears in the document at all, so a test defined TWICE and documented
+    ONCE reads as fully covered. The second definition is invisible to every arm
+    here, and pytest runs both.
+    """
     found = corpus_tests(HERE)
-    expect.text(repr(stated), repr((sum(len(v) for v in found.values()), len(found))),
-                "and the totals it states are the totals on disk")
+    names = [n for tests in found.values() for n in tests]
+    expect.at_least(len(names), 20, "premise: the corpus was found")
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    expect.text(", ".join(dupes) or "none", "none",
+                "no test name is defined twice in the corpus")
+    expect.num(len(names), len(set(names)),
+               "so definitions and distinct names are the same count")
 
 
-# ---------------------------------------------------------------------------
-# And the guard must be able to FAIL. Everything above passes on a healthy tree,
-# which is exactly what a guard that does nothing also does.
-# ---------------------------------------------------------------------------
+def test_a_name_defined_in_two_files_is_caught(tmp_path, expect):
+    """The removal proof, and the exact shape that defeats the equality argument."""
+    (tmp_path / "test_a.py").write_text("def test_shared_shape(expect):\n    pass\n")
+    (tmp_path / "test_b.py").write_text("def test_shared_shape(expect):\n    pass\n")
+    found = corpus_tests(tmp_path)
+    names = [n for tests in found.values() for n in tests]
+    expect.num(len(names), 2, "premise: both definitions were seen")
+    expect.num(len(set(names)), 1, "and they share one name")
+    expect.text(", ".join(sorted({n for n in names if names.count(n) > 1})),
+                "test_shared_shape",
+                "a name defined in two files is named, not passed over")
+
+
+def test_the_document_states_no_totals_for_a_merge_to_get_wrong(expect):
+    """TESTS.md must NOT carry a totals line (#908, step 2).
+
+    It used to, and `selftest/350` compared it against the corpus, which is what
+    made it a claim rather than decoration. The problem was never the check: it
+    was that the number was WRITTEN rather than DERIVED, and its correct value is
+    a function of the MERGE rather than of either branch. It collided on
+    essentially every rebase touching the corpus -- ten times in one day, both
+    sides wrong every time, so there was no side to pick.
+
+    REMOVING IT COSTS NOTHING, and that is provable rather than hopeful. The two
+    sweeps together are strictly stronger than any count:
+
+        test_every_file_and_test_is_named_in_the_document
+            every test on disk is named here          (disk  subset of  document)
+        test_a_documented_test_that_does_not_exist_is_named
+            every name here exists on disk            (document  subset of  disk)
+
+    Two subsets in opposite directions is set EQUALITY, so the documented set and
+    the corpus are the same set, and any count over one equals the count over the
+    other. A stated total was a derived value written by hand.
+
+    WHY THIS IS AN ARM AND NOT JUST A DELETION. Nothing stops the next person
+    adding the sentence back -- it reads like an improvement. This arm is what
+    makes its absence a decision rather than an accident, and `stated_totals`
+    stays for it: the reader still has to work, or "no totals line" would be
+    indistinguishable from "cannot find one".
+    """
+    expect.text(repr(stated_totals(DOC)), "None",
+                "TESTS.md states no totals line for a merge to get wrong")
+
+    # And the reader that reports it must still be able to FIND one, or the arm
+    # above passes because the parser is broken rather than because the line is
+    # gone -- the exact shape this corpus exists to refuse.
+    expect.text(repr(stated_totals_in("**7 tests in 3 files.** and prose")),
+                "(7, 3)",
+                "premise: the reader still finds a totals line when one is there")
+
+
+def test_the_corpus_counts_are_reported_rather_than_written(expect):
+    """The counts do not vanish; they move to where they cannot go stale.
+
+    A number nobody maintains is better than a wrong one, but a number nobody can
+    SEE is worse than both. The harness prints them every run, computed from the
+    corpus, so a reader gets the same information without the document asserting
+    anything.
+    """
+    found = corpus_tests(HERE)
+    total = sum(len(v) for v in found.values())
+    expect.at_least(total, 20, "premise: the corpus was found, so a count means something")
+    expect.num(len(found), len({f for f in found}), "each file counted once")
+    print(f"\nCORPUS: {total} test functions in {len(found)} files")
+
 
 def test_a_fully_documented_corpus_reports_nothing_missing(tmp_path, expect):
     """Control. A guard with a bad false-positive rate gets switched off, and then
