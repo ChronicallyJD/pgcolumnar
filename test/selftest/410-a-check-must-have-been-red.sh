@@ -359,20 +359,76 @@ check "premise: the budget was restored byte-exact" \
 check "the runner passes --against to the gate" \
 	"$(grep -A5 'pgc_ledger.py" gate' "$_rv" | grep -c -- '--against')" "1"
 
-# ---- and WHICH ref the runner compares against is a decision, not a default --
-#
-# `--against HEAD` compares a committed file against itself: for any change that
-# is already committed, the working budget and HEAD's are identical, so it catches
-# only an UNCOMMITTED raise. The property that matters is that a branch may not
-# raise the ceiling relative to MAIN, which needs origin/main as the ref.
-#
-# The runner therefore chooses, and prints the choice when it falls back. A silent
-# fallback to the weaker ref would be a gate quietly enforcing less than it says,
-# which is the shape this whole change exists to refuse.
 
-check "the runner prefers origin/main as the ceiling's reference" \
-	"$(grep -c '_led_ref=origin/main' "$_rv")" "1"
-check "and falls back to HEAD only after saying so" \
-	"$(grep -A3 '_led_ref=HEAD' "$_rv" | grep -c 'catches an uncommitted raise only')" "1"
-check "and the gate is given that ref rather than a literal" \
-	"$(grep -c -- '--against "\$_led_ref"' "$_rv")" "1"
+
+# ---- the prior is resolved, never named ------------------------------------
+#
+# `origin` is not a fixed thing. In a contributor's clone it is their FORK, and
+# OffgridwithJD measured theirs 446 commits behind upstream. Comparing the ceiling
+# against a stale main makes this check WEAKER rather than falsely red -- the
+# ceiling may only fall, so an older main carries a higher one, and a raise passes
+# whenever the stale prior is high enough.
+#
+# It fails open while printing a line that reads like the enforcement happened.
+# That is the same shape as the absolute-path bug this part already carries, with
+# "compared against the wrong thing" in place of "could not compare".
+#
+# So the tool resolves it: GITHUB_BASE_REF in CI, which names the PR's target and
+# IS the prior by definition; the local main's configured upstream outside CI,
+# which is the per-clone answer to "which main is mine". Neither available is an
+# ERROR, because a fallback that enforces less while saying so is still a gate
+# enforcing less.
+
+check "the runner asks the tool to resolve the prior rather than naming one" \
+	"$(grep -A5 'pgc_ledger.py" gate' "$_rv" | grep -c -- '--against auto')" "1"
+check "and the runner names no remote at that call site" \
+	"$(grep -A6 'pgc_ledger.py" gate' "$_rv" | grep -c 'origin/main')" "0"
+
+_res="$_lw/resolve"; rm -rf "$_res"; mkdir -p "$_res"
+( cd "$_res" && git init -q . && git config user.email t@t && git config user.name t
+  printf 'suites_not_covered 7\n' > b.txt && git add b.txt && git commit -qm base ) >/dev/null 2>&1
+printf 'suites_not_covered 7\n' > "$_res/b.txt"
+
+check "premise: the scratch repo has a committed ceiling and no upstream" \
+	"$(cd "$_res" && git rev-parse --abbrev-ref main@{upstream} 2>/dev/null || echo none)" "none"
+check "auto with no base ref and no upstream is an integrity failure" \
+	"$(cd "$_res" && env -u GITHUB_BASE_REF python3 "$_led" gate --ledger "$_lw/g.tsv" \
+		--budget b.txt --registered "$_lw/registered" --against auto "$_lw/new.log" \
+		>/dev/null 2>&1; echo $?)" "2"
+check "and it says why, rather than falling back to something weaker" \
+	"$(cd "$_res" && env -u GITHUB_BASE_REF python3 "$_led" gate --ledger "$_lw/g.tsv" \
+		--budget b.txt --registered "$_lw/registered" --against auto "$_lw/new.log" 2>&1 \
+		| grep -c 'no trustworthy prior ceiling')" "1"
+
+# GITHUB_BASE_REF names a branch whose ref must actually exist. A CI checkout that
+# did not fetch the base is an error the workflow fixes, not one the author works
+# around.
+check "auto refuses when GITHUB_BASE_REF names a ref that is not here" \
+	"$(cd "$_res" && GITHUB_BASE_REF=nosuchbranch python3 "$_led" gate --ledger "$_lw/g.tsv" \
+		--budget b.txt --registered "$_lw/registered" --against auto "$_lw/new.log" 2>&1 \
+		| grep -ci 'the checkout needs to fetch the base branch')" "1"
+
+# And when it IS here, that is the ref used -- named in the output, so a reader
+# can see which prior the comparison actually made.
+( cd "$_res" && git branch -q basebranch && git update-ref refs/remotes/origin/basebranch \
+	"$(git rev-parse HEAD)" ) >/dev/null 2>&1
+check "auto uses the base ref when it resolves, and names it" \
+	"$(cd "$_res" && GITHUB_BASE_REF=basebranch python3 "$_led" gate --ledger "$_lw/g.tsv" \
+		--budget b.txt --registered "$_lw/registered" --against auto "$_lw/new.log" 2>&1 \
+		| grep -c 'ceiling against refs/remotes/origin/basebranch')" "1"
+printf 'suites_not_covered 99\n' > "$_res/b.txt"
+check "and a raise against that base ref is refused" \
+	"$(cd "$_res" && GITHUB_BASE_REF=basebranch python3 "$_led" gate --ledger "$_lw/g.tsv" \
+		--budget b.txt --registered "$_lw/registered" --against auto "$_lw/new.log" 2>&1 \
+		| grep -c 'was raised from 7 to 99')" "1"
+
+# ---- and CI must fetch that base, or the gate stops the run ----------------
+
+_ci="$PGC_SRCDIR/.github/workflows/ci.yml"
+check "premise: the workflow file is where this part thinks it is" \
+	"$([ -f "$_ci" ] && echo yes || echo no)" "yes"
+check "the suites job fetches the PR base for the ceiling comparison" \
+	"$(grep -c 'fetch the PR base, for the ledger ceiling comparison' "$_ci")" "1"
+check "and only when there is a base, so a push build does not fail on it" \
+	"$(grep -A1 'fetch the PR base, for the ledger ceiling comparison' "$_ci" \
+		| grep -c "github.base_ref != ''")" "1"

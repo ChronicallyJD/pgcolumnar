@@ -65,6 +65,7 @@ rather than the catalogue it exists to become.
 """
 
 import argparse
+import os
 import pathlib
 import subprocess
 import sys
@@ -250,6 +251,60 @@ def read_budget(path):
     return out
 
 
+def _resolve_against(path, spec):
+    """Which ref carries the prior ceiling. Fails closed rather than guessing.
+
+    NOT a hardcoded remote name. `origin` is per-clone: in a contributor's setup it
+    is their fork, and OffgridwithJD measured theirs 446 commits behind upstream.
+    Comparing against a stale main makes this check WEAKER, never falsely red --
+    the ceiling may only fall, so an older main carries a higher one, and a raise
+    passes whenever the stale prior is high enough. It fails open while printing a
+    line that reads like the enforcement happened, which is the same shape as the
+    absolute-path bug one level down: compared against the wrong thing, rather than
+    could not compare.
+
+    So:
+
+      GITHUB_BASE_REF   in CI this names the PR's target branch, which IS the prior
+                        by definition. Its remote-tracking ref must exist -- if the
+                        checkout did not fetch it, that is an error, not a fallback.
+      main@{upstream}   outside CI, ask git rather than a convention. The configured
+                        upstream of the local main is the answer to "which main is
+                        mine", per clone.
+
+    Anything else is an error. A gate that quietly enforces less than it claims is
+    the thing this whole change exists to refuse, and a fallback that says so is
+    still a gate enforcing less.
+    """
+    if spec != "auto":
+        return spec
+    repo = pathlib.Path(path).resolve().parent
+
+    def _rev(ref):
+        r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", ref],
+                           capture_output=True, text=True)
+        return ref if r.returncode == 0 else None
+
+    base = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if base:
+        for cand in (f"refs/remotes/origin/{base}", base):
+            if _rev(cand):
+                return cand
+        raise LedgerError(
+            f"GITHUB_BASE_REF is {base!r} but no ref for it resolves here, so the prior "
+            "ceiling cannot be read. The checkout needs to fetch the base branch")
+
+    r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "main@{upstream}"],
+                       capture_output=True, text=True)
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip()
+    raise LedgerError(
+        "no trustworthy prior ceiling: GITHUB_BASE_REF is unset and the local main has no "
+        "configured upstream. Naming a remote would compare against whatever `origin` "
+        "happens to be in this clone, which is how a fork 446 commits stale gets treated "
+        "as the prior")
+
+
 def _committed_budget(path, ref):
     """The budget as of `ref`. Raises rather than returning None.
 
@@ -354,13 +409,14 @@ def cmd_gate(args):
     # MONOTONE, mechanically. The tracked file says the ceiling may only fall;
     # without this that sentence is prose and raising the number passes.
     if args.against:
-        p_want = _committed_budget(args.budget, args.against)["suites_not_covered"]
+        ref = _resolve_against(args.budget, args.against)
+        p_want = _committed_budget(args.budget, ref)["suites_not_covered"]
         if want > p_want:
-            print(f"    suites_not_covered was raised from {p_want} to {want}: "
-                  f"the ceiling may only fall")
+            print(f"    suites_not_covered was raised from {p_want} to {want} "
+                  f"(against {ref}): the ceiling may only fall")
             rc = 1
         else:
-            print(f"    ceiling against {args.against}: {p_want} -> {want}, which does not rise")
+            print(f"    ceiling against {ref}: {p_want} -> {want}, which does not rise")
     return rc
 
 
@@ -390,7 +446,8 @@ def main(argv=None):
     g.add_argument("--registered", default="",
                    help="file listing every registered suite (required)")
     g.add_argument("--against", default="",
-                   help="git ref whose budget is the prior ceiling, for the monotone check")
+                   help="'auto' to resolve the prior from GITHUB_BASE_REF or main@{upstream}, "
+                        "or an explicit git ref. Fails closed when no trustworthy prior exists")
     g.add_argument("logs", nargs="+")
     g.set_defaults(fn=cmd_gate)
 

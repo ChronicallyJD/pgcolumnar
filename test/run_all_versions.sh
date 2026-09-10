@@ -1357,31 +1357,24 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		echo "  the ledger is missing from the tree under test, which is not a pass"
 		verfail=1
 	else
-		# WHICH REF THE CEILING IS COMPARED AGAINST, chosen here and printed,
-		# because the two candidates enforce different things and a silent
-		# fallback would be the shape this gate exists to refuse.
+		# WHICH REF CARRIES THE PRIOR CEILING is resolved by the tool, from
+		# GITHUB_BASE_REF in CI or the local main's configured upstream outside
+		# it, and it FAILS CLOSED when neither gives a trustworthy answer.
 		#
-		# origin/main is the real property: a branch may not RAISE the ceiling
-		# relative to what is already on main. HEAD only catches a raise made in
-		# the working tree since the last commit, which is worth having locally
-		# and is much weaker.
-		#
-		# The tool fails closed when it cannot read the prior, so an unresolvable
-		# ref would redden rather than pass. Choosing here means the fallback is a
-		# decision someone can see rather than an error someone has to diagnose.
-		if git -C "$builddir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
-			_led_ref=origin/main
-		else
-			_led_ref=HEAD
-			echo "  origin/main does not resolve here, so the ledger ceiling is"
-			echo "  compared against HEAD: that catches an uncommitted raise only"
-		fi
+		# It used to be chosen here, preferring origin/main with a printed
+		# fallback to HEAD. Both halves were wrong. `origin` is per-clone -- in a
+		# contributor's setup it is their fork, measured 446 commits stale -- and
+		# comparing against an older main makes the check WEAKER rather than
+		# falsely red, because the ceiling may only fall. And the fallback to HEAD
+		# compares a committed file against itself, so it caught nothing for any
+		# change under review while printing that it had compared. A gate that
+		# quietly enforces less than it claims is what this whole change refuses.
 		# shellcheck disable=SC2086
 		if ! python3 "$builddir/test/pgc_ledger.py" gate \
 			--ledger "$builddir/test/check_ledger.tsv" \
 			--budget "$builddir/test/check_ledger_budget.txt" \
 			--registered "$_acc_registered" \
-			--against "$_led_ref" \
+			--against auto \
 			$_led_logs; then
 			echo "  PG$major has a check the ledger has never seen, which is not a pass"
 			verfail=1
