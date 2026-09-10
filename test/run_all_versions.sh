@@ -782,6 +782,11 @@ for pgc in "${CONFIGS[@]}"; do
 			# else would produce one and the run would be classified a failure.
 			echo 66 >"$builddir/${s}.rc"
 			echo "$s.sh: SKIPPED (ran no checks)" >"$builddir/${s}.log"
+			# Record the decision where it is made (#916). This suite calls
+			# pgc_summary and will produce no accounting line, because it was
+			# never run; the reconciliation needs that said by the driver rather
+			# than guessed from the log the driver just forged.
+			printf '%s\n' "$s" >>"$builddir/accounting.notdispatched"
 			continue
 		fi
 		port=$((BASE_PORT++))
@@ -853,6 +858,151 @@ pgc_classify_suite_rc() {	# pgc_classify_suite_rc RC LOGFILE -> PASS|SKIP|INCOMP
 # would leave every count at zero while every arm that drives this function
 # still passed -- the same shape of defect as the write-only flag, and just as
 # invisible to a green run.
+# ---- accounting membership, derived rather than listed -----------------------
+#
+# The matrix prints "suites that ran: N of M" and never checks it, and ten
+# registered suites exit 0 having never counted a check. They assert things in
+# their own way; the harness simply cannot see their checks. Counted among the
+# suites that "ran", they are the same overcount #447 added that line to stop,
+# one level further down.
+#
+# A COUNT cannot fix this. Two errors of opposite sign cancel, and an exempt list
+# maintained by hand makes the count agree by construction -- the check then
+# measures the list rather than the run. So membership is derived from a property
+# each suite carries, and the two readings are reconciled as SETS, in both
+# directions.
+
+pgc_suite_declares_accounting() {	# pgc_suite_declares_accounting FILE -> yes|no
+	# A suite participates in check accounting exactly when it calls pgc_summary,
+	# which is the only thing that prints the accounting line and sets the status
+	# pgc_classify_suite_rc reads.
+	#
+	# Comments are stripped first. A suite that explains in prose why it cannot
+	# account would otherwise read as one that does, which is the failure mode
+	# this whole approach exists to avoid: a claim satisfied by a mention.
+	# grep -c, NOT grep -q, and the reason is the bug this harness has already
+	# paid for once. `grep -q` exits the moment it matches, which closes the pipe
+	# while sed is still writing; sed takes EPIPE and exits non-zero, and under
+	# `set -o pipefail` the PIPELINE reports that failure even though grep
+	# matched. It is a race between the two, so it reproduces on large files and
+	# not small ones, and it names DIFFERENT innocent suites each run.
+	#
+	# That is not a hypothetical. Selftest 040 carries the same story from #473
+	# and #476, and the first version of this function reproduced it exactly:
+	# analyze_function and hilbert_curve -- two of the longest suites -- read as
+	# not declaring accounting inside the selftest and as declaring it outside.
+	#
+	# grep -c reads to EOF, so sed never sees a closed pipe.
+	local _f="$1" _n
+	[ -f "$_f" ] || { echo no; return 0; }
+	_n="$(sed 's/#.*$//' "$_f" \
+		| grep -cE '(^|[^_[:alnum:]])pgc_summary([^_[:alnum:]]|$)' || true)"
+	if [ "${_n:-0}" -gt 0 ]; then
+		echo yes
+	else
+		echo no
+	fi
+}
+
+pgc_log_shows_accounting() {	# pgc_log_shows_accounting LOGFILE -> yes|no
+	# The runtime twin of the declaration above. pgc_summary prints this line on
+	# EVERY exit path -- pass, failure, skip and incomplete -- before it decides
+	# the status, so its presence says "this suite reached its summary" and not
+	# "this suite passed". Anchored and fully shaped, so the word appearing in a
+	# suite's own prose cannot satisfy it.
+	local _log="$1"
+	[ -f "$_log" ] || { echo no; return 0; }
+	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log"; then
+		echo yes
+	else
+		echo no
+	fi
+}
+
+pgc_reconcile_accounting() {	# pgc_reconcile_accounting DECLARED OBSERVED [NOTDISPATCHED] -> 0 ok, 1 asymmetric
+	# Set equality in both directions. The two directions catch opposite
+	# mistakes and neither can stand in for the other:
+	#
+	#   declared but never accounted   the suite died before reaching its
+	#                                  summary. Today rc=0 makes that a PASS.
+	#   accounted but never declared   the reading of the source is stale.
+	#
+	# comm needs both sides sorted under the same collation; selftest 070 is the
+	# record of what an unsorted input costs here.
+	# The third list is the driver's own record of suites it chose not to
+	# dispatch -- PGC_SKIP_TIMING drops four on every CI run. Those suites DO
+	# declare accounting and correctly produced none, so without this term the
+	# reconciliation goes red for the one reason that is not a defect.
+	#
+	# It is recorded by the branch that makes the decision, not inferred from the
+	# log that branch forges. Inferring it would mean trusting a marker the driver
+	# wrote on the suite's behalf, which is the kind of claim this check exists to
+	# stop.
+	local _decl="$1" _obs="$2" _nd="${3:-}" _rc=0
+	local _dfile _ofile _ndfile _obsonly _both _donly _oonly _clash
+	local _nboth _ndonly _noonly _nclash _inputs _sum _n
+
+	_dfile="$(mktemp)"; _ofile="$(mktemp)"; _ndfile="$(mktemp)"; _obsonly="$(mktemp)"
+	LC_ALL=C sort -u "$_decl" 2>/dev/null | sed '/^$/d' >"$_dfile"
+	LC_ALL=C sort -u "$_obs"  2>/dev/null | sed '/^$/d' >"$_obsonly"
+	if [ -n "$_nd" ] && [ -f "$_nd" ]; then
+		LC_ALL=C sort -u "$_nd" 2>/dev/null | sed '/^$/d' >"$_ndfile"
+	fi
+	# The observed side is what accounted PLUS what was deliberately not run.
+	LC_ALL=C sort -u "$_obsonly" "$_ndfile" | sed '/^$/d' >"$_ofile"
+
+	# A suite cannot both have reached its summary and not have been dispatched.
+	# If it is in both lists one of the two readings is wrong, and the union above
+	# would hide that by absorbing it.
+	_clash="$(LC_ALL=C comm -12 "$_obsonly" "$_ndfile")"
+	_nclash="$(printf '%s' "$_clash" | grep -c . || true)"
+
+	_both="$(LC_ALL=C comm -12 "$_dfile" "$_ofile")"
+	_donly="$(LC_ALL=C comm -23 "$_dfile" "$_ofile")"
+	_oonly="$(LC_ALL=C comm -13 "$_dfile" "$_ofile")"
+
+	_nboth="$(printf '%s' "$_both"  | grep -c . || true)"
+	_ndonly="$(printf '%s' "$_donly" | grep -c . || true)"
+	_noonly="$(printf '%s' "$_oonly" | grep -c . || true)"
+
+	# inputs is counted from the FILES, independently of the three buckets. A
+	# derived total makes the identity below true for any values, which is the
+	# shape pgc_summary's own comment warns about: three counters reconciled
+	# against a fourth is the only version of this line that can fail.
+	_inputs="$(LC_ALL=C sort -u "$_dfile" "$_ofile" | grep -c . || true)"
+	_sum=$(( _nboth + _ndonly + _noonly ))
+	rm -f "$_dfile" "$_ofile" "$_ndfile" "$_obsonly"
+
+	if [ "$_nclash" != 0 ]; then
+		while IFS= read -r _n; do
+			[ -n "$_n" ] && echo "    both accounted and recorded as never dispatched: $_n"
+		done <<<"$_clash"
+		_rc=1
+	fi
+
+	if [ "$_ndonly" != 0 ]; then
+		while IFS= read -r _n; do
+			[ -n "$_n" ] && echo "    declared but never accounted: $_n"
+		done <<<"$_donly"
+		_rc=1
+	fi
+	if [ "$_noonly" != 0 ]; then
+		while IFS= read -r _n; do
+			[ -n "$_n" ] && echo "    accounted but never declared: $_n"
+		done <<<"$_oonly"
+		_rc=1
+	fi
+
+	# Printed from the data on every path, green included, per the house rule
+	# that any list-derived claim shows inputs == sum(buckets).
+	echo "  accounting reconciliation: inputs=$_inputs | both=$_nboth, declared only=$_ndonly, accounted only=$_noonly | sum=$_sum"
+	if [ "$_inputs" != "$_sum" ]; then
+		echo "    the reconciliation does not add up: $_inputs names across both lists, $_sum in the buckets"
+		_rc=1
+	fi
+	return $_rc
+}
+
 pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	local _name="$1" _verdict="$2" _log="$3"
 	if [ "$_verdict" = PASS ]; then
@@ -925,6 +1075,28 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	# report a verdict without running a check when pyarrow is absent, and the old
 	# per-version line counted them among the passes. A count that includes suites
 	# nobody ran is the thing this project keeps having to unlearn.
+	# Reconcile what the suites SAY they account for against what this run
+	# OBSERVED (#916). Two readings taken from different places -- the suite's own
+	# text, and the log it produced -- so neither can satisfy the other by
+	# construction. A count over SUITES could not do this: the collect loop above
+	# visits every registered name, so any total derived from it is an identity.
+	_acc_declared="$builddir/accounting.declared"
+	_acc_observed="$builddir/accounting.observed"
+	_acc_notdisp="$builddir/accounting.notdispatched"
+	: >"$_acc_declared"
+	: >"$_acc_observed"
+	[ -f "$_acc_notdisp" ] || : >"$_acc_notdisp"
+	for s in "${SUITES[@]}"; do
+		[ "$(pgc_suite_declares_accounting "$builddir/test/${s}.sh")" = yes ] \
+			&& printf '%s\n' "$s" >>"$_acc_declared"
+		[ "$(pgc_log_shows_accounting "$builddir/${s}.log")" = yes ] \
+			&& printf '%s\n' "$s" >>"$_acc_observed"
+	done
+	if ! pgc_reconcile_accounting "$_acc_declared" "$_acc_observed" "$_acc_notdisp"; then
+		echo "  PG$major cannot account for every registered suite, which is not a pass"
+		verfail=1
+	fi
+
 	echo "  suites that ran: $suites_ran of ${#SUITES[@]} (skipped: $suites_skipped, incomplete: $suites_incomplete)"
 	if [ "$suites_skipped" != 0 ]; then
 		echo "  skipped:${skipped_names}"
