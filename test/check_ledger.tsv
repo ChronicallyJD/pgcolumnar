@@ -23,20 +23,58 @@ harness_selftest	070-and-comm-s-two-inputs-must	every suite is registered in run
 harness_selftest	070-and-comm-s-two-inputs-must	negative control: and does not find one that is not	never	-
 harness_selftest	070-and-comm-s-two-inputs-must	positive control: the membership test finds a name that is registered	never	-
 harness_selftest	070-and-comm-s-two-inputs-must	premise: some suite still uses comm, or the check below is vacuous	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	a comment ending in a pipe is not a producer	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	a comment naming a TERMINATED tag still opens no heredoc, so the lines below it are seen	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	a comment naming a heredoc exempts nothing, so the line below it is still seen	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	an opener on a line of CODE with no terminator exempts nothing either	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	an opener with no terminator exempts nothing	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	and a pipeline split BEFORE the pipe, with the operator at column 1	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	and an indented split is reported twice, at the reader and at the producer	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	and bench/ was in the scan, which is the hole this rule had	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	and does not cover the live one above it	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	and it follows the pipe across blank and comment lines	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	and reports it at the PRODUCER's line, which is the line that has to change	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	and selftest/ was in the scan, which is the hole that reddened #923	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	and the heredoc exemption covers the one inside the heredoc, not the other	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	and the planted violation in that file is found by the pattern	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	and the scan examined the suites rather than finding nothing to read	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	and the sweep counts it once, because a hit is keyed on file:line	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	control: a real heredoc, opened in code and terminated, still exempts its body	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	control: piping a large string into grep -q reports a match as absent	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	no suite pipes a captured string into an early-exit reader	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and bash agrees -- with no command to continue, the reader alone will not parse	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and bash runs that file as one assignment -- no reader, no output, rc 0	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and its second line really does hold the reader it must not flag	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and that body line is the one the pattern would otherwise flag	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	premise: and the exemption covers a minority of them, not the corpus	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and the line below it is what the pattern would flag	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	premise: and the line really does hold the reader it must not flag	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	premise: and the old echo/printf pattern did NOT catch it	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and the physical-line pattern alone saw neither of those two	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and the violation between that comment and its tag is what the pattern would flag	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: and without -H it reports a line number where the key wants a path	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: bash joins a pipeline across blank and comment lines, which is why the joiner must	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: indent that same reader by a tab and the physical-line pattern sees it unaided	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: no backslash continuation is followed by a blank or a comment	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: no line opens a heredoc AND continues, which is what lets the joiner ignore bodies	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: that shape matches in both streams at one line, which is what the key is for	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the candidate is on a line of code, not a comment	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the continuation detector found continuations to classify	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the file the old filename exclusion named holds no reader to exclude	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the fixture really has two backslash continuations to classify	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the fixture really has two heredoc openers for the detector to see	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	premise: the heredoc exemption found heredoc lines to exempt	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the joiner joined continuations, so the sweep is not still line-oriented	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the opener detector found heredocs to classify	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	premise: the physical stream names the file even when it reads only one of them	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	premise: the sweep read lines to classify	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	the continuing-opener detector finds an opener that ends in a pipe, and one that ends in a backslash	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	the gap detector finds a continuation followed by a comment, and one followed by a blank	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	the join CREATES a hit on a two-line quoted string, the sweep's one false positive	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	the joiner does not mistake a two-line || fallback for a split pipeline	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	the sweep catches a producer that is neither echo nor printf	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	the sweep does not mistake the || operator for a pipe	never	-
+harness_selftest	080-no-suite-pipes-a-captured-string	the sweep sees a pipeline split AFTER the pipe, which all six live sites were	never	-
 harness_selftest	080-no-suite-pipes-a-captured-string	the sweep's pattern sees both lines of the probe	never	-
 harness_selftest	090-no-suite-hands-every-run-the	no suite hands every run the same default port	never	-
 harness_selftest	090-no-suite-hands-every-run-the	no test picks a port from inside the ephemeral range	never	-

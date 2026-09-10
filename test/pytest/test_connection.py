@@ -8,6 +8,8 @@ the string "100" and leaves every conversion to the reader.
 import decimal
 import pathlib
 
+import pgc_vacuity
+
 
 def test_cluster_fixture_gives_a_typed_connection(pgc_conn, expect):
     """count(*) must arrive as an int, not as text."""
@@ -184,3 +186,108 @@ def test_the_cluster_refuses_a_foreign_server(pgc_cluster, expect):
                        pgc_cluster.port)
     expect.text(impostor.is_ours(), False,
                 "a server whose datadir differs is refused")
+
+def test_the_connection_the_tests_use_is_watched(pgc_conn, expect, request):
+    """Writes through this fixture reach the zero-row guard.
+
+    THIS IS THE HALF THE DRIVER-FREE ARMS CANNOT PROVE. test_writes_wrote_rows.py
+    exercises the classifier and the refusal against stub cursors, which says
+    nothing about whether the connection the tests actually use is wrapped at all.
+    Proving a function and proving its call site are two proofs, and the second is
+    the one that goes missing: #917's pytest twin tested the reconciler's body and
+    left the runner's CALL to it uncovered, so deleting the call kept that half
+    green while the shell half went red.
+
+    BOTH PATHS, because the corpus uses both. 24 sites call `conn.execute` and 42
+    call `cur.execute` on a cursor the connection handed out, so a proxy that
+    watched only the connection would leave most of the corpus unwatched.
+    """
+    writes = pgc_vacuity._WRITES.setdefault(request.node.nodeid, [])
+    writes.clear()
+
+    pgc_conn.execute("CREATE TABLE watched (i int) USING pgcolumnar")
+    expect.num(len(writes), 0, "DDL carries no row count, so it is not a write")
+
+    cur = pgc_conn.execute("INSERT INTO watched SELECT g FROM generate_series(1,3) g")
+    expect.num(len(writes), 1, "a write through conn.execute is seen")
+    expect.num(writes[-1].count, 3, "with the count the server reported")
+    expect.text(writes[-1].tag, "INSERT", "and the command tag it reported")
+    expect.wrote(cur, 3, "and expect.wrote reads the same count back")
+
+    with pgc_conn.cursor() as c:
+        c.execute("INSERT INTO watched SELECT g FROM generate_series(1,2) g")
+        expect.num(len(writes), 2, "a write through a handed-out cursor is seen too")
+        expect.wrote(c, 2, "and its count is the one the server reported")
+
+    # A zero-row write through the real driver, which is the mode itself. Naming the
+    # zero is what keeps this test passing; without the name the guard would fail it,
+    # and that refusal is pinned in test_writes_wrote_rows.py where it can be caught.
+    empty = pgc_conn.execute("INSERT INTO watched SELECT g FROM generate_series(1,3) g "
+                             "WHERE false")
+    expect.num(len(writes), 3, "the empty write is recorded like any other")
+    expect.wrote(empty, 0, "and INSERT ... WHERE false wrote no rows, deliberately")
+
+def test_the_acknowledgement_is_by_cursor_against_the_real_driver(pgc_conn, expect,
+                                                                  request):
+    """The stamp must land on the object the CALLER holds, not the one psycopg owns.
+
+    THE DRIVER-FREE ARMS CANNOT SEE THIS, and that is why it belongs here. They stamp
+    a stub, and a stub accepts a new attribute; a real `psycopg.Cursor` raises
+    AttributeError, so the stamp was swallowed by its own `except` on every real
+    write and `wrote()` silently fell back to matching on `(tag, count)`. The arms
+    proved the identity mechanism on an object that differs from the real one in
+    exactly the respect under test -- which is the hazard the `_WatchedCursor`
+    docstring names, arriving in the arms that were supposed to guard it. Found by
+    @jdatcmd on #432.
+
+    It matters because the two fixes rest on each other: the absolute ordinal is only
+    trustworthy when the acknowledgement is by identity, so with the stamp swallowed
+    the refusal named the wrong statement in precisely the case the ordinal was added
+    for.
+
+    TWO INDISTINGUISHABLE WRITES, because that is the only case where identity and
+    value matching can disagree. Both are named, so the test passes; the assertion is
+    about WHICH one each call acknowledged.
+    """
+    writes = pgc_vacuity._WRITES.setdefault(request.node.nodeid, [])
+    writes.clear()
+
+    pgc_conn.execute("CREATE TABLE twin (i int) USING pgcolumnar")
+    first = pgc_conn.execute("INSERT INTO twin SELECT 1 WHERE false")
+    second = pgc_conn.execute("INSERT INTO twin SELECT 1 WHERE false")
+    expect.num(len(writes), 2, "two indistinguishable zero-row writes are recorded")
+    expect.text(f"{writes[0].tag}/{writes[0].count} {writes[1].tag}/{writes[1].count}",
+                "INSERT/0 INSERT/0", "premise: the two are indistinguishable by value")
+
+    expect.text(type(getattr(second, "_pgc_write", None)).__name__, "_Write",
+                "the cursor the caller received carries the write it ran")
+    expect.num(getattr(second, "_pgc_write").ordinal, 2,
+               "and it is the SECOND write, by its absolute ordinal")
+
+    expect.wrote(second, 0, "naming the second write")
+    expect.num(int(writes[1].acknowledged), 1, "acknowledges the second")
+    expect.num(int(writes[0].acknowledged), 0, "and leaves the first unnamed")
+
+    expect.wrote(first, 0, "naming the first as well, so nothing is left unnamed")
+    expect.num(int(writes[0].acknowledged), 1, "which acknowledges the first")
+
+    # BOTH STAMP SITES, because there are two and one probe pins neither. The writes
+    # above went through `conn.execute`; a cursor the connection hands out is a second
+    # path with its own stamp, and removing that one alone left this arm green --
+    # found by mutating it, not by reading it. The existing wiring arm uses the cursor
+    # path but with DISTINGUISHABLE counts, so value matching finds the right write
+    # there whether or not the stamp lands.
+    writes.clear()
+    with pgc_conn.cursor() as cur:
+        cur.execute("INSERT INTO twin SELECT 1 WHERE false")
+        expect.num(len(writes), 1, "a cursor-path write is recorded")
+        expect.text(type(getattr(cur, "_pgc_write", None)).__name__, "_Write",
+                    "and the handed-out cursor carries the write it ran")
+        cur.execute("INSERT INTO twin SELECT 1 WHERE false")
+        expect.num(len(writes), 2, "and so is its indistinguishable twin")
+        expect.num(getattr(cur, "_pgc_write").ordinal, 2,
+                   "the cursor now carries the SECOND write, not the first")
+        expect.wrote(cur, 0, "naming what the cursor last ran")
+        expect.num(int(writes[1].acknowledged), 1, "acknowledges the second write")
+        expect.num(int(writes[0].acknowledged), 0, "and leaves the first unnamed")
+        expect.wrote(first, 0, "so name the first explicitly too")

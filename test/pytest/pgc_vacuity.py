@@ -113,6 +113,78 @@ UNRUNNABLE_REASONS = (
 # own tests and two workers cannot share a counter.
 _RECORDERS = {}
 
+# Writes seen during one test, keyed by nodeid exactly as _RECORDERS is, and for the
+# same reason: `pytester` runs this layer's own tests IN-PROCESS, so an inner run
+# imports this module and a single shared list would mix the two sessions together.
+_WRITES = {}
+
+# The command tags that mean rows were supposed to move. The server reports these,
+# so this guard never parses SQL -- see test_writes_wrote_rows.py for the measured
+# table of statusmessage against rowcount. MERGE is PG 15+, and is listed because a
+# port that starts using it should not silently fall outside the guard.
+_WRITE_TAGS = ("INSERT", "UPDATE", "DELETE", "MERGE", "COPY")
+
+
+class _Write:
+    """One write statement's outcome.
+
+    THE ORDINAL IS AMONG ALL THE TEST'S WRITES, not among the empty ones. The
+    refusal numbered the survivors it was about to print, so "#1" meant "the first
+    one I am complaining about" and identified no statement -- a reader counting
+    writes in the source went to the wrong line. Found by attacking this guard with
+    three writes where the empty one is the second: the filtered number said #1 and
+    the real answer was #2.
+    """
+
+    __slots__ = ("tag", "count", "acknowledged", "ordinal")
+
+    def __init__(self, tag, count, ordinal):
+        self.tag = tag
+        self.count = count
+        self.ordinal = ordinal
+        self.acknowledged = False
+
+
+def note_write(nodeid, cur):
+    """Record a statement if it was a write, from the cursor the server answered on.
+
+    THE TAG DECIDES, NOT THE ROW COUNT. `SELECT 0` and `INSERT 0 0` both carry
+    rowcount 0, so a guard keyed on the count alone would refuse every test whose
+    last statement was a SELECT over an empty result -- a legitimate assertion.
+    `statusmessage` is the server's own command tag, which separates them without
+    this code ever looking at the SQL.
+    """
+    message = getattr(cur, "statusmessage", None)
+    if not message:
+        return None
+    tag = str(message).split(" ", 1)[0].upper()
+    if tag not in _WRITE_TAGS:
+        return None
+    count = getattr(cur, "rowcount", -1)
+    seen = _WRITES.setdefault(nodeid, [])
+    w = _Write(tag, count, len(seen) + 1)
+    seen.append(w)
+    # STAMPED ON THE OBJECT THAT RAN IT, so an acknowledgement is about a statement
+    # rather than about a pair of numbers. Two writes can carry the same tag and the
+    # same count -- one accidental, one deliberate -- and matching on those
+    # acknowledged whichever came first, marking the accidental one as named and
+    # reporting the deliberate one instead.
+    #
+    # THIS STAMP REACHES A STUB AND NOT A REAL CURSOR, measured rather than assumed: a
+    # `psycopg.Cursor`, a `ServerCursor` and the cursor `conn.execute` returns all
+    # raise AttributeError here, so on every real write this `except` swallowed it and
+    # `wrote` fell back to matching by value -- which made the absolute ordinal name
+    # the wrong statement in exactly the case it was added for. The caller-facing
+    # object is stamped by `_WatchedCursor` instead, and that is the stamp `wrote`
+    # finds. This one serves the layer's own arms, which pass a stub.
+    # Found by @jdatcmd, whose point was that the stub is stampable and the real
+    # cursor is not, so the arms could not see it.
+    try:
+        cur._pgc_write = w
+    except (AttributeError, TypeError):
+        pass
+    return w
+
 # lib.sh:58 PGC_EXIT_INCOMPLETE. The same number deliberately: a suite that could
 # not evaluate something exits 67 there, and a runner that learns the code learns
 # it once. pytest itself uses 0-6 (`pytest.ExitCode`), so 67 collides with
@@ -311,6 +383,60 @@ class Expect:
                     f"\"no row count available\" and not a number of rows."
                 )
         self.num(got, want, name)
+
+    def wrote(self, cur, want, name):
+        """Assert how many rows a write actually wrote, and acknowledge a zero.
+
+        Two jobs in one call, deliberately. It compares the count, and it marks the
+        write as NAMED so the session guard does not refuse it. A zero-row write is
+        legitimate when it is the thing being asserted -- a DELETE that must match
+        nothing is a real negative control -- and the way to say so is to say the
+        number. An unnamed zero stays a failure.
+
+        A rowcount of -1 is refused rather than compared, for the reason
+        `expect.rowcount` records: it is psycopg's "no count available", so DDL
+        reaches this with -1 and comparing it to 0 would read as a mismatch, which
+        is the right verdict for the wrong reason.
+        """
+        count = getattr(cur, "rowcount", None)
+        if count is None:
+            raise VacuityError(
+                f"{name}: wrote() needs the cursor the statement ran on, and "
+                f"{type(cur).__name__} has no rowcount."
+            )
+        if count == -1:
+            raise VacuityError(
+                # Same reason as above for the single token.
+                f"{name}: no-count-available: the statement reported -1, which is "
+                f"psycopg's \"no row count\" and not a number of rows. A statement "
+                f"with no count is not a write whose rows can be asserted."
+            )
+        tag = str(getattr(cur, "statusmessage", "") or "").split(" ", 1)[0].upper()
+        if tag not in _WRITE_TAGS:
+            raise VacuityError(
+                # A SELECT matching nothing reports `SELECT 0` with rowcount 0, so
+                # this compared 0 with 0 and PASSED -- asserting "this write wrote no
+                # rows" about a statement that is not a write. It read as a deliberate
+                # zero and pinned nothing, which is this layer's own subject appearing
+                # inside the assertion meant to close it.
+                f"{name}: not-a-write: the statement reported tag "
+                f"{tag or '(none)'!s}, which is not one of {', '.join(_WRITE_TAGS)}. "
+                f"wrote() asserts how many rows a WRITE moved; for a query that "
+                f"returned no rows, assert the rows."
+            )
+        # BY IDENTITY FIRST: the write stamped on this cursor is the statement this
+        # call is about. The value match is the fallback for a cursor that could not
+        # be stamped, and it is why the ordinal in the refusal is absolute.
+        w = getattr(cur, "_pgc_write", None)
+        if w is not None and not w.acknowledged:
+            w.acknowledged = True
+        else:
+            for candidate in _WRITES.get(self.nodeid, ()):
+                if not candidate.acknowledged and candidate.count == count \
+                        and candidate.tag == tag:
+                    candidate.acknowledged = True
+                    break
+        self.num(count, want, name)
 
     # -- row sets ----------------------------------------------------------
     def rows(self, got, want, name, allow_empty=None):
@@ -646,6 +772,87 @@ def expect(request):
     _RECORDERS.pop(request.node.nodeid, None)
 
 
+class _WatchedCursor:
+    """A psycopg cursor that reports every write it runs to the guard.
+
+    A PROXY RATHER THAN A SUBCLASS, because psycopg builds cursors itself and the
+    connection is what hands them out. `__getattr__` forwards everything this class
+    does not name, so the cursor keeps its whole API -- iteration, context manager,
+    fetchall, description -- and only `execute` grows a side effect.
+    """
+
+    def __init__(self, cur, nodeid):
+        self._cur = cur
+        self._nodeid = nodeid
+        # SET IN __init__ so it is always an INSTANCE attribute. Without it the first
+        # lookup falls through to `__getattr__`, which forwards to the raw cursor and
+        # raises -- readable through `getattr(..., None)`, but it would make the
+        # absence of a stamp indistinguishable from a cursor that has not run yet.
+        self._pgc_write = None
+
+    def execute(self, *args, **kwargs):
+        result = self._cur.execute(*args, **kwargs)
+        # THE PROXY IS WHAT GETS STAMPED, because the proxy is what the caller holds
+        # and a real psycopg cursor cannot take the attribute at all. `__getattr__`
+        # never intercepts this, because the instance really has it.
+        self._pgc_write = note_write(self._nodeid, self._cur)
+        # psycopg returns the cursor itself, so hand back the WATCHED one: a caller
+        # writing `for row in cur.execute(...)` must not escape the proxy.
+        return self if result is self._cur else result
+
+    def executemany(self, *args, **kwargs):
+        result = self._cur.executemany(*args, **kwargs)
+        self._pgc_write = note_write(self._nodeid, self._cur)
+        return result
+
+    def __getattr__(self, attr):
+        return getattr(self._cur, attr)
+
+    def __iter__(self):
+        return iter(self._cur)
+
+    def __enter__(self):
+        self._cur.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._cur.__exit__(*exc)
+
+
+class _WatchedConnection:
+    """A psycopg connection whose cursors are watched. Same proxy argument."""
+
+    def __init__(self, conn, nodeid):
+        self._conn = conn
+        self._nodeid = nodeid
+
+    def execute(self, *args, **kwargs):
+        cur = self._conn.execute(*args, **kwargs)
+        watched = _WatchedCursor(cur, self._nodeid)
+        # Stamped on the proxy handed back, for the reason _WatchedCursor.execute
+        # gives: this is the object the test holds and passes to `wrote`.
+        watched._pgc_write = note_write(self._nodeid, cur)
+        return watched
+
+    def cursor(self, *args, **kwargs):
+        return _WatchedCursor(self._conn.cursor(*args, **kwargs), self._nodeid)
+
+    def __getattr__(self, attr):
+        return getattr(self._conn, attr)
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._conn.__exit__(*exc)
+
+
+def watch_writes(conn, nodeid):
+    """Wrap a connection so its writes reach the guard. Used by conftest."""
+    return _WatchedConnection(conn, nodeid)
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     """Fail a test that concluded nothing, after its body has run.
@@ -660,6 +867,33 @@ def pytest_runtest_call(item):
             f"vacuity guard: {item.name} made no counted assertion. "
             f"A test that concludes nothing must not report a pass. "
             f"Use the `expect` fixture, or declare it unrunnable with a reason."
+        )
+    # A WRITE THAT WROTE NOTHING BUILT THE WRONG FIXTURE, and the assertions below
+    # it then compared two empty things. `INSERT ... SELECT ... WHERE false` raises
+    # nothing and reports `INSERT 0 0`; before this, nobody in the corpus read
+    # either field. That is `insert-wrote-no-rows` in VACUITY_MODES.md section 3.5.
+    #
+    # IN THE CALL PHASE, not a teardown fixture. #931 measured that a guard run as a
+    # teardown reports the test it guards as PASSED and fails separately, so a
+    # reader sees a green test beside an error. Raising here fails the test itself.
+    #
+    # NAMED INDIVIDUALLY, because a fixture that runs four writes and gets nothing
+    # from the third is the real shape, and "a write wrote no rows" sends the reader
+    # to the wrong statement.
+    empty = [w for w in _WRITES.pop(item.nodeid, ()) if w.count == 0 and not w.acknowledged]
+    if empty:
+        which = ", ".join(f"#{w.ordinal} {w.tag}" for w in empty)
+        raise VacuityError(
+            # ONE UNBREAKABLE TOKEN FIRST. pytest word-wraps a long traceback line,
+            # and an arm matching a multi-word phrase against one line then matches
+            # nothing -- which reads as "the guard did not fire". Measured here:
+            # "wrote no rows" straddled the wrap. The kebab-case id is the mode's
+            # own name in VACUITY_MODES.md and cannot be split.
+            f"vacuity guard: insert-wrote-no-rows in {item.name}: {which} moved "
+            f"no rows. A write that wrote nothing built the fixture the assertions "
+            f"above it then measured as empty. Assert the count with "
+            f"expect.wrote(cur, n, ...) -- naming a deliberate zero is what "
+            f"separates a negative control from a broken fixture."
         )
     return result
 
