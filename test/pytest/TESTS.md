@@ -1339,6 +1339,9 @@ over tests nothing ran.
 | `test_a_module_level_pytestmark_reaches_every_test` | `pytestmark = pytest.mark.usefixtures(...)` is a dependency of every test in the file and of no signature |
 | `test_a_pytestmark_written_as_a_list_reaches_every_test_too` | the list form is what a file uses once it has two marks |
 | `test_an_unrelated_class_decorator_does_not_bind_anything` | the cost side: only `usefixtures` is a dependency, or every parametrised class would be cluster-bound |
+| `test_a_file_whose_generated_tests_import_the_driver_is_driver_dependent` | cluster-free and still unrunnable where there is no driver, so the job's list is the intersection of two properties |
+| `test_a_file_that_only_PARSES_a_driver_import_is_job_runnable` | the control: a driver import in a string nothing runs is not a dependency, and reading only the string would exclude this very file |
+| `test_prose_naming_the_driver_is_not_a_driver_dependency` | a docstring naming psycopg is a sentence about code |
 
 ## 17. Adding a test
 

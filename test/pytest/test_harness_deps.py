@@ -148,6 +148,51 @@ def _module_scope(tree):
     return out
 
 
+def _needs_the_driver_installed(tree, prose):
+    """Does this file need psycopg IMPORTABLE, even though it requests no cluster?
+
+    The job this declaration feeds installs no driver as well as running no cluster, so
+    the property it needs is wider than "requests no cluster fixture". A file that builds
+    a source with `import psycopg` in it and gives that to `pytester` needs the driver:
+    the inner run imports the generated module, and with the driver absent it fails at
+    import rather than reaching whatever the arm was about.
+
+    Measured: `test_raises_sqlstate.py` requests no cluster fixture and is correctly
+    cluster-free, and four of its arms FAIL with psycopg shimmed out, because the files
+    it generates import it.
+
+    THIS IS NOT THE CLUSTER PROPERTY AND MUST NOT BE FOLDED INTO IT. `partition()` asks
+    whether a file requests a cluster; a generated inner test requesting `pgc_conn` is
+    the INNER run's requirement, not this file's, and
+    `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver` asserts exactly
+    that. Wiring this into `partition()` contradicted that arm, correctly, on the first
+    attempt. The job needs BOTH properties, so the job's list is the intersection and the
+    two are derived separately.
+
+    TWO CONDITIONS, because a driver import in a string is not enough on its own.
+    `test_harness_deps_classifier.py` writes fixture corpora containing `import psycopg`
+    and only ever PARSES them -- nothing runs them, so it needs no driver and belongs in
+    the job. The difference is whether the file drives `pytester`, and reading only the
+    string would have thrown that file out of the gate it exists to be in.
+
+    Prose is excluded for the reason it is excluded everywhere here: a docstring naming
+    the driver is a sentence, not an import.
+    """
+    drives_inner_run = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "pytester":
+            drives_inner_run = True
+            break
+    if not drives_inner_run:
+        return False
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in prose
+                and ("import psycopg" in node.value or "from psycopg" in node.value)):
+            return True
+    return False
+
+
 def _imports_driver(nodes):
     for n in nodes:
         if isinstance(n, ast.Import):
@@ -426,6 +471,31 @@ def partition(directory=None):
     return ([n for n in names if not bound[n]], [n for n in names if bound[n]])
 
 
+def driver_dependent(directory=None):
+    """Cluster-free files that still need psycopg importable, so the job cannot run them.
+
+    The job this declaration feeds installs no driver as well as running no cluster, so
+    its file list is the INTERSECTION of the two properties rather than either one.
+    `test_raises_sqlstate.py` is the case that showed the difference: it requests no
+    cluster fixture, and four of its arms fail with psycopg shimmed out, because the
+    modules it hands to `pytester` import it.
+    """
+    directory = HERE if directory is None else pathlib.Path(directory)
+    out = []
+    for path in sorted(directory.glob("test_*.py")):
+        tree = _parse(path)
+        if _needs_the_driver_installed(tree, _prose(tree)):
+            out.append(path.name)
+    return out
+
+
+def job_runnable(directory=None):
+    """The files the driver-free job can run: cluster-free AND not driver-dependent."""
+    directory = HERE if directory is None else pathlib.Path(directory)
+    free, _bound = partition(directory)
+    return sorted(set(free) - set(driver_dependent(directory)))
+
+
 def membership_report(directory=None, declared=None):
     """"[]" when the declaration is exactly the database-free half, else
     "[n: kind:file ...]" naming every disagreement and which way it goes.
@@ -434,13 +504,18 @@ def membership_report(directory=None, declared=None):
     what is wrong rather than only that something is."""
     directory = HERE if directory is None else pathlib.Path(directory)
     declared = NO_CLUSTER if declared is None else declared
-    free, _bound = partition(directory)
-    free = set(free)
+    runnable = set(job_runnable(directory))
+    cluster_free = set(partition(directory)[0])
+    driver_bound = set(driver_dependent(directory))
     present = {p.name for p in directory.glob("test_*.py")}
     bad = ["absent:" + n for n in sorted(set(declared) - present)]
     bad += ["needs-a-cluster:" + n
-            for n in sorted((set(declared) & present) - free)]
-    bad += ["undeclared:" + n for n in sorted(free - set(declared))]
+            for n in sorted((set(declared) & present) - cluster_free)]
+    # A kind of its own, because "needs-a-cluster" would be a wrong diagnosis and the
+    # reader's next action differs: this file needs the DRIVER, not a server.
+    bad += ["needs-the-driver:" + n
+            for n in sorted((set(declared) & present) & driver_bound)]
+    bad += ["undeclared:" + n for n in sorted(runnable - set(declared))]
     return "[]" if not bad else "[%d: %s]" % (len(bad), " ".join(bad))
 
 

@@ -17,7 +17,13 @@ the classifier as a LIBRARY, which does not make it cluster-bound: the propagati
 rule reads string constants naming corpus files, not imports.
 """
 
-from test_harness_deps import _fake_corpus, cluster_fixtures, partition
+from test_harness_deps import (
+    _fake_corpus,
+    cluster_fixtures,
+    driver_dependent,
+    job_runnable,
+    partition,
+)
 
 def test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster(tmp_path, expect):
     """The base case and its control, over a conftest this test wrote: the
@@ -336,3 +342,71 @@ def test_an_unrelated_class_decorator_does_not_bind_anything(tmp_path, expect):
                                    "def test_a():\n"
                                    "    assert True\n"),
                 "free", "nor is an unrelated module-level pytestmark")
+
+# ---------------------------------------------------------------------------
+# NEEDING A CLUSTER AND NEEDING THE DRIVER ARE TWO PROPERTIES
+#
+# The job this declaration feeds installs no driver as well as running no cluster, so its
+# file list is the INTERSECTION. `test_raises_sqlstate.py` is the case that showed the
+# difference: it requests no cluster fixture -- correctly cluster-free -- and four of its
+# arms fail with psycopg shimmed out, because the modules it hands to `pytester` import it.
+#
+# Folding that into `partition()` was my first attempt and it contradicted
+# `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver`, which asserts that a
+# generated inner test requesting a cluster fixture is the INNER run's requirement and not
+# this file's. That arm is right. Two properties, derived separately, intersected for the
+# job.
+
+
+def test_a_file_whose_generated_tests_import_the_driver_is_driver_dependent(tmp_path, expect):
+    """Cluster-free and still unable to run where there is no driver."""
+    d = _fake_corpus(tmp_path, {
+        "test_inner_driver.py": (
+            "def test_it(pytester, expect):\n"
+            "    pytester.makepyfile(\n"
+            '        "import psycopg\\n"\n'
+            '        "def test_inner():\\n    pass\\n"\n'
+            "    )\n"
+        ),
+    })
+    free, _bound = partition(d)
+    expect.text(" ".join(free), "test_inner_driver.py",
+                "it requests no cluster, so the cluster property calls it free")
+    expect.row_set([(n,) for n in driver_dependent(d)], [("test_inner_driver.py",)],
+                   "and the driver property calls it dependent")
+    expect.num(len(job_runnable(d)), 0,
+               "so the job's list, which is the intersection, excludes it")
+
+
+def test_a_file_that_only_PARSES_a_driver_import_is_job_runnable(tmp_path, expect):
+    """The control, and the reason the rule needs two conditions rather than one.
+
+    `test_harness_deps_classifier.py` writes fixture corpora containing `import psycopg`
+    and never runs them -- nothing imports those files, they are parsed. Reading only the
+    string would throw this very file out of the gate it exists to be in.
+    """
+    d = _fake_corpus(tmp_path, {
+        "test_parses_only.py": (
+            "def test_it(tmp_path, expect):\n"
+            '    (tmp_path / "fixture.py").write_text("import psycopg\\n")\n'
+            '    expect.num(1, 1, "parsed, never run")\n'
+        ),
+    })
+    expect.num(len(driver_dependent(d)), 0,
+               "a driver import in a string nothing runs is not a dependency")
+    expect.text(" ".join(job_runnable(d)), "test_parses_only.py",
+                "so the job can run it")
+
+
+def test_prose_naming_the_driver_is_not_a_driver_dependency(tmp_path, expect):
+    """The same exclusion the cluster property makes, for the same reason: a docstring
+    naming psycopg is a sentence about code."""
+    d = _fake_corpus(tmp_path, {
+        "test_prose_only.py": (
+            '"""This file explains `import psycopg` and says nothing else."""\n'
+            "def test_it(pytester, expect):\n"
+            '    pytester.makepyfile("def test_inner():\\n    pass\\n")\n'
+        ),
+    })
+    expect.num(len(driver_dependent(d)), 0,
+               "prose naming the driver is not a dependency on it")
