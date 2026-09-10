@@ -4,7 +4,7 @@ Reference for anyone reading, running, or adding to `test/pytest/`. The design a
 the decisions behind the harness are in `design/ISSUE_432_PYTEST_HARNESS.md`. This
 file covers the tests themselves.
 
-**135 tests in 11 files.** One hundred and twenty of them test the harness rather than the
+**138 tests in 11 files.** One hundred and twenty-three of them test the harness rather than the
 product, and they come first, because a harness that can report a false green makes
 every other result in this directory worthless.
 
@@ -130,8 +130,6 @@ one of those eight measurements exited 0.
 | `test_an_unrunnable_test_names_its_reason_and_its_detail` | the `UNRUN` line carries reason and detail | nothing was printed at all |
 | `test_a_real_failure_outranks_an_unrunnable_test` | a run with both exits 1, not 67 | — |
 | `test_a_run_with_nothing_unrunnable_still_exits_zero` | **control**: a green run is untouched | — |
-| `test_layer_rejects_an_absence_assertion_over_an_empty_plan` | an absence claim over `[]` is refused | it passes: nothing is there to find |
-| `test_layer_allows_an_absence_assertion_over_a_real_plan` | **control**: `absent=True` still works on a plan that arrived | — |
 | `test_layer_rejects_psycopgs_no_count_sentinel` | `rowcount` of `-1` is refused | `-1` and `1` are both numbers, so `num` compares them happily |
 | `test_layer_rejects_a_broad_except_in_a_test_file` | a broad `except` is uncollectable | it was forbidden in a COMMENT, which enforces nothing |
 
@@ -642,6 +640,28 @@ observed variants are closed", not "the function is now infallible".
 
 ## 6. test_docs_cover_the_corpus.py: this document, checked
 
+**THE SWEEP GOES BOTH WAYS NOW (#908).** `undocumented()` computes tests on disk
+the document fails to name; `documented_but_absent()` computes the reverse. Only
+the second catches a test that is DELETED or RENAMED while its entry survives —
+until it existed, that case was held by the totals line alone, and the totals line
+is a merge target whose correct value is a function of the merge. Removing it
+while this direction was uncovered would have retired a check silently.
+
+**A BACKTICKED TEST NAME IS A CLAIM THAT IT EXISTS.** That is the rule the arm
+enforces, and it has a consequence for prose: a name that is gone is written
+WITHOUT backticks, because backticking it would assert it is still there. This
+paragraph is the first place that bit — the arm reddened on my own description of
+the defect.
+
+It found two on the corpus that shipped. The rows named
+test_layer_rejects_an_absence_assertion_over_an_empty_plan and a control beside
+it, in section 3, and neither had ever been written. The work is real and lives in
+`test_guards_pinned.py` as
+`test_plan_marker_refuses_an_absence_claim_over_an_empty_plan`, documented
+correctly in section 4 — so two rows claimed coverage under names never written,
+and every other arm here passed over them.
+
+
 The file you are reading is checked mechanically, because it went stale inside a
 single rework and nothing noticed. The corpus grew from 25 tests in three files to
 54 in five; the two new files, 29 tests, were named nowhere here, and the header
@@ -669,6 +689,9 @@ many times.
 | `test_the_sweep_finds_the_corpus_rather_than_an_empty_glob` | **premise**: the sweep saw files and tests, so "nothing missing" means something |
 | `test_every_file_and_test_is_named_in_the_document` | every file and test is named here, and a failure says WHICH |
 | `test_the_stated_totals_are_the_totals_on_disk` | the bold totals line matches the corpus |
+| `test_a_documented_test_that_does_not_exist_is_named` | the reverse sweep: the document may not claim a test the corpus lacks |
+| `test_a_document_naming_a_test_that_was_deleted_is_caught` | **removal proof**: the shape the real defect had, on a fixture |
+| `test_a_documented_file_that_does_not_exist_is_caught` | a whole file can go the same way, which is how a rename shows up |
 | `test_a_fully_documented_corpus_reports_nothing_missing` | **control**: no false positive on a complete document |
 | `test_an_undocumented_test_is_named_rather_than_passed_over` | the exact shape that shipped: file named, one test inside it not |
 | `test_the_mode_inventory_states_its_own_totals_correctly` | the totals in VACUITY_MODES.md section 1a are the modes on disk |
