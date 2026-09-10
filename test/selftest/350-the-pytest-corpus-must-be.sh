@@ -88,17 +88,41 @@ check "premise: the sweep found the corpus rather than an empty glob" \
 check "every test file and every test in the corpus is named in TESTS.md" \
 	"$(_dcv_missing "$_dcv_dir" "$_dcv_doc")" "[]"
 
-# The count TESTS.md states, parsed out of it. Written in a fixed form precisely
-# so it can be read back: prose that says "twenty-five" cannot be compared with
-# anything, which is how the stale header survived being read many times.
+# TESTS.md STATES NO TOTALS, AND THAT IS THE POINT (#908).
+#
+# It used to, and this part compared the stated pair against the corpus, which is
+# what made it a claim rather than decoration. The problem was never the check: it
+# was that the number was WRITTEN rather than DERIVED, and its correct value is a
+# function of the MERGE rather than of either branch. It collided on essentially
+# every rebase touching the corpus -- ten times in one day, both sides wrong every
+# time, so there was no side to pick.
+#
+# REMOVING IT COSTS NOTHING, provably. The two sweeps are strictly stronger than
+# any count: the arm above requires every test on disk to be NAMED here, and the
+# reverse arm below requires every name here to EXIST on disk. Two subsets in
+# opposite directions is set equality, so any count over the document equals the
+# count over the corpus. A stated total was a derived value maintained by hand.
 _dcv_stated="$(grep -oE '^\*\*[0-9]+ tests in [0-9]+ files\.\*\*' "$_dcv_doc" \
 	| head -1 | grep -oE '[0-9]+' | tr '\n' ' ' | sed 's/ $//')"
 
-check "TESTS.md states its totals in a form that can be read back" \
-	"$([ -n "$_dcv_stated" ] && echo yes || echo no)" "yes"
+check "TESTS.md states no totals line for a merge to get wrong" \
+	"$([ -z "$_dcv_stated" ] && echo none || echo "$_dcv_stated")" "none"
 
-check "and the totals it states are the totals on disk" \
-	"$_dcv_stated" "$_dcv_seen"
+# PREMISE: the reader must still be able to FIND a totals line, or the arm above
+# passes because the parser is broken rather than because the line is gone --
+# which is the shape this whole part exists to refuse.
+# $_dcv_fix is not created until the failure-proof section below, and this file
+# runs under `set -u`, so this fixture makes its own path rather than borrowing
+# one that does not exist yet.
+_dcv_ht="$PGC_WORKDIR/doccov-hastotals"; mkdir -p "$_dcv_ht"
+printf '**7 tests in 3 files.** and prose\n' > "$_dcv_ht/HASTOTALS.md"
+check "premise: the reader still finds a totals line when one is there" \
+	"$(grep -oE '^\*\*[0-9]+ tests in [0-9]+ files\.\*\*' "$_dcv_ht/HASTOTALS.md" \
+		| head -1 | grep -oE '[0-9]+' | tr '\n' ' ' | sed 's/ $//')" "7 3"
+
+# And the counts still REACH a reader -- they move to this run's output, where
+# they are computed from the corpus and cannot go stale.
+echo "      CORPUS: $_dcv_seen (test functions, files)"
 
 # ---- and the guard must be able to FAIL --------------------------------------
 #
@@ -132,12 +156,118 @@ check "an undocumented file is caught along with the tests inside it" \
 check "the sweep counts the fixture's tests and files" \
 	"$(_dcv_count "$_dcv_fix")" "2 1"
 
+# Kept although the real document no longer states a total: it proves the
+# comparison still works, so "no totals line" above is a fact about the document
+# rather than about a broken reader.
 check "a stated total that disagrees with disk is visible" \
 	"$([ "$(grep -oE '^\*\*[0-9]+ tests in [0-9]+ files\.\*\*' "$_dcv_fix/GOOD.md" \
 		| grep -oE '[0-9]+' | tr '\n' ' ' | sed 's/ $//')" = "$(_dcv_count "$_dcv_fix")" ] \
 		&& echo agrees || echo differs)" "agrees"
 
-unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix
+
+# ---- and the sweep must go the OTHER way too (#908) -------------------------
+#
+# `_dcv_missing` above computes tests on disk the document fails to name. NOTHING
+# computed the reverse, so a test DELETED or RENAMED while its entry survived was
+# held by the totals line and by nothing else -- and that line is a merge target
+# whose correct value is a function of the merge, so it is the half most likely to
+# be removed. Removing it while this direction was uncovered would have retired a
+# check silently, which is the move this part exists to prevent.
+#
+# IT FOUND TWO ON THE SHIPPED CORPUS. Section 3 named
+# test_layer_rejects_an_absence_assertion_over_an_empty_plan and a control beside
+# it, and neither had ever been written; the real work lives in
+# test_guards_pinned.py under a different name and is documented correctly in its
+# own section. Two rows claimed coverage under names nobody had written.
+#
+# A BACKTICKED NAME, not any occurrence. This document discusses fixtures and dead
+# names in prose, and a bare-word sweep would report those as missing. Backticks
+# are how it already marks a real identifier, so backticking a name IS the claim
+# that it exists -- which is why the paragraph describing this defect writes the
+# dead names without them.
+
+_dcv_absent() {	# _dcv_absent DIR DOC -> "[]" or "[n: a b c]"
+	local dir="$1" doc="$2" name n=0 bad=""
+	local ondisk
+	# Every function and every file the corpus actually has, one per line.
+	ondisk="$( { grep -hoE '^def (test_[A-Za-z0-9_]+)' "$dir"/test_*.py 2>/dev/null \
+	               | sed 's/^def //'
+	             for f in "$dir"/test_*.py; do [ -f "$f" ] && printf '%s\n' "${f##*/}"; done
+	           } | sort -u )"
+	while IFS= read -r name; do
+		[ -n "$name" ] || continue
+		printf '%s\n' "$ondisk" | grep -qxF "$name" && continue
+		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $name"
+	done < <(grep -oE '`test_[A-Za-z0-9_]*(\.py)?`' "$doc" 2>/dev/null \
+	         | tr -d '`' | sort -u)
+	[ "$n" -eq 0 ] && { printf '[]'; return; }
+	printf '[%d:%s]' "$n" "$bad"
+}
+
+check "premise: the reverse sweep reads backticked names at all" \
+	"$([ "$(grep -coE '`test_[A-Za-z0-9_]*(\.py)?`' "$_dcv_doc")" -ge 20 ] \
+		&& echo enough || echo too-few)" "enough"
+
+check "every test the document names exists in the corpus" \
+	"$(_dcv_absent "$_dcv_dir" "$_dcv_doc")" "[]"
+
+# ---- and it must be able to FAIL, on a fixture rather than on the tree -------
+
+printf 'def test_alpha(expect):\n    pass\n' > "$_dcv_fix/test_one.py"
+
+printf '`test_one.py`: `test_alpha` and `test_beta`\n' > "$_dcv_fix/GHOST.md"
+check "a documented test that does not exist is named, not passed over" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/GHOST.md")" "[1: test_beta]"
+
+printf '`test_one.py`: `test_alpha`\n' > "$_dcv_fix/REAL.md"
+check "control: a document naming only what exists is clean" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/REAL.md")" "[]"
+
+printf '`test_one.py` and `test_gone.py`: `test_alpha`\n' > "$_dcv_fix/GONEFILE.md"
+check "a documented file that does not exist is named" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/GONEFILE.md")" "[1: test_gone.py]"
+
+# A name in prose without backticks is not a claim, so it must NOT be reported --
+# otherwise the document could never describe a test it removed.
+printf 'the old test_beta was removed; `test_alpha` remains\n' > "$_dcv_fix/PROSE.md"
+check "an unbackticked name in prose is not treated as a claim" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/PROSE.md")" "[]"
+
+unset -f _dcv_absent
+
+# ---- and the names must be UNIQUE, or the equality argument does not hold ----
+#
+# The two sweeps give equality of the two NAME SETS. That is not equality of
+# DEFINITION COUNTS, which is what a total counts: two files defining one name
+# leave both arms green while the counts differ (@jdatcmd, against #919). It
+# cannot happen today, so the conclusion was true in fact and not by
+# construction -- the difference between an argument and a guard.
+#
+# It closes something real beyond the argument: `_dcv_missing` asks whether a
+# name appears in the document AT ALL, so a test defined TWICE and documented
+# ONCE reads as fully covered while pytest runs both.
+
+_dcv_dupes() {	# _dcv_dupes DIR -> "" or the repeated names
+	grep -hoE '^def (test_[A-Za-z0-9_]+)' "$1"/test_*.py 2>/dev/null \
+		| sed 's/^def //' | sort | uniq -d
+}
+
+check "no test name is defined twice in the corpus" \
+	"$(_dcv_dupes "$_dcv_dir" | tr '\n' ' ' | sed 's/ $//')" ""
+
+# And it must be able to FAIL, on a fixture rather than on the tree.
+printf 'def test_shared_shape(expect):\n    pass\n' > "$_dcv_fix/test_a.py"
+printf 'def test_shared_shape(expect):\n    pass\n' > "$_dcv_fix/test_b.py"
+check "a name defined in two files is named, not passed over" \
+	"$(_dcv_dupes "$_dcv_fix" | tr '\n' ' ' | sed 's/ $//')" "test_shared_shape"
+rm -f "$_dcv_fix/test_a.py" "$_dcv_fix/test_b.py"
+
+check "control: distinct names in the same corpus report no duplicate" \
+	"$(_dcv_dupes "$_dcv_dir" | tr '\n' ' ' | sed 's/ $//')" ""
+
+unset -f _dcv_dupes
+
+unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix _dcv_ht
 unset -f _dcv_missing _dcv_count
 
 # ---- the mode inventory must count itself, and the count must be checkable ----
