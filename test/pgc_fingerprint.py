@@ -83,7 +83,20 @@ def build_dirs(root):
     Makefile reaches a separately built module such as objstore/.
     """
     root = pathlib.Path(root)
-    out = [root / "src"]
+    # src is a candidate like any other, and gets the SAME symlink test. It used
+    # to be added unconditionally, which made it the one directory exempt from
+    # the rule stated four lines below: `find -P` does not descend a symlinked
+    # directory argument, so the shell this replaced hashed nothing there while
+    # this module walked it. Measured on a tree whose src/ was a symlink --
+    # old 9861a3f1fbd1, module 9eff36abd48e -- so a stamp written before the
+    # port read `stale` against a clean tree.
+    out = []
+    try:
+        src = root / "src"
+        if src.is_dir() and not src.is_symlink():
+            out.append(src)
+    except OSError:
+        pass
     try:
         entries = sorted(root.iterdir(), key=lambda p: os.fsencode(str(p)))
     except OSError:

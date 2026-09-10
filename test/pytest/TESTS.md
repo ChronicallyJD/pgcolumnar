@@ -654,6 +654,14 @@ recognises a write at `$PGC_SRCDIR`, that it recognises one through `$_bd_root`,
 and that a write into a COPY is *not* flagged — because a pattern that matches
 nothing would otherwise pass this arm silently.
 
+`test_a_symlinked_src_is_skipped_like_any_other_symlinked_build_dir` closes the
+one directory that was exempt from the module's own rule. `build_dirs()` added
+`root/"src"` unconditionally and applied the symlink test to every other
+candidate, so a tree whose `src/` is a symlink hashed differently across the
+port — `find -P` does not descend a symlinked directory argument, so the shell
+hashed nothing there while the module walked it. It carries a control, because
+"skip src entirely" would satisfy the arm without it.
+
 **What is still not guarded**, named here rather than left for someone to find: a
 TRUNCATED manifest — `find` returning fewer files rather than none — would produce
 a plausible wrong hash that neither the per-file sentinel nor the empty-manifest

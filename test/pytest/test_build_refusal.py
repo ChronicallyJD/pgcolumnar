@@ -915,3 +915,51 @@ def test_one_tree_hashes_one_way_however_the_locale_is_set(expect):
                    f"one tree, one fingerprint, across {len(wanted)} locales: {seen}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_symlinked_src_is_skipped_like_any_other_symlinked_build_dir(tmp_path, expect):
+    """`src` was the one directory exempt from the module's own symlink rule.
+
+    `build_dirs()` added `root/"src"` unconditionally and then applied
+    `if not d.is_dir() or d.is_symlink(): continue` to every other candidate.
+    `find -P` does not descend a symlinked directory argument, so the shell this
+    module replaced hashed nothing there while the module walked it. Measured on
+    a tree whose src/ was a symlink:
+
+        find -P on the symlinked src/   printed nothing
+        the module's manifest           src/a.c, src/h.h
+        old shell fingerprint           9861a3f1fbd1
+        module fingerprint              9eff36abd48e
+
+    A stamp written before the port then read `stale` on a clean tree, which is
+    the false FATAL the controller exists to prevent.
+    """
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "a.c").write_text("int a;\n")
+    (real / "h.h").write_text("void h(void);\n")
+    t = tmp_path / "tree"
+    t.mkdir()
+    (t / "src").symlink_to(real)
+    (t / "Makefile").write_text("all:\n\ttrue\n")
+    (t / "pgcolumnar.control").write_text("x\n")
+
+    expect.text(str((t / "src").is_symlink()), "True", "premise: src really is a symlink")
+    expect.num(len(list(real.iterdir())), 2,
+               "premise: and the target holds sources find would otherwise hash")
+
+    out, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    lines = [l for l in out.splitlines() if l.strip()]
+    expect.num(len([l for l in lines if l.startswith("src/")]), 0,
+               "a symlinked src contributes nothing, as find -P contributes nothing")
+    expect.num(len(lines), 2, "so the tree fingerprints from its root files alone")
+
+    # CONTROL: without this, "skip src entirely" would satisfy the arm above.
+    real_tree = tmp_path / "realsrc"
+    (real_tree / "src").mkdir(parents=True)
+    (real_tree / "src" / "a.c").write_text("int a;\n")
+    (real_tree / "Makefile").write_text("all:\n\ttrue\n")
+    (real_tree / "pgcolumnar.control").write_text("x\n")
+    out2, _ = _sh_fp(f'pgc_source_manifest "{real_tree}"')
+    expect.num(len([l for l in out2.splitlines() if l.startswith("src/a.c ")]), 1,
+               "control: a real src directory is still hashed")
