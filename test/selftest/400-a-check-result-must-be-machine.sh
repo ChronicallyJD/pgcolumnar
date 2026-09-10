@@ -166,28 +166,66 @@ eval "$(sed -n '/^pgc_reconcile_records()/,/^}/p' "$_rv")"
 check "premise: it is callable" "$(type -t pgc_reconcile_records)" "function"
 
 _rl="$PGC_WORKDIR/rec.log"
-printf 'RESULT\ts\ta\tPASS\t\nRESULT\ts\tb\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nchecks run: 2\n' > "$_rl"
 check "a log whose records match its stated count reconciles" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "ok"
 
-printf 'RESULT\ts\ta\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 2\n' > "$_rl"
 check "a log with fewer records than it claims is caught" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 check "and the two numbers are named, not just the verdict" \
 	"$(pgc_reconcile_records "$_rl" 2>&1 | grep -c 'records=1 .*checks run: 2')" "1"
 
-printf 'RESULT\ts\ta\tPASS\t\nRESULT\ts\tb\tPASS\t\nRESULT\ts\tc\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nRESULT\ts\tp\tc\tPASS\t\nchecks run: 2\n' > "$_rl"
 check "a log with more records than it claims is caught too" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 
 # A log with no `checks run:` line at all did not reach its summary. That is a
 # different fault from a miscount and must not read as a clean reconciliation.
-printf 'RESULT\ts\ta\tPASS\t\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t\n' > "$_rl"
 check "a log that never stated a count is not silently accepted" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 
 check "the runner calls the record reconciliation, not merely defines it" \
 	"$(grep -c '[^_[:alnum:]]pgc_reconcile_records "' "$_rv")" "1"
+
+# THE COUNT IS NOT THE SCHEMA. Counting `^RESULT<TAB>` lines and comparing to
+# `checks run:` accepted every malformed record below, each against a well-formed
+# control that reconciled the same way -- so the function returned 0 whether the
+# record parsed or not. Named by @linuxhikerpm on #917.
+#
+# The control comes FIRST and is asserted, because five arms that all say
+# "mismatch" prove nothing if the function has simply started refusing
+# everything. That is the shape this suite exists to catch.
+printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 1\n' > "$_rl"
+check "control: a well-formed record still reconciles" \
+	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "ok"
+
+_rq_bad() {	# _rq_bad RECORD -> ok|mismatch, with the count always matching
+	printf '%s\nchecks run: 1\n' "$1" > "$_rl"
+	pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch
+}
+
+check "a record missing fields does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\ta')")" "mismatch"
+
+check "a record carrying extra fields does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tPASS\tr\textra\tmore')")" "mismatch"
+
+check "a verdict pgc_record cannot emit does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tBOGUS\t')")" "mismatch"
+
+check "an empty check name does not reconcile" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\t\tPASS\t')")" "mismatch"
+
+# The four verdicts are the emitter's own list. If pgc_record grows a fifth and
+# this one does not, this arm goes red rather than the vocabulary drifting.
+for _rq_v in PASS FAIL UNRUN SKIP; do
+	check "the reconciliation accepts the verdict $_rq_v, which pgc_record emits" \
+		"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\t%s\t' "$_rq_v")")" "ok"
+done
+unset -f _rq_bad
+unset _rq_v
 
 # ---- the timing helpers reported an outcome that nothing counted -------------
 #

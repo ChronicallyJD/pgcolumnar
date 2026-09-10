@@ -196,20 +196,20 @@ def test_the_runner_reconciles_records_against_the_stated_count(tmp_path, expect
         r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
         return r.stdout, r.returncode
 
-    ok = "RESULT\ts\ta\tPASS\t\nRESULT\ts\tb\tPASS\t\nchecks run: 2\n"
+    ok = "RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nchecks run: 2\n"
     expect.num(run(ok)[1], 0, "a log whose records match its stated count reconciles")
 
-    out, rc = run("RESULT\ts\ta\tPASS\t\nchecks run: 2\n")
+    out, rc = run("RESULT\ts\tp\ta\tPASS\t\nchecks run: 2\n")
     expect.num(rc, 1, "a log with fewer records than it claims is caught")
     expect.num(out.count("records=1"), 1, "and both numbers are named, not just the verdict")
 
-    expect.num(run("RESULT\ts\ta\tPASS\t\nRESULT\ts\tb\tPASS\t\n"
-                   "RESULT\ts\tc\tPASS\t\nchecks run: 2\n")[1], 1,
+    expect.num(run("RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\n"
+                   "RESULT\ts\tp\tc\tPASS\t\nchecks run: 2\n")[1], 1,
                "a log with more records than it claims is caught too")
 
     # A log with no count at all never reached its summary. That is a different fault
     # from a miscount and must not read as a clean reconciliation.
-    expect.num(run("RESULT\ts\ta\tPASS\t\n")[1], 1,
+    expect.num(run("RESULT\ts\tp\ta\tPASS\t\n")[1], 1,
                "a log that never stated a count is not silently accepted")
 
 

@@ -956,6 +956,38 @@ pgc_reconcile_records() {	# pgc_reconcile_records LOGFILE -> 0 ok, 1 mismatch
 		return 1
 	fi
 	_records="$(grep -c '^RESULT	' "$_log" || true)"
+
+	# THE COUNT IS NOT THE SCHEMA, and counting alone let six malformed shapes
+	# reconcile cleanly: a record missing two fields, one carrying extra fields,
+	# a verdict outside the vocabulary, an empty check name, and every field
+	# empty. All measured returning 0 before this arm, against a well-formed
+	# control that also returned 0 -- so the function could not tell them apart.
+	# Reported by @linuxhikerpm on #917.
+	#
+	# ONE awk PASS, not a loop with a fork per record: a full matrix run carries
+	# thousands of these, and the emitter next door already paid for that lesson
+	# at 331x. The verdict list is the emitter's own, so the two cannot drift
+	# without this going red.
+	local _bad
+	_bad="$(awk -F'\t' '
+		/^RESULT	/ {
+			n++
+			if (NF != 6)                       { why[n] = "has " NF-1 " fields, want 5"; bad++; next }
+			if ($2 == "" || $3 == "" || $4 == "") { why[n] = "has an empty suite, part or name"; bad++; next }
+			if ($5 != "PASS" && $5 != "FAIL" && $5 != "UNRUN" && $5 != "SKIP") {
+				why[n] = "has verdict \"" $5 "\", which pgc_record cannot emit"; bad++; next
+			}
+		}
+		END {
+			if (bad) { for (i = 1; i <= n; i++) if (i in why) print "      record " i " " why[i] }
+			exit 0
+		}' "$_log")"
+	if [ -n "$_bad" ]; then
+		echo "    $_records record(s) present but at least one does not parse:"
+		printf '%s\n' "$_bad" | head -5
+		return 1
+	fi
+
 	_stated="$(sed -n 's/^checks run: \([0-9][0-9]*\)$/\1/p' "$_log" | tail -1)"
 	if [ -z "$_stated" ]; then
 		echo "    records=$_records but the log never stated a count, so it did not reach its summary"

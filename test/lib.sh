@@ -1049,8 +1049,14 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	done
 
 	printf '%s\n' "$_display"
-	# Tabs in a field would split it. Nothing in the tree puts one in a check
-	# name, and this makes that true rather than assumed.
+	# Tabs in a field would split it, and a NEWLINE splits the whole record just
+	# as completely -- it ends the line, so what follows becomes a second line the
+	# reader cannot key. Nothing in the tree puts either in a check name, and this
+	# makes that true rather than assumed. The tab was stripped here from the
+	# first version; the newline was not, which @linuxhikerpm named on #917: the
+	# reason already written for the tab is the reason for both. Measured before
+	# the fix, a newline in the name gave a record of 4 fields plus two stray
+	# lines; after it, 6 fields and one line.
 	#
 	# PARAMETER EXPANSION, not `printf | tr` in a command substitution. The first
 	# version paid four forks per record -- two subshells and two tr processes --
@@ -1059,12 +1065,15 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	# an idle box, 2,000 calls, identical output on every input including a real
 	# tab: 3.1577 ms per call against 0.0096 ms, 331x, or 11.9 seconds of pure
 	# fork overhead across a full suite against 36 ms. Reported by OffgridwithJD.
+	local _nl_name="${_name//$'\t'/ }" _nl_reason="${_reason//$'\t'/ }"
+	_nl_name="${_nl_name//$'\n'/ }"; _nl_reason="${_nl_reason//$'\n'/ }"
+	_nl_name="${_nl_name//$'\r'/ }"; _nl_reason="${_nl_reason//$'\r'/ }"
 	printf 'RESULT\t%s\t%s\t%s\t%s\t%s\n' \
 		"${PGC_SUITE:-unknown}" \
 		"${_part:-${PGC_SUITE:-unknown}}" \
-		"${_name//$'\t'/ }" \
+		"${_nl_name}" \
 		"$_v" \
-		"${_reason//$'\t'/ }"
+		"${_nl_reason}"
 }
 
 pgc_pass() {	# pgc_pass NAME
