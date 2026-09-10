@@ -196,7 +196,18 @@ _dcv_absent() {	# _dcv_absent DIR DOC -> "[]" or "[n: a b c]"
 	           } | sort -u )"
 	while IFS= read -r name; do
 		[ -n "$name" ] || continue
-		printf '%s\n' "$ondisk" | grep -qxF "$name" && continue
+		# grep -cxF on a here-string, NOT `printf ... | grep -qxF`. grep -q exits
+		# the moment it matches, the printf takes EPIPE, and under this suite's
+		# `set -o pipefail` the pipeline reports failure though the name WAS
+		# present -- so a name in the corpus is reported absent. Selftest 080
+		# states this rule and demonstrates it; its sweep is deliberately
+		# non-recursive and never looked in here.
+		#
+		# It is not latent. It reddened #923's `suites (PG 17)` on a name that
+		# exists, while PG 18 passed, and reproduces at this corpus size only
+		# under load: 170 names, 400 trials on a busy machine, 6 false absences
+		# piped and 0 on a here-string.
+		[ "$(grep -cxF "$name" <<<"$ondisk" || true)" != 0 ] && continue
 		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $name"
 	done < <(grep -oE '`test_[A-Za-z0-9_]*(\.py)?`' "$doc" 2>/dev/null \
 	         | tr -d '`' | sort -u)

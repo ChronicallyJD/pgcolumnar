@@ -59,7 +59,11 @@ q1() { q "$1" | tail -1; }
 # Keys" is emitted by no other node, so a positive grep proves the node rather
 # than an absence test a fallback would also satisfy.
 is_groupvec() {	# query -> yes|no
-	q "EXPLAIN (COSTS OFF) $1" | grep -q 'Columnar Vectorized Group Keys' \
+	# grep -c on a captured value, not a pipe into grep -q; see lib.sh's
+	# pgc_is_columnar_scan for the mechanism and the measurement.
+	local _plan
+	_plan="$(q "EXPLAIN (COSTS OFF) $1")"
+	[ "$(grep -c 'Columnar Vectorized Group Keys' <<<"$_plan" || true)" != 0 ] \
 		&& echo yes || echo no
 }
 

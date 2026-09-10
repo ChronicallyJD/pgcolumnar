@@ -1,0 +1,27 @@
+# Registered suites that count no checks at runtime -- DEBT, not an exemption.
+#
+# A suite here exits 0 without any observable accounting: it neither calls
+# lib.sh's pgc_summary (which prints the "accounting:" line) nor prints its own
+# "checks run:" line the way bench_guards and docs_style do from private
+# counters. The matrix therefore reports it as a suite that "ran" while having no
+# idea whether it asserted anything.
+#
+# THIS FILE MAY ONLY SHRINK. A name added here is a suite whose checks the harness
+# cannot see, and adding one is a diff a reviewer sees -- which is the whole
+# reason it is a tracked file and not a number in the environment. A name that
+# starts accounting, or stops being registered, is reported by the matrix so the
+# burn-down cannot stall silently.
+#
+# Generated from a measurement over test/run_all_versions.sh --list-suites, not
+# typed. To regenerate, run the matrix and take the "registered but accounted by
+# nothing" lines.
+audit
+concurrency
+phase2
+phase3
+phase4
+phase5
+phase6
+smoke
+unique_conc
+update_conc

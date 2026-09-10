@@ -42,7 +42,12 @@ explain_of() {
 		-d "$PGC_DB" -At -c "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) $1" 2>/dev/null
 }
 is_scalar_scan() {
-	explain_of "$1" | grep -q 'Columnar Projected Columns' && echo yes || echo no
+	# grep -c, not grep -q: see lib.sh's pgc_is_columnar_scan for why and for the
+	# measurement. This file holds the worst instance of the shape -- the arm at
+	# "premise: and it is not the scalar scan" WANTS "no", so a spurious EPIPE
+	# answer makes that premise pass for the wrong reason. Vacuity, not a red.
+	[ "$(explain_of "$1" | grep -c 'Columnar Projected Columns' || true)" != 0 ] \
+		&& echo yes || echo no
 }
 
 # The node, before any counter is read out of it.
@@ -99,13 +104,16 @@ explain_agg() {
 # this query falls back to the scalar scan -- which DOES print the line, so the
 # check below would pass while testing nothing at all.
 check "premise: the aggregate arm really is a vectorized aggregate" \
-	"$(explain_agg "$AGGQ" | grep -q 'Columnar Vectorized Aggregates' && echo yes || echo no)" \
+	"$([ "$(explain_agg "$AGGQ" | grep -c 'Columnar Vectorized Aggregates' || true)" != 0 ] \
+		&& echo yes || echo no)" \
 	"yes"
 check "premise: and it is not the scalar scan" \
-	"$(explain_agg "$AGGQ" | grep -q 'Columnar Projected Columns' && echo yes || echo no)" "no"
+	"$([ "$(explain_agg "$AGGQ" | grep -c 'Columnar Projected Columns' || true)" != 0 ] \
+		&& echo yes || echo no)" "no"
 
 check "the vectorized aggregate reports Columnar Vectors Skipped" \
-	"$(explain_agg "$AGGQ" | grep -q 'Columnar Vectors Skipped' && echo yes || echo no)" \
+	"$([ "$(explain_agg "$AGGQ" | grep -c 'Columnar Vectors Skipped' || true)" != 0 ] \
+		&& echo yes || echo no)" \
 	"yes"
 
 # Boundary and cross-vector ranges still return exactly the heap rows.
