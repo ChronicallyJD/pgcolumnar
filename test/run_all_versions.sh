@@ -1053,6 +1053,17 @@ pgc_reconcile_population() {	# pgc_reconcile_population REGISTERED ACCOUNTED NOT
 		[ -n "$_n" ] && echo "    listed as debt but not registered: $_n"
 	done <<<"$_stale_reg"
 
+	# registered == sum(buckets), printed beside every reconciliation per the
+	# house rule. BE PRECISE ABOUT WHAT IT CAN CATCH, because the next reader will
+	# go looking for a data case and there is not one: the four buckets are built
+	# by successive subtraction FROM the registered set, so their sum equals it
+	# identically. OffgridwithJD measured it -- 400 random four-set inputs, zero
+	# firings, while the real bucket findings fired on 353 of them.
+	#
+	# What can make it false is comm being fed unsorted input, which produces
+	# buckets that are not a partition at all. It is a comm tripwire, exactly like
+	# the one on pgc_reconcile_accounting, and selftest 390 drives it there with
+	# that mutation.
 	echo "  population reconciliation: registered=$_nreg | accounted=$_nacc, not dispatched=$_nnd, known debt=$_ndebt, unaccounted=$_nunacc | sum=$_sum"
 	if [ "$_nreg" != "$_sum" ]; then
 		echo "    the population does not add up: $_nreg registered, $_sum in the buckets"

@@ -594,8 +594,11 @@ check "and debt naming a suite that is not registered is reported too" \
 	"$(pgc_reconcile_population "$_reg_f" "$_acct_f" "$_notdisp" "$_debt_f" 2>&1 \
 		| grep -c '^[[:space:]]*listed as debt but not registered: gone$')" "1"
 
-# inputs == sum(buckets) over the REGISTERED population, which is the identity
-# the symmetry check could not offer: a name can genuinely fall outside all four.
+# inputs == sum(buckets) over the REGISTERED population, printed per the house
+# rule. Like the symmetry check's, it cannot be false on the DATA -- the buckets
+# are built by successive subtraction from the registered set, so their sum equals
+# it identically. What it guards is comm reading unsorted input. The arms above,
+# on the unaccounted bucket, are the ones that carry weight.
 printf 'a\nb\nc\nd\n' > "$_reg_f"
 printf 'a\n' > "$_acct_f"; printf 'b\n' > "$_notdisp"; printf 'c\n' > "$_debt_f"
 check "the population partitions, and prints inputs == sum(buckets)" \
