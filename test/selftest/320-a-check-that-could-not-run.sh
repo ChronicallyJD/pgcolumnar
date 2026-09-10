@@ -87,8 +87,8 @@ check "one unrunnable check makes the suite INCOMPLETE, not passed" \
 # the feature from its absence. Assert the accounting line instead, which only a
 # suite that recorded BOTH states can print.
 check "a failure outranks an unrunnable check, and both are still counted" \
-	"$(_cur_out failunrun | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable')" \
-	"accounting: 0 passed + 1 failed + 1 unrunnable"
+	"$(_cur_out failunrun | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped')" \
+	"accounting: 0 passed + 1 failed + 1 unrunnable + 0 skipped"
 
 # The distinction 66 cannot carry: this suite RAN a check. Reporting it as
 # "ran no checks" would merge "inert suite" with "could not evaluate one thing".
@@ -125,12 +125,12 @@ check "an unrunnable reason outside the enum fails rather than being accepted" \
 # Every state is in a total, or it is a state that can go missing. 3,762 check
 # sites is well past what anyone notices by reading.
 check "the summary reconciles the three states against the total" \
-	"$(_cur_out passunrun | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+')" \
-	"accounting: 1 passed + 0 failed + 1 unrunnable = 2"
+	"$(_cur_out passunrun | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+')" \
+	"accounting: 1 passed + 0 failed + 1 unrunnable + 0 skipped = 2"
 
 check "and a suite with no unrunnable checks reconciles too" \
-	"$(_cur_out onlypass | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+')" \
-	"accounting: 1 passed + 0 failed + 0 unrunnable = 1"
+	"$(_cur_out onlypass | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+')" \
+	"accounting: 1 passed + 0 failed + 0 unrunnable + 0 skipped = 1"
 
 # ---- the accounting must be a MEASUREMENT, not an identity ------------------
 #
@@ -155,8 +155,8 @@ _cur_make ratio 'check "a" ok ok
 check_ratio "a ratio well inside its bound" 10 100 1.0'
 
 check "a passing ratio check is counted as a pass, not a failure" \
-	"$(_cur_out ratio | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+')" \
-	"accounting: 2 passed + 0 failed + 0 unrunnable = 2"
+	"$(_cur_out ratio | grep -oE 'accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+')" \
+	"accounting: 2 passed + 0 failed + 0 unrunnable + 0 skipped = 2"
 
 check "and the suite that holds it still passes" \
 	"$(_cur_run ratio)" "0 PASSED"

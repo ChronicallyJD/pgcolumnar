@@ -33,10 +33,14 @@ check "and that place is pgc_record" \
 
 # ---- the record line itself -------------------------------------------------
 #
-# Tab separated, so a name containing spaces survives. Fields: suite, name,
-# verdict, reason. The reason carries phase 1's REASON_CODE, which is what makes
-# this more than a reformat: an unrunnable check is distinguishable from a
-# passing one without parsing prose.
+# Tab separated, so a name containing spaces survives. Five columns after the
+# RESULT marker: suite, part, name, verdict, reason. The reason carries phase 1's
+# REASON_CODE, which is what makes this more than a reformat: an unrunnable check
+# is distinguishable from a passing one without parsing prose. The verdict is one
+# of PASS, FAIL, UNRUN or SKIP.
+#
+# No mutation column: that is the LEDGER's (#918). A record is one observation,
+# not a history.
 
 _rec() {	# _rec HELPER ARGS... -> the RESULT lines that helper emitted
 	( PGC_FAIL=0; PGC_CHECKS=0; PGC_PASSED=0; PGC_FAILED=0; PGC_UNRUN=0
@@ -184,3 +188,97 @@ check "a log that never stated a count is not silently accepted" \
 
 check "the runner calls the record reconciliation, not merely defines it" \
 	"$(grep -c '[^_[:alnum:]]pgc_reconcile_records "' "$_rv")" "1"
+
+# ---- the timing helpers reported an outcome that nothing counted -------------
+#
+# check_timing and check_ratio_needs_quiet_machine, under PGC_SKIP_TIMING=1,
+# printed a human SKIP line and returned. Driven before the fix:
+#
+#     SKIP  a timing check (PGC_SKIP_TIMING: wall-clock measurement)
+#     SKIP  a ratio check (PGC_SKIP_TIMING: wall-clock ratio)
+#     -> PGC_CHECKS=0 PGC_PASSED=0 PGC_FAILED=0 PGC_UNRUN=0
+#
+# Two outcomes a reader sees, nothing counted, no record. That is the hole this
+# part's whole argument cannot have, and NOTHING here reached those branches:
+# removing both emitters left every arm above green. Found by @linuxhikerpm.
+#
+# SKIP IS A FOURTH OUTCOME, counted like the other three. `checks run: N` now
+# reports the checks a suite ENCOUNTERED rather than the ones it managed to
+# evaluate, and pgc_summary reconciles four counters against it instead of three
+# -- the same shape, one term wider.
+#
+# It is NOT check_unrunnable. That third state exists for a check whose INPUT was
+# absent and it exits the suite INCOMPLETE, which would turn every CI run red the
+# moment PGC_SKIP_TIMING is set -- and CI sets it on every run. A wall-clock check
+# on a shared runner is deliberately not asked, which is a different thing from a
+# check that could not be answered.
+
+_tm() {	# _tm SKIPFLAG HELPER ARGS... -> records emitted
+	( PGC_FAIL=0; PGC_CHECKS=0; PGC_PASSED=0; PGC_FAILED=0; PGC_UNRUN=0; PGC_SKIPPED=0
+	  PGC_SKIP_TIMING="$1"; shift; "$@" 2>/dev/null | grep '^RESULT' )
+}
+_tmh() {	# _tmh SKIPFLAG HELPER ARGS... -> the human lines
+	( PGC_FAIL=0; PGC_CHECKS=0; PGC_PASSED=0; PGC_FAILED=0; PGC_UNRUN=0; PGC_SKIPPED=0
+	  PGC_SKIP_TIMING="$1"; shift; "$@" 2>/dev/null | grep -v '^RESULT' )
+}
+_tmc() {	# _tmc SKIPFLAG HELPER ARGS... -> "CHECKS/PASSED/SKIPPED"
+	( PGC_FAIL=0; PGC_CHECKS=0; PGC_PASSED=0; PGC_FAILED=0; PGC_UNRUN=0; PGC_SKIPPED=0
+	  PGC_SKIP_TIMING="$1"; shift; "$@" >/dev/null 2>&1
+	  echo "$PGC_CHECKS/$PGC_PASSED/$PGC_SKIPPED" )
+}
+
+check "a skipped timing check emits exactly one record" \
+	"$(_tm 1 check_timing "a timing check" 1 1 | wc -l)" "1"
+check "and its verdict is SKIP" \
+	"$(_tm 1 check_timing "a timing check" 1 1 | cut -f5)" "SKIP"
+check "and it is counted, so checks run: reports it" \
+	"$(_tmc 1 check_timing "a timing check" 1 1)" "1/0/1"
+check "and its human line is unchanged" \
+	"$(_tmh 1 check_timing "a timing check" 1 1)" \
+	"SKIP  a timing check (PGC_SKIP_TIMING: wall-clock measurement)"
+
+check "the same timing check, ENABLED, emits one record and passes" \
+	"$(_tm 0 check_timing "a timing check" 1 1 | cut -f5)" "PASS"
+check "and is counted as a pass, not a skip" \
+	"$(_tmc 0 check_timing "a timing check" 1 1)" "1/1/0"
+
+check "a skipped ratio check emits exactly one record" \
+	"$(_tm 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2 | wc -l)" "1"
+check "and its verdict is SKIP" \
+	"$(_tm 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2 | cut -f5)" "SKIP"
+check "and it is counted" \
+	"$(_tmc 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2)" "1/0/1"
+check "and its human line is unchanged" \
+	"$(_tmh 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2)" \
+	"SKIP  a ratio check (PGC_SKIP_TIMING: wall-clock ratio)"
+
+check "the same ratio check, ENABLED, emits one record and passes" \
+	"$(_tm 0 check_ratio_needs_quiet_machine "a ratio check" 1 1 2 | cut -f5)" "PASS"
+check "and is counted as a pass, not a skip" \
+	"$(_tmc 0 check_ratio_needs_quiet_machine "a ratio check" 1 1 2)" "1/1/0"
+
+# ---- and the accounting line carries the fourth term ------------------------
+
+_acct_line() {	# _acct_line SKIPFLAG -> pgc_summary's accounting line
+	( PGC_FAIL=0; PGC_CHECKS=0; PGC_PASSED=0; PGC_FAILED=0; PGC_UNRUN=0; PGC_SKIPPED=0
+	  PGC_SKIP_TIMING="$1"
+	  check "an ordinary check" x x
+	  check_timing "a timing check" 1 1
+	  pgc_summary ) 2>/dev/null | sed -n 's/^\(accounting: .*\)$/\1/p'
+}
+check "the accounting line reconciles four outcomes against the count" \
+	"$(_acct_line 1)" "accounting: 1 passed + 0 failed + 0 unrunnable + 1 skipped = 2"
+check "and with timing enabled the skipped term is zero, not absent" \
+	"$(_acct_line 0)" "accounting: 2 passed + 0 failed + 0 unrunnable + 0 skipped = 2"
+
+# A suite whose every check was skipped has evaluated nothing, so it must not
+# report PASSED. Before the fourth counter it could not reach this state at all,
+# because a skipped check left PGC_CHECKS at zero.
+_allskip() {
+	( PGC_FAIL=0; PGC_CHECKS=0; PGC_PASSED=0; PGC_FAILED=0; PGC_UNRUN=0; PGC_SKIPPED=0
+	  PGC_SKIP_TIMING=1
+	  check_timing "a timing check" 1 1
+	  pgc_summary ) 2>/dev/null | grep -oE ': (PASSED|FAILED|SKIPPED \(ran no checks\)|INCOMPLETE)$'
+}
+check "a suite that skipped every check did not pass" \
+	"$(_allskip)" ": SKIPPED (ran no checks)"

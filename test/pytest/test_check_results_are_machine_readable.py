@@ -193,3 +193,90 @@ def test_the_runner_reconciles_records_against_the_stated_count(tmp_path, expect
     # from a miscount and must not read as a clean reconciliation.
     expect.num(run("RESULT\ts\ta\tPASS\t\n")[1], 1,
                "a log that never stated a count is not silently accepted")
+
+
+# ---- the timing helpers reported an outcome that nothing counted ------------
+
+
+def _timing(skip, call):
+    """Run one timing helper with PGC_SKIP_TIMING set or clear."""
+    body = (f'PGC_SKIP_TIMING={skip}\n'
+            'PGC_FAIL=0; PGC_CHECKS=0; PGC_PASSED=0; PGC_FAILED=0; PGC_UNRUN=0; PGC_SKIPPED=0\n'
+            f'{call}\n'
+            'echo "COUNTS $PGC_CHECKS/$PGC_PASSED/$PGC_SKIPPED"')
+    out = _sh(body)
+    recs = [l for l in out.splitlines() if l.startswith("RESULT\t")]
+    human = [l for l in out.splitlines()
+             if not l.startswith("RESULT\t") and not l.startswith("COUNTS ")]
+    counts = next((l.split()[1] for l in out.splitlines() if l.startswith("COUNTS ")), "")
+    return recs, human, counts
+
+
+def test_a_skipped_timing_check_is_counted_and_recorded(expect):
+    """`check_timing` and `check_ratio_needs_quiet_machine` under PGC_SKIP_TIMING=1
+    printed a human SKIP line and returned -- no count, no record.
+
+    Two outcomes a reader sees, invisible to both the count and the records, in the
+    part whose whole argument is that those are one operation. Nothing reached those
+    branches either: removing both emitters left every other arm green. Found by
+    @linuxhikerpm.
+
+    SKIP is a fourth outcome, counted like the other three, so `checks run:` reports
+    the checks a suite ENCOUNTERED rather than the ones it managed to evaluate. It is
+    deliberately not `check_unrunnable`: that state exits the suite INCOMPLETE, and CI
+    sets PGC_SKIP_TIMING on every run, so every run would go red. A wall-clock check
+    not asked on a shared runner is a different thing from one that could not be
+    answered.
+    """
+    for call, tail in ((' check_timing "a timing check" 1 1',
+                        "wall-clock measurement"),
+                       (' check_ratio_needs_quiet_machine "a ratio check" 1 1 2',
+                        "wall-clock ratio")):
+        name = call.split('"')[1]
+        recs, human, counts = _timing(1, call)
+        expect.num(len(recs), 1, f"{name}: skipped, emits exactly one record")
+        expect.text(recs[0].split("\t")[4], "SKIP", f"{name}: and its verdict is SKIP")
+        expect.text(counts, "1/0/1", f"{name}: and it is counted as a skip")
+        expect.text("\n".join(human), f"SKIP  {name} (PGC_SKIP_TIMING: {tail})",
+                    f"{name}: and its human line is unchanged")
+
+        recs, _, counts = _timing(0, call)
+        expect.num(len(recs), 1, f"{name}: enabled, emits exactly one record")
+        expect.text(recs[0].split("\t")[4], "PASS", f"{name}: and passes")
+        expect.text(counts, "1/1/0", f"{name}: counted as a pass, not a skip")
+
+
+def test_the_accounting_line_reconciles_four_outcomes(expect):
+    """Four counters against the count, which is the same shape as three against it.
+
+    The skipped term is printed even when zero: a term that disappears when empty is
+    a term a reader cannot tell from a term that was never there.
+    """
+    def acct(skip):
+        out = _sh(f'PGC_SKIP_TIMING={skip}\n'
+                  ' check "an ordinary check" x x\n'
+                  ' check_timing "a timing check" 1 1\n'
+                  ' pgc_summary')
+        return next((l for l in out.splitlines() if l.startswith("accounting: ")), "")
+
+    expect.text(acct(1), "accounting: 1 passed + 0 failed + 0 unrunnable + 1 skipped = 2",
+                "a skipped check appears in the accounting identity")
+    expect.text(acct(0), "accounting: 2 passed + 0 failed + 0 unrunnable + 0 skipped = 2",
+                "and the term is printed when zero, not omitted")
+
+
+def test_a_suite_that_evaluated_nothing_did_not_pass(expect):
+    """Before the fourth counter a skipped check left PGC_CHECKS at zero, so the
+    all-skipped suite hit the "ran no checks" branch by accident. Counting it would
+    have made the suite report PASSED with nothing behind it, so the condition now
+    says what it always meant: PASSED + FAILED + UNRUN, not CHECKS.
+    """
+    out = _sh('PGC_SKIP_TIMING=1\n'
+              ' check_timing "a timing check" 1 1\n'
+              ' pgc_summary')
+    verdicts = [l for l in out.splitlines()
+                if l.endswith(("PASSED", "FAILED", "INCOMPLETE"))
+                or l.endswith("SKIPPED (ran no checks)")]
+    expect.text("\n".join(v.split(": ", 1)[1] for v in verdicts),
+                "SKIPPED (ran no checks)",
+                "a suite whose every check was skipped did not pass")

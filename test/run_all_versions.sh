@@ -933,7 +933,7 @@ pgc_log_shows_accounting() {	# pgc_log_shows_accounting LOGFILE -> yes|no
 	# of thing that reads as an oversight later.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
-	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log"; then
+	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+$' "$_log"; then
 		echo yes
 	else
 		echo no
@@ -981,7 +981,7 @@ pgc_log_shows_any_accounting() {	# pgc_log_shows_any_accounting LOGFILE -> yes|n
 	# the property that keeps the debt file from becoming a permission slip.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
-	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log" || true)" != 0 ] \
+	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+$' "$_log" || true)" != 0 ] \
 		|| [ "$(grep -cE '^checks run: [0-9]+$' "$_log" || true)" != 0 ]; then
 		echo yes
 	else

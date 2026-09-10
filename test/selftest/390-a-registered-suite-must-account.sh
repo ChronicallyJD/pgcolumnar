@@ -164,18 +164,18 @@ check "and the reader answers no on it, which is the wrong answer the arm catche
 # on a pass, a failure, a skip and an incomplete alike. That is what makes it the
 # runtime twin of the declaration rather than a synonym for PASSED.
 
-printf 'checks run: 3\nchecks unrunnable: 0\naccounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n' > "$_acc/pass.log"
+printf 'checks run: 3\nchecks unrunnable: 0\naccounting: 3 passed + 0 failed + 0 unrunnable + 0 skipped = 3\nx.sh: PASSED\n' > "$_acc/pass.log"
 check "a passing log shows accounting" "$(pgc_log_shows_accounting "$_acc/pass.log")" "yes"
 
-printf 'accounting: 1 passed + 2 failed + 0 unrunnable = 3\nx.sh: FAILED\n' > "$_acc/fail.log"
+printf 'accounting: 1 passed + 2 failed + 0 unrunnable + 0 skipped = 3\nx.sh: FAILED\n' > "$_acc/fail.log"
 check "and so does a failing one, which is the point" \
 	"$(pgc_log_shows_accounting "$_acc/fail.log")" "yes"
 
-printf 'accounting: 0 passed + 0 failed + 0 unrunnable = 0\nx.sh: SKIPPED (ran no checks)\n' > "$_acc/skip.log"
+printf 'accounting: 0 passed + 0 failed + 0 unrunnable + 0 skipped = 0\nx.sh: SKIPPED (ran no checks)\n' > "$_acc/skip.log"
 check "and a skip, which reached the summary and counted zero" \
 	"$(pgc_log_shows_accounting "$_acc/skip.log")" "yes"
 
-printf 'accounting: 2 passed + 0 failed + 1 unrunnable = 3\nx.sh: INCOMPLETE\n' > "$_acc/inc.log"
+printf 'accounting: 2 passed + 0 failed + 1 unrunnable + 0 skipped = 3\nx.sh: INCOMPLETE\n' > "$_acc/inc.log"
 check "and an incomplete" "$(pgc_log_shows_accounting "$_acc/inc.log")" "yes"
 
 printf 'x.sh: PASSED\n' > "$_acc/bare.log"
@@ -193,10 +193,10 @@ check "and prose containing the word does not count as the line" \
 # suite run produces. Inert on real data today (0 non-line-start occurrences
 # across 246 PG17 logs and 244 PG18), so this closes a coverage gap rather than a
 # live defect.
-printf '  accounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n' \
+printf '  accounting: 3 passed + 0 failed + 0 unrunnable + 0 skipped = 3\nx.sh: PASSED\n' \
 	> "$_acc/indented_acc.log"
 check "premise: the fixture carries a well-formed accounting line, just indented" \
-	"$(grep -c 'accounting: 3 passed + 0 failed + 0 unrunnable = 3' "$_acc/indented_acc.log")" "1"
+	"$(grep -c 'accounting: 3 passed + 0 failed + 0 unrunnable + 0 skipped = 3' "$_acc/indented_acc.log")" "1"
 check "an accounting line that does not start its line is refused" \
 	"$(pgc_log_shows_accounting "$_acc/indented_acc.log")" "no"
 
@@ -532,7 +532,7 @@ check "premise: the population reconciliation is callable" \
 
 # ---- the accounted reader takes EITHER mechanism ----------------------------
 
-printf 'accounting: 1 passed + 0 failed + 0 unrunnable = 1\nx.sh: PASSED\n' > "$_acc/lib.log"
+printf 'accounting: 1 passed + 0 failed + 0 unrunnable + 0 skipped = 1\nx.sh: PASSED\n' > "$_acc/lib.log"
 check "a log carrying lib.sh's accounting line is accounted" \
 	"$(pgc_log_shows_any_accounting "$_acc/lib.log")" "yes"
 
