@@ -68,10 +68,70 @@ check "control: piping a large string into grep -q reports a match as absent" \
 # explanation of the rule, and the deliberate piped() demo above, both match the
 # pattern they exist to describe. Sweeping the file that enforces a rule for
 # instances of that rule is selftest 260's mistake once removed.
+# test/selftest/ IS SCANNED TOO, AND IT WAS NOT, for the same reason bench/ was
+# not: the directory scoping was never a decision, it fell out of writing
+# "$TESTDIR"/*.sh. Three fragments held the exact shape this rule forbids --
+# 350's corpus membership test, 300's directory-coverage test, 340's Makefile
+# sweep -- inside the directory that enforces the rule.
+#
+# NOT LATENT. 350's reddened #923's `suites (PG 17)` on a pytest name that
+# exists, while PG 18 passed the same commit. At corpus size the writer is small
+# enough to win the race on an idle machine, which is why it survived: measured
+# at 170 names over 400 trials, 0 false absences idle and 6 under load, against 0
+# either way for the here-string form.
+#
+# The exemption is DERIVED, not listed. This file's own control below is inside a
+# quoted heredoc, and so is any other deliberate demonstration of the shape; a
+# line inside one is text being written to a file, not a pipeline this suite
+# runs. A filename allowlist would have to be maintained, and this rule exists
+# because things that must be maintained are not.
 _epipe_globs=("$TESTDIR"/*.sh)
 [ -d "$TESTDIR/../bench" ] && _epipe_globs+=("$TESTDIR"/../bench/*.sh)
+[ -d "$TESTDIR/selftest" ] && _epipe_globs+=("$TESTDIR"/selftest/*.sh)
+
+# file:line pairs that sit inside a quoted heredoc, computed from the files.
+_epipe_heredoc_lines() {
+	awk '
+		# Reset per FILE. awk keeps globals across inputs, so an unterminated
+		# heredoc in one file leaves the scanner inside one for every file after
+		# it -- and a later line that happens to equal the stale tag closes it in
+		# the wrong place. Measured: without this, 080s own line 26 fell OUTSIDE
+		# the exemption when the sweep ran over all 302 files, and inside it when
+		# the same function ran over that file alone.
+		FNR == 1 { inhd = 0; tag = "" }
+		!inhd && match($0, /<<[-]?'"'"'[A-Za-z_][A-Za-z0-9_]*'"'"'/) {
+			tag = substr($0, RSTART, RLENGTH)
+			gsub(/^<<[-]?'"'"'/, "", tag); gsub(/'"'"'$/, "", tag)
+			inhd = 1; next
+		}
+		inhd {
+			t = $0; gsub(/^[ \t]+|[ \t]+$/, "", t)
+			if (t == tag) { inhd = 0; next }
+			# FNR, not NR. NR is cumulative across inputs, so the second file
+			# onwards reports line numbers from a running total and no key ever
+			# matches the grep -n output it is compared against. It is the
+			# neighbouring question answered plausibly: single-file runs agree,
+			# because there NR == FNR.
+			print FILENAME ":" FNR ":"
+		}
+	' "$@"
+}
+_epipe_hd="$(_epipe_heredoc_lines "${_epipe_globs[@]}" 2>/dev/null || true)"
+# Comment lines are excluded first. A comment is not a pipeline this suite runs,
+# and the rule's own explanation -- and the note beside every site that was fixed
+# -- necessarily spells the shape out. A sweep that counts its own documentation
+# is selftest 260's mistake.
 _epipe_hits="$(grep -nE '(echo|printf)[^|]*\|[[:space:]]*grep -[a-zA-Z]*q' \
-	"${_epipe_globs[@]}" 2>/dev/null | grep -v '/harness_selftest.sh:' || true)"
+	"${_epipe_globs[@]}" 2>/dev/null \
+	| grep -v '/harness_selftest.sh:' \
+	| grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+# Drop hits whose file:line is inside a quoted heredoc.
+if [ -n "$_epipe_hd" ] && [ -n "$_epipe_hits" ]; then
+	_epipe_hits="$(printf '%s\n' "$_epipe_hits" | while IFS= read -r _eh; do
+		_ehk="${_eh%%:*}:$(printf '%s' "$_eh" | cut -d: -f2):"
+		[ "$(grep -cxF "$_ehk" <<<"$_epipe_hd" || true)" != 0 ] || printf '%s\n' "$_eh"
+	done)"
+fi
 _epipe_count="$(printf '%s' "$_epipe_hits" | grep -c . || true)"
 [ -n "$_epipe_hits" ] || _epipe_count=0
 check "no suite pipes a captured string into an early-exit reader" \
@@ -117,4 +177,48 @@ check "and the scan examined the suites rather than finding nothing to read" \
 _epipe_bench="$(printf '%s' "$_epipe_files" | grep -c '/bench/' || true)"
 check "and bench/ was in the scan, which is the hole this rule had" \
 	"$([ "${_epipe_bench:-0}" -ge 1 ] && echo yes || echo "no (bench files read: $_epipe_bench)")" "yes"
+
+# selftest/ gets its own arm for exactly the reason bench/ does: its glob is
+# added conditionally, and the file-count premise above passes with it silently
+# absent.
+_epipe_self="$(printf '%s' "$_epipe_files" | grep -c '/selftest/' || true)"
+check "and selftest/ was in the scan, which is the hole that reddened #923" \
+	"$([ "${_epipe_self:-0}" -ge 5 ] && echo yes || echo "no (selftest files read: $_epipe_self)")" "yes"
+
+# The heredoc exemption must EXEMPT something and must not exempt everything.
+# Without the first, the control below is unreachable and this file cannot hold
+# its own rule; without the second, the sweep is switched off and reports zero.
+_epipe_hd_count="$(printf '%s' "$_epipe_hd" | grep -c . || true)"
+check "premise: the heredoc exemption found heredoc lines to exempt" \
+	"$([ "${_epipe_hd_count:-0}" -ge 1 ] && echo yes || echo "no ($_epipe_hd_count)")" "yes"
+# A PROPORTION, not a guessed ceiling. The first version of this arm used a bare
+# 2000 and went red at 2,502 heredoc lines in a corpus that was entirely healthy
+# -- a hand-written number failing for the reason hand-written numbers fail here.
+_epipe_total_lines="$(cat "${_epipe_globs[@]}" 2>/dev/null | grep -c '' || true)"
+echo "  epipe sweep: total lines=$_epipe_total_lines, inside a quoted heredoc=$_epipe_hd_count"
+check "premise: the sweep read lines to classify" \
+	"$([ "${_epipe_total_lines:-0}" -ge 1000 ] && echo yes || echo "no ($_epipe_total_lines)")" "yes"
+check "premise: and the exemption covers a minority of them, not the corpus" \
+	"$([ "$((_epipe_hd_count * 2))" -lt "${_epipe_total_lines:-0}" ] && echo yes \
+		|| echo "no ($_epipe_hd_count of $_epipe_total_lines)")" "yes"
+
+# The rule must still SEE a violation that is not in a heredoc. A sweep whose
+# exemption is too broad reports zero for the same reason a correct one does.
+_epipe_probe="$PGC_WORKDIR/epipe_probe.sh"
+# The shape is assembled from a fragment rather than written out, so these
+# generator lines do not themselves match the sweep and need no exemption.
+_epipe_shape='x() { printf "%s" "$1" | grep -%s PATTERN; }'
+{
+	printf '%s\n' "$(printf "$_epipe_shape" '%s' q)"
+	printf 'cat > /dev/null <<%sDEMO%s\n' "'" "'"
+	printf '%s\n' "$(printf "$_epipe_shape" '%s' q)"
+	printf 'DEMO\n'
+} > "$_epipe_probe"
+_epipe_probe_hd="$(_epipe_heredoc_lines "$_epipe_probe" 2>/dev/null || true)"
+check "the sweep's pattern sees both lines of the probe" \
+	"$(grep -cE '(echo|printf)[^|]*\|[[:space:]]*grep -[a-zA-Z]*q' "$_epipe_probe")" "2"
+check "and the heredoc exemption covers the one inside the heredoc, not the other" \
+	"$(printf '%s' "$_epipe_probe_hd" | grep -c ':3:' || true)" "1"
+check "and does not cover the live one above it" \
+	"$(printf '%s' "$_epipe_probe_hd" | grep -c ':1:' || true)" "0"
 

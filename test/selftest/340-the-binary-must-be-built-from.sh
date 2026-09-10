@@ -112,7 +112,8 @@ while IFS= read -r _bd_var; do
 	_bd_name="${_bd_val##*/}"
 	[ -n "$_bd_name" ] || continue
 	_bd_seen=$(( _bd_seen + 1 ))
-	printf '%s\n' "$_bd_covered" | grep -qx "$_bd_name" || \
+	# grep -c on a here-string, not `printf | grep -qx`; see selftest 080.
+	[ "$(grep -cx "$_bd_name" <<<"$_bd_covered" || true)" != 0 ] || \
 		_bd_missing="$_bd_missing $_bd_name"
 done <<EOF
 $(grep -oE '\$\(MAKE\) -C \$\([A-Z_]+\)' "$_bd_root/Makefile" \
