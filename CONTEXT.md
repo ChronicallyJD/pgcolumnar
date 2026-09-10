@@ -175,6 +175,48 @@ outside the gate. Writing both keeps the two harnesses honest about each other:
 where they disagree, one of them is wrong, and that is worth finding at the time
 rather than during a port.
 
+**The two harnesses are parallel in functionality, and independent in
+implementation. They must not call, import or reference each other.** Owner's
+rule, 2026-09-10. Documentation is the only exception: prose, comments and
+docstrings may name the other harness freely.
+
+This follows from the paragraph above. Two harnesses can only disagree if they
+are two measurements. A pytest test that drives `test/lib.sh` by subprocess is
+not a second measurement of the property -- it is the first measurement wearing a
+Python wrapper, so it agrees with the shell by construction and can never report
+the shell wrong. The coupling turns the twin from evidence into a mirror, and a
+mirror is what the twin rule exists to avoid.
+
+So each harness asserts the property against **the product**, in its own terms,
+never against the other harness's implementation. Building a throwaway fixture
+that merely resembles the other side -- writing a fake `lib.sh` into a `tmp_path`
+-- is not a reference to it; sourcing the real one is. If a property can only be
+expressed by driving the other side, that is a signal it belongs to one harness
+alone: say which, and say why, rather than reaching across.
+
+**The debt this starts with, measured on 2026-09-10** rather than assumed, with
+comments and docstrings stripped so the count is of executable references:
+
+- python that drives shell, 13 executable sites in 2 files:
+  `test_suite_accounting.py` 12 (the real `lib.sh` and `run_all_versions.sh`) and
+  `pgc_cluster.py:357` 1 (sources the real `test/lib.sh`). A third arrives with
+  PR #923: `test_check_results_are_machine_readable.py`, sourcing `./lib.sh`.
+- shell whose subject is python, 27 executable lines in 7 files: `lib.sh` 5,
+  `selftest/380` 8, `selftest/350` 5, `selftest/040` 3, `selftest/360` 3,
+  `selftest/370` 2, `selftest/030` 1.
+
+Not counted, because the rule permits them: `test_build_refusal.py` writes a fake
+`lib.sh` into a `tmp_path` and drives that, which is a fixture rather than a
+reference, and `conftest.py` names `lib.sh` only in a help string and a comment.
+
+None of that is fixed by this paragraph. It is written down so the next change to
+any of those files knows which direction it is expected to move, and so the count
+is falsifiable rather than a vague sense that some coupling exists.
+
+When you sweep for this yourself, do not write the pattern as `[a-z_]+\.sh`: it
+matches `sharedir`, and reported `pg_config --sharedir` calls as violations the
+first time this was counted.
+
 **A sequencing note that will stop being true.** As of 2026-09-09 the pytest
 harness is PR #897 and is not on `main`, so this rule cannot be satisfied for a
 test written today. Until it lands, write the `.sh` suite, write the pytest twin
