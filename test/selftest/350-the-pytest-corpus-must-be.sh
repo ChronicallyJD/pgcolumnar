@@ -137,6 +137,77 @@ check "a stated total that disagrees with disk is visible" \
 		| grep -oE '[0-9]+' | tr '\n' ' ' | sed 's/ $//')" = "$(_dcv_count "$_dcv_fix")" ] \
 		&& echo agrees || echo differs)" "agrees"
 
+
+# ---- and the sweep must go the OTHER way too (#908) -------------------------
+#
+# `_dcv_missing` above computes tests on disk the document fails to name. NOTHING
+# computed the reverse, so a test DELETED or RENAMED while its entry survived was
+# held by the totals line and by nothing else -- and that line is a merge target
+# whose correct value is a function of the merge, so it is the half most likely to
+# be removed. Removing it while this direction was uncovered would have retired a
+# check silently, which is the move this part exists to prevent.
+#
+# IT FOUND TWO ON THE SHIPPED CORPUS. Section 3 named
+# test_layer_rejects_an_absence_assertion_over_an_empty_plan and a control beside
+# it, and neither had ever been written; the real work lives in
+# test_guards_pinned.py under a different name and is documented correctly in its
+# own section. Two rows claimed coverage under names nobody had written.
+#
+# A BACKTICKED NAME, not any occurrence. This document discusses fixtures and dead
+# names in prose, and a bare-word sweep would report those as missing. Backticks
+# are how it already marks a real identifier, so backticking a name IS the claim
+# that it exists -- which is why the paragraph describing this defect writes the
+# dead names without them.
+
+_dcv_absent() {	# _dcv_absent DIR DOC -> "[]" or "[n: a b c]"
+	local dir="$1" doc="$2" name n=0 bad=""
+	local ondisk
+	# Every function and every file the corpus actually has, one per line.
+	ondisk="$( { grep -hoE '^def (test_[A-Za-z0-9_]+)' "$dir"/test_*.py 2>/dev/null \
+	               | sed 's/^def //'
+	             for f in "$dir"/test_*.py; do [ -f "$f" ] && printf '%s\n' "${f##*/}"; done
+	           } | sort -u )"
+	while IFS= read -r name; do
+		[ -n "$name" ] || continue
+		printf '%s\n' "$ondisk" | grep -qxF "$name" && continue
+		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $name"
+	done < <(grep -oE '`test_[A-Za-z0-9_]*(\.py)?`' "$doc" 2>/dev/null \
+	         | tr -d '`' | sort -u)
+	[ "$n" -eq 0 ] && { printf '[]'; return; }
+	printf '[%d:%s]' "$n" "$bad"
+}
+
+check "premise: the reverse sweep reads backticked names at all" \
+	"$([ "$(grep -coE '`test_[A-Za-z0-9_]*(\.py)?`' "$_dcv_doc")" -ge 20 ] \
+		&& echo enough || echo too-few)" "enough"
+
+check "every test the document names exists in the corpus" \
+	"$(_dcv_absent "$_dcv_dir" "$_dcv_doc")" "[]"
+
+# ---- and it must be able to FAIL, on a fixture rather than on the tree -------
+
+printf 'def test_alpha(expect):\n    pass\n' > "$_dcv_fix/test_one.py"
+
+printf '`test_one.py`: `test_alpha` and `test_beta`\n' > "$_dcv_fix/GHOST.md"
+check "a documented test that does not exist is named, not passed over" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/GHOST.md")" "[1: test_beta]"
+
+printf '`test_one.py`: `test_alpha`\n' > "$_dcv_fix/REAL.md"
+check "control: a document naming only what exists is clean" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/REAL.md")" "[]"
+
+printf '`test_one.py` and `test_gone.py`: `test_alpha`\n' > "$_dcv_fix/GONEFILE.md"
+check "a documented file that does not exist is named" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/GONEFILE.md")" "[1: test_gone.py]"
+
+# A name in prose without backticks is not a claim, so it must NOT be reported --
+# otherwise the document could never describe a test it removed.
+printf 'the old test_beta was removed; `test_alpha` remains\n' > "$_dcv_fix/PROSE.md"
+check "an unbackticked name in prose is not treated as a claim" \
+	"$(_dcv_absent "$_dcv_fix" "$_dcv_fix/PROSE.md")" "[]"
+
+unset -f _dcv_absent
+
 unset _dcv_dir _dcv_doc _dcv_seen _dcv_stated _dcv_fix
 unset -f _dcv_missing _dcv_count
 

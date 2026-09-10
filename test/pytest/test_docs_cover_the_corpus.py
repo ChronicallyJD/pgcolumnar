@@ -95,6 +95,83 @@ def test_every_file_and_test_is_named_in_the_document(expect):
                 "every test file and every test in the corpus is named in TESTS.md")
 
 
+def documented_but_absent(directory, doc):
+    """Names the DOCUMENT claims that the corpus does not have.
+
+    THE SWEEP ABOVE GOES ONE WAY ONLY. `undocumented()` computes tests on disk
+    that the document fails to name, and nothing computed the reverse. So a test
+    DELETED or RENAMED while its entry survived was caught by the totals line and
+    by nothing else -- and the totals line is a merge target whose correct value
+    is a function of the merge, so it is the half most likely to be removed
+    (#908). Removing it while this direction was uncovered would have retired a
+    check silently, which is the move this file exists to prevent.
+
+    Driven against the real functions, on the corpus that shipped:
+
+        on disk           (1, 1)      # test_one.py holds test_alpha
+        document states   (2, 1)      # "test_one.py: test_alpha and test_beta"
+
+        the NAMING arm  : []          <- says nothing is wrong
+        the TOTALS arm  : DISAGREE    <- the only arm that reddens
+
+    A BACKTICKED NAME, not any occurrence. The document discusses fixtures and
+    hypothetical tests in prose, and a bare-word sweep would report those as
+    missing. Backticks are how this document already marks a real identifier, and
+    the false-positive budget over the corpus was measured before this was
+    written rather than after: 127 backticked names, 2 of which were genuinely
+    absent, and both were real defects rather than noise.
+    """
+    found = corpus_tests(directory)
+    on_disk_fns = {n for names in found.values() for n in names}
+    on_disk_files = set(found)
+    named = set(re.findall(r"`(test_[A-Za-z0-9_]*(?:\.py)?)`", doc.read_text()))
+    bad = sorted({n for n in named if n.endswith(".py")} - on_disk_files) \
+        + sorted({n for n in named if not n.endswith(".py")} - on_disk_fns)
+    if not bad:
+        return "[]"
+    return "[%d:%s]" % (len(bad), "".join(" " + b for b in bad[:6]))
+
+
+def test_a_documented_test_that_does_not_exist_is_named(expect):
+    """The document must not claim a test the corpus does not have.
+
+    It did. `test_layer_rejects_an_absence_assertion_over_an_empty_plan` and its
+    control `..._allows_an_absence_assertion_over_a_real_plan` were named in the
+    test_layer.py section and existed nowhere: the work is real but lives in
+    test_guards_pinned.py as `test_plan_marker_refuses_an_absence_claim_over_an_empty_plan`,
+    and is documented correctly there. Two rows claimed coverage under names that
+    had never been written, and every other arm in this file passed over them --
+    which is the point.
+    """
+    expect.text(documented_but_absent(HERE, DOC), "[]",
+                "every test the document names exists in the corpus")
+
+
+def test_a_document_naming_a_test_that_was_deleted_is_caught(tmp_path, expect):
+    """The removal proof, on a fixture: the shape the real defect had.
+
+    Without this the arm above passes on a healthy tree, which is exactly what an
+    arm that computes nothing also does.
+    """
+    (tmp_path / "test_one.py").write_text("def test_alpha(expect):\n    pass\n")
+    doc = tmp_path / "DOC.md"
+    doc.write_text("**1 tests in 1 files.**\n`test_one.py`: `test_alpha` and `test_beta`\n")
+    expect.text(documented_but_absent(tmp_path, doc), "[1: test_beta]",
+                "a documented test that does not exist is named, not passed over")
+    doc.write_text("**1 tests in 1 files.**\n`test_one.py`: `test_alpha`\n")
+    expect.text(documented_but_absent(tmp_path, doc), "[]",
+                "control: a document naming only what exists is clean")
+
+
+def test_a_documented_file_that_does_not_exist_is_caught(tmp_path, expect):
+    """A whole file can go the same way, and it is how a rename usually shows up."""
+    (tmp_path / "test_one.py").write_text("def test_alpha(expect):\n    pass\n")
+    doc = tmp_path / "DOC.md"
+    doc.write_text("`test_one.py` and `test_gone.py`: `test_alpha`\n")
+    expect.text(documented_but_absent(tmp_path, doc), "[1: test_gone.py]",
+                "a documented file that does not exist is named")
+
+
 def test_the_stated_totals_are_the_totals_on_disk(expect):
     """Neither arm above would catch a wrong count: a document can name every test
     and still miscount them, which is exactly what the stale header did."""
