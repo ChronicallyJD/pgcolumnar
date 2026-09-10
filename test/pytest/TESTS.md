@@ -61,9 +61,10 @@ behaviour, the source of that number is named.
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
 - [14. test_suite_accounting.py: the matrix accounting for its own suites](#14-test_suite_accountingpy-the-matrix-accounting-for-its-own-suites)
 - [15. test_check_results_are_machine_readable.py: one counter, one record](#15-test_check_results_are_machine_readablepy-one-counter-one-record)
-- [16. Adding a test](#16-adding-a-test)
-- [17. What this corpus does NOT yet refuse](#17-what-this-corpus-does-not-yet-refuse)
-- [18. Traps this corpus records](#18-traps-this-corpus-records)
+- [16. test_mutation_ledger.py: which checks have ever been red](#16-test_mutation_ledgerpy-which-checks-have-ever-been-red)
+- [17. Adding a test](#17-adding-a-test)
+- [18. What this corpus does NOT yet refuse](#18-what-this-corpus-does-not-yet-refuse)
+- [19. Traps this corpus records](#19-traps-this-corpus-records)
 
 ## 1. How to read a test in here
 
@@ -1209,7 +1210,93 @@ a helper that prints an outcome without recording it. A log with no count at all
 reached its summary -- a different fault from a miscount, and not a clean
 reconciliation.
 
-## 16. Adding a test
+## 16. test_mutation_ledger.py: which checks have ever been red
+
+Nothing recorded whether a check had ever been red. That is the gap that let **39
+checks across 35 suites** ship unable to fail, three of them inside the suite whose
+whole purpose is to stop exactly that. The gate answered *did anything print FAIL* and
+had never answered *could anything print FAIL*.
+
+### What this ledger claims, and what it does not
+
+It records that a named check **was observed red in a recorded run**. It does **not**
+claim the check is proven able to fail — that is a stronger statement, it needs a named
+mutation applied deliberately, and conflating the two would put a claim in the ledger
+that nothing measured. That is the `defeated: 0` shape from `VACUITY_MODES` section 1: a
+number that reads as evidence and is not.
+
+So v1 fills the observed column honestly and leaves the rest as debt, counted. **Every
+entry currently reads `never`**, and that is the finding rather than an embarrassment: a
+ledger of all-`never` is a measurement of how much of the corpus has never been
+attacked.
+
+### What fills it
+
+Not only deliberate mutation runs. Every real CI red fills it, every flake, every
+bisect — and those arrive whether anyone remembers to run something or not. A mutation
+run is the deliberate accelerator, not the only source.
+
+### The format
+
+```
+suite <TAB> check name <TAB> last observed red <TAB> mutation
+```
+
+`last observed red` is a date or the literal `never`. The **mutation column exists from
+v1 with nothing filling it automatically**, because adding a column later means
+rewriting every entry — and if an entry can record *which* mutation reddened a check,
+the catalogue a mutation gate would need builds itself out of work people already do by
+hand.
+
+Two tracked files carry the debt, `test/check_ledger.tsv` and
+`test/check_ledger_budget.txt`, so a change to either is a diff a reviewer sees.
+`PGC_SKIP_TIMING` is the precedent for why it is not an environment variable: set in two
+workflow files, it suppressed whole suites for months and no diff ever showed it.
+
+### `test_a_green_run_records_debt_and_never_a_red_observation`
+
+The arm that matters most. A green run has seen nothing go red, so merging one must
+never record a red observation — otherwise an ordinary CI run retires the debt the
+ledger exists to count.
+
+### `test_a_red_observation_is_dated_and_survives_a_later_green_run`
+
+The ledger records that a check **was** seen red, which stays true.
+
+### `test_the_mutation_column_exists_from_v1`
+
+Empty when nothing named a mutation; recorded against the check that reddened and not
+against one that stayed green.
+
+### `test_a_rename_is_reported_rather_than_silently_resetting_history`
+
+Keyed by the display string, a rename loses the check's history and reads exactly like a
+brand-new check that has never been red — the one state this ledger exists to
+distinguish. It cannot be prevented without a synthetic id someone would have to
+maintain, so it is **detected**: a name that appeared while another disappeared is
+named. Both directions are required, or every new check is reported as a rename and the
+whole thing gets ignored.
+
+### `test_a_duplicated_check_name_shares_one_row_and_is_reported`
+
+Two checks with the same name in one suite share a ledger row, so one going red marks
+**both** as observed red — a claim about a check nothing attacked. Reported rather than
+prevented, for the same reason as the rename. The real corpus carries four today, which
+is how this was noticed: 609 records reduced to 605 rows.
+
+### `test_the_gate_refuses_a_check_the_ledger_has_never_seen`
+
+A gate that fails on 3,762 unledgered sites is one somebody disables under deadline, and
+then we are back at `PGC_SKIP_TIMING` with extra steps. The budget grandfathers what
+exists; a new check must not enter as silent debt.
+
+### `test_the_committed_ledger_and_budget_agree`
+
+If they disagree, one was edited by hand. `suites_not_covered` is counted separately so
+that "we ledger 605 checks" cannot read as "we ledger the corpus" — 250 of 251 suites
+have no rows at all.
+
+## 17. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -1236,7 +1323,7 @@ reconciliation.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 17. What this corpus does NOT yet refuse
+## 18. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 25
@@ -1248,7 +1335,7 @@ Read it before adding a test. The gaps most likely to affect a new test are that
 same family satisfies it, and that a write is not required to have written anything.
 Both are named there with the refusal each needs.
 
-## 18. Traps this corpus records
+## 19. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.
