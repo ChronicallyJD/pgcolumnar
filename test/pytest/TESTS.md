@@ -60,12 +60,14 @@ behaviour, the source of that number is named.
 - [12. test_saop_element_pushdown.py: scattered set pruning](#12-test_saop_element_pushdownpy-scattered-set-pruning)
 - [13. test_hilbert_locality.py: what the Hilbert curve buys](#13-test_hilbert_localitypy-what-the-hilbert-curve-buys)
 - [14. test_suite_accounting.py: the matrix accounting for its own suites](#14-test_suite_accountingpy-the-matrix-accounting-for-its-own-suites)
-- [15. Adding a test](#15-adding-a-test)
-- [16. What this corpus does NOT yet refuse](#16-what-this-corpus-does-not-yet-refuse)
-- [17. Traps this corpus records](#17-traps-this-corpus-records)
-- [18. test_raises_sqlstate.py: which error, and which statement](#18-test_raises_sqlstatepy-which-error-and-which-statement)
-- [19. test_failed_query_sentinel.py: a failed query is not a comparison](#19-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
-- [20. test_check_results_are_machine_readable.py: one counter, one record](#20-test_check_results_are_machine_readablepy-one-counter-one-record)
+- [15. test_harness_deps.py: the harness must self-test without a database](#15-test_harness_depspy-the-harness-must-self-test-without-a-database)
+- [16. test_harness_deps_classifier.py: the classifier, in the file the gate runs](#16-test_harness_deps_classifierpy-the-classifier-in-the-file-the-gate-runs)
+- [17. Adding a test](#17-adding-a-test)
+- [18. What this corpus does NOT yet refuse](#18-what-this-corpus-does-not-yet-refuse)
+- [19. Traps this corpus records](#19-traps-this-corpus-records)
+- [20. test_raises_sqlstate.py: which error, and which statement](#20-test_raises_sqlstatepy-which-error-and-which-statement)
+- [21. test_failed_query_sentinel.py: a failed query is not a comparison](#21-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
+- [22. test_check_results_are_machine_readable.py: one counter, one record](#22-test_check_results_are_machine_readablepy-one-counter-one-record)
 
 ## 1. How to read a test in here
 
@@ -1182,7 +1184,169 @@ reproduces on long files and not short ones -- it passed every fixture and faile
 on the real population, naming two of the longest suites. Selftest 040 carries the same
 story from #473 and #476.
 
-## 15. Adding a test
+## 15. test_harness_deps.py: the harness must self-test without a database
+
+`conftest.py` imported psycopg at module scope, and conftest is imported before
+every run, so a **database driver was a hard requirement of the whole corpus** --
+including every test that never opens a connection. With psycopg absent the run
+did not fail a test, it failed to COLLECT:
+
+    ImportError while loading conftest '.../conftest.py'
+    conftest.py:15: in <module>
+        import psycopg
+    E   ModuleNotFoundError: No module named 'psycopg'
+
+With the import deferred into the two fixtures that connect, the database-free
+files run and pass with no driver installed; with it at module scope, none of them
+do. That coupling is half of why the guard-testing part of this corpus cannot run
+where the gate runs (README.md, "This is not in the gate yet").
+
+**WHICH FILES NEED NO DATABASE IS DECIDED, NOT DECLAIMED.** `NO_CLUSTER` in that
+module is the declaration, and the gate's job runs exactly it. The property is
+computed from the corpus by an ast walk, and the two must agree in BOTH
+directions.
+
+The missing direction was the one that loses coverage. The only arm over the list
+asked whether the files it names EXIST, so a database-free file nobody added was
+simply absent from the job: every arm stayed green and nothing said so. It had
+already happened twice -- `test_build_refusal.py` and `test_layer.py` both need no
+database and neither was listed -- and a concurrent branch adds a third. A floor of four on the list length did not help: the list had four
+entries, so the floor was satisfied by the state it was meant to police.
+
+AN AST WALK RATHER THAN A LINE REGEX, because three shapes here defeat a grep: a
+file may name the driver in a docstring, discuss a cluster fixture in prose, or
+BUILD another test as a string for `pytester`. This layer has already paid for that
+lesson once -- the broad-except refusal was first written as a line regex and
+rejected its own tests, because the forbidden shape appears inside a
+`makepyfile` string.
+
+AND NEEDING A DATABASE IS NOT IMPORTING THE DRIVER. A test reaches a cluster
+through a FIXTURE and may import nothing, so a file is cluster-bound if it imports
+the driver at module scope (which kills collection outright), if any test or
+fixture in it requests -- directly or transitively -- a fixture that reaches a
+cluster, or if it DRIVES a cluster-bound file as a subprocess. The connecting
+fixtures are read off `conftest.py` rather than named in the classifier.
+
+| test | asserts |
+| --- | --- |
+| `test_the_guard_half_of_the_corpus_runs_without_a_database_driver` | the no-cluster files collect and pass with `import psycopg` shimmed to raise |
+| `test_a_cluster_test_still_needs_the_driver` | **control**: deferring made the IMPORT lazy, not the database optional |
+| `test_conftest_imports_no_database_driver_at_module_scope` | the regression named in one line, for whoever edits conftest next |
+| `test_the_declaration_is_exactly_the_database_free_half` | `NO_CLUSTER` equals the property, both ways, so an undeclared database-free file is named |
+| `test_the_partition_accounts_for_every_file_in_the_corpus` | **premise**: every file lands in exactly one bucket, and neither bucket is the whole corpus |
+| `test_the_cluster_fixtures_are_read_off_conftest_rather_than_named_here` | the roots of the property are derived from `conftest.py`, not typed |
+| `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control, over a fixture corpus |
+| `test_the_classifier_follows_a_cluster_fixture_through_a_local_wrapper` | a module-local fixture wrapping `pgc_cluster` is followed |
+| `test_the_classifier_catches_a_module_scope_driver_import` | an eager import kills collection, so the file cannot run in the job |
+| `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver` | a docstring, a block-comment string, a generated test, and a file merely discussed |
+| `test_the_classifier_takes_a_fixture_that_provisions_without_connecting` | the second signal, isolated: a fixture that starts a cluster and imports no driver |
+| `test_the_classifier_follows_a_conftest_fixture_that_connects_indirectly` | a conftest fixture reaching a cluster through a sibling, importing nothing itself |
+| `test_the_classifier_does_not_read_a_helpers_parameter_as_a_fixture` | pytest resolves names for tests and fixtures, not for helpers |
+| `test_the_classifier_follows_a_file_that_drives_a_cluster_bound_file` | this file's own shape: driving a cluster-bound file inherits what it needs |
+| `test_the_membership_report_names_a_database_free_file_left_undeclared` | the hole itself, on a fixture, with the control beside it |
+| `test_the_membership_report_names_a_declared_file_that_needs_a_cluster` | the other direction: a listed file that starts using a cluster fixture |
+| `test_the_membership_report_names_a_declared_file_that_is_gone` | a rename is still caught, and as its own kind rather than as a cluster need |
+| `test_the_gate_runs_the_membership_decision_rather_than_only_this_file` | selftest 350 runs the decision, and the command line it uses works |
+| `test_ci_derives_the_file_list_rather_than_repeating_it` | the CI job asks this module for `NO_CLUSTER`, names no file literally, and states no count |
+| `test_the_job_installs_no_database_driver` | the job asserts psycopg is absent rather than assuming it |
+
+**THIS IS NOW IN THE GATE.** `.github/workflows/ci.yml` runs a `pytest-guards`
+job: no database, no build, an interpreter and the two pinned runner packages.
+The file list is derived from `NO_CLUSTER` in this module and the pins from
+`requirements-test.txt`, so neither is a second copy that can go stale -- and
+three arms above hold it to that. **The job states no count and neither does this
+section**: it prints how many files it ran and pytest prints how many tests
+passed, so the numbers reach a reader from the run. A written count is a
+hand-maintained derived value, and the one in the job's comment was wrong the day
+it was written (#908).
+
+BUT THE ARMS IN THIS FILE DO NOT RUN IN THE GATE, and that is why
+`test/selftest/350-the-pytest-corpus-must-be.sh` runs the membership decision
+through this module's command line. The corpus is not in `SUITES` (README.md), and
+the `pytest-guards` job runs the database-free files -- which this file is not,
+because its control arm needs a real cluster. A guard that does not run is a
+comment, so the decision has a copy with teeth, exactly as the documentation
+sweep in that part does.
+
+A SHIM RATHER THAN AN UNINSTALL. Uninstalling psycopg would test the machine
+rather than the harness, could not run beside anything else, and would leave the
+environment broken if the test died. A module that raises on import, first on the
+path, is the same observation and reversible by construction. Both behavioural
+arms assert the shim actually bites before believing anything it produces.
+
+## 16. test_harness_deps_classifier.py: the classifier, in the file the gate runs
+
+`test_harness_deps.py` defines the classifier that decides which files the
+`pytest (harness guards, no database)` job runs — and that file is itself classified
+cluster-bound, correctly, because it hands real cluster-bound file names to pytest in
+a subprocess. So the job's file list is `NO_CLUSTER`, and the code that computes
+`NO_CLUSTER` was the one thing the job never ran.
+
+@linuxhikerpm measured the consequence: disabling transitive conftest-fixture closure
+left shell selftest 350 green and every CI-selected test passing, and only the excluded
+targeted test failed. A load-bearing branch could break with both real gates green.
+
+These arms drive a corpus they write in `tmp_path` and read nothing from the real tree,
+so this file needs no database and is declared in `NO_CLUSTER`. It imports the
+classifier as a **library**, which does not make it cluster-bound: the propagation rule
+reads string constants naming corpus files, not imports.
+
+### The classifier's branches
+
+| test | what it asserts |
+| --- | --- |
+| `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control |
+| `test_the_classifier_follows_a_cluster_fixture_through_a_local_wrapper` | a local fixture wrapping a conftest root |
+| `test_the_classifier_catches_a_module_scope_driver_import` | importing the driver at module scope is enough |
+| `test_the_classifier_is_not_fooled_by_prose_that_names_the_driver` | a docstring naming psycopg is not an import |
+| `test_the_classifier_takes_a_fixture_that_provisions_without_connecting` | a fixture that provisions but never connects is still a root |
+| `test_the_classifier_follows_a_conftest_fixture_that_connects_indirectly` | the transitive closure inside conftest, which is the branch that was ungated |
+| `test_the_classifier_does_not_read_a_helpers_parameter_as_a_fixture` | a helper's parameter is not a request |
+| `test_the_classifier_follows_a_file_that_drives_a_cluster_bound_file` | driving another file inherits what it needs |
+
+### Ordinary pytest dependency forms
+
+The classifier read module-level `def`s and positional parameters. pytest resolves a
+fixture through five more shapes, and @linuxhikerpm built a direct fixture in each:
+every one was classified database-free and then failed under the no-driver shim.
+Measured against the classifier as it was:
+
+| form | before | after |
+| --- | --- | --- |
+| a test method inside a class | **free** | bound |
+| `@pytest.mark.usefixtures` | **free** | bound |
+| a keyword-only fixture parameter | **free** | bound |
+| `request.getfixturevalue` | **free** | bound |
+| an aliased cluster root in `conftest.py` | **free** | bound |
+| module-level positional | bound | bound |
+
+The fifth needed a shape the review did not give. An alias on the *test* side is caught
+anyway, because the underlying fixture still takes the root positionally; it is an alias
+on the **root**, in conftest, that hides it — the root was recorded under the def's name
+while a test requests it under the alias. Measured: `roots=['_mk']` before, `roots=['conn']` after.
+
+`request.getfixturevalue` is not supported and not banned. The name is computed at run
+time, so no AST can resolve it, and such a file is classified **cluster-bound** —
+wrong in the direction that costs CI time rather than the direction that greens a gate
+over tests nothing ran.
+
+| test | what it asserts |
+| --- | --- |
+| `test_a_test_method_inside_a_class_is_a_fixture_request` | pytest collects `test_*` methods of a class |
+| `test_usefixtures_is_a_fixture_request_without_a_parameter` | a dependency with no parameter |
+| `test_a_keyword_only_parameter_is_a_fixture_request` | `def test_x(*, pgc_conn)` |
+| `test_a_dynamic_request_is_treated_as_cluster_bound` | unresolvable means conservative, not free |
+| `test_an_aliased_cluster_root_is_found_under_the_name_tests_request` | the root is read under its requestable name |
+| `test_a_plain_test_and_a_helpers_parameter_stay_database_free` | the cost side: a rule that calls everything bound would empty the gate |
+| `test_usefixtures_on_a_class_reaches_its_methods` | pytest applies a class decorator to every method, which is the form class-method descent exists to serve |
+| `test_a_module_level_pytestmark_reaches_every_test` | `pytestmark = pytest.mark.usefixtures(...)` is a dependency of every test in the file and of no signature |
+| `test_a_pytestmark_written_as_a_list_reaches_every_test_too` | the list form is what a file uses once it has two marks |
+| `test_an_unrelated_class_decorator_does_not_bind_anything` | the cost side: only `usefixtures` is a dependency, or every parametrised class would be cluster-bound |
+| `test_a_file_whose_generated_tests_import_the_driver_is_driver_dependent` | cluster-free and still unrunnable where there is no driver, so the job's list is the intersection of two properties |
+| `test_a_file_that_only_PARSES_a_driver_import_is_job_runnable` | the control: a driver import in a string nothing runs is not a dependency, and reading only the string would exclude this very file |
+| `test_prose_naming_the_driver_is_not_a_driver_dependency` | a docstring naming psycopg is a sentence about code |
+
+## 17. Adding a test
 
 0. **Write it twice.** Every test in this tree ships as a `.sh` suite and a pytest
    test **in the same change** (jd, 2026-09-09). Not ported later, not one or the
@@ -1209,7 +1373,7 @@ story from #473 and #476.
    failed the selftest on both majors of the matrix, which is how it was found. A
    new directory under `test/` inherits every rule the old ones follow.
 
-## 16. What this corpus does NOT yet refuse
+## 18. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
 asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 27
@@ -1230,7 +1394,7 @@ setup, and a compound statement such as a `for` holding the setup and the statem
 under test. Both are pinned by arms that assert the scan reports nothing on them, and
 `VACUITY_MODES.md` section 3.4 says what would close the mode.
 
-## 17. Traps this corpus records
+## 19. Traps this corpus records
 
 Recorded because each one produced a confident wrong result before it was caught,
 and all are the same family as the defect the layer exists to prevent.
@@ -1262,7 +1426,7 @@ process. Walking `/proc/<pid>/cmdline` is the reliable instrument.
 `test_one_tree_hashes_one_way_however_the_locale_is_set` requires one tree to
 give one fingerprint across every installed locale.
 
-## 18. test_raises_sqlstate.py: which error, and which statement
+## 20. test_raises_sqlstate.py: which error, and which statement
 
 Numbered 17 rather than inserted after section 4, where a reader looking for a
 per-file section would expect it. Renumbering twelve headings and their Contents
@@ -1389,7 +1553,7 @@ one condition faithfully, and require the copy to go blind.
 | `test_disabling_the_sqlstate_rule_makes_the_scan_blind` | the neutering proof: a copy of the layer with `False and` prefixed, nothing renamed, goes blind while still containing the pinned text |
 | `test_disabling_the_statement_rule_makes_the_scan_blind` | the same for the second condition, so neither rule rests on the other's arm |
 | `test_the_mode_this_layer_only_narrows_is_still_listed_as_open` | `raises-catches-setup` must stay in section 3 of the mode inventory |
-## 19. test_failed_query_sentinel.py: a failed query is not a comparison
+## 21. test_failed_query_sentinel.py: a failed query is not a comparison
 
 `error-swallowed-to-empty`: two queries raise, a helper turns each into the same
 value, and they compare equal. The test is green and has asserted nothing about
@@ -1449,7 +1613,7 @@ mutations leave the file the same size and Python reuses the stale bytecode. Wit
 `rm -rf __pycache__` between runs, mutations 3, 4 and 5 report the same failure and
 the table reads as though two refusals did not bite.
 
-## 20. test_check_results_are_machine_readable.py: one counter, one record
+## 22. test_check_results_are_machine_readable.py: one counter, one record
 
 Check results were prose. `check`, `check_num` and `check_text` printed `PASS` or
 `FAIL` and nothing else, so proving that a mutation reddened one **named** check meant
