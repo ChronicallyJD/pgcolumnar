@@ -33,6 +33,12 @@ PGC_FAIL=0
 # 3,762 forks a suite does not need.
 PGC_SUITE="$(basename "$0" .sh)"
 PGC_CHECKS=0
+# A FOURTH OUTCOME. A check deliberately not asked -- a wall-clock measurement on
+# a shared runner under PGC_SKIP_TIMING -- is not a pass, not a failure, and not
+# unrunnable. It is counted, so `checks run:` reports the checks a suite
+# ENCOUNTERED rather than the ones it managed to evaluate, and pgc_summary
+# reconciles four counters against that count instead of three.
+PGC_SKIPPED=0
 
 # The status pgc_summary uses for "ran no checks".
 #
@@ -989,10 +995,18 @@ psql_file() {
 # stays byte-identical: suites, selftests and CI all grep `^PASS` and `^FAIL`,
 # and 3,762 call sites is far past what a careful refactor can be trusted on.
 #
-# The record is tab separated -- suite, name, verdict, reason -- so a check name
-# containing spaces survives, and the reason carries the REASON_CODE #915
-# introduced. That is what makes this more than a reformat: an unrunnable check
-# is distinguishable from a passing one without parsing prose.
+# The record is tab separated, five columns after the RESULT marker:
+#
+#     RESULT <TAB> suite <TAB> part <TAB> name <TAB> verdict <TAB> reason
+#
+# so a check name containing spaces survives. The reason carries the REASON_CODE
+# #915 introduced, which is what makes this more than a reformat: an unrunnable
+# check is distinguishable from a passing one without parsing prose. The verdict
+# is one of PASS, FAIL, UNRUN or SKIP.
+#
+# There is no mutation column here. That one belongs to the LEDGER (#918), which
+# keys on (suite, part, name) and records which mutation reddened a check; a
+# record is one observation, not a history.
 pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	local _v="$1" _name="$2" _display="$3" _reason="${4:-}"
 	PGC_CHECKS=$((PGC_CHECKS + 1))
@@ -1000,12 +1014,13 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 		PASS)  PGC_PASSED=$((PGC_PASSED + 1)) ;;
 		FAIL)  PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1 ;;
 		UNRUN) PGC_UNRUN=$((PGC_UNRUN + 1)) ;;
+		SKIP)  PGC_SKIPPED=$((PGC_SKIPPED + 1)) ;;
 		*)
 			# An unknown verdict is a failure of the harness, not a check to
 			# drop. Dropping it would leave PGC_CHECKS bumped with no outcome
 			# recorded, which is the reconciliation failure pgc_summary refuses.
 			PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1
-			_display="FAIL  $_name: pgc_record was given the verdict [$_v], which is not PASS, FAIL or UNRUN"
+			_display="FAIL  $_name: pgc_record was given the verdict [$_v], which is not PASS, FAIL, UNRUN or SKIP"
 			_v=FAIL
 			;;
 	esac
@@ -1242,7 +1257,12 @@ check_timing() {
 	local name="$1" got="$2" want="$3"
 
 	if [ "${PGC_SKIP_TIMING:-0}" = 1 ]; then
-		echo "SKIP  $name (PGC_SKIP_TIMING: wall-clock measurement)"
+		# Counted and recorded, like every other outcome. It printed a line a
+		# reader sees; leaving PGC_CHECKS at zero made that outcome invisible to
+		# the count and to the records both (#917, found by @linuxhikerpm).
+		pgc_record SKIP "$name" \
+			"SKIP  $name (PGC_SKIP_TIMING: wall-clock measurement)" \
+			"PGC_SKIP_TIMING"
 		return 0
 	fi
 	check "$name" "$got" "$want"
@@ -1284,7 +1304,9 @@ check_timing() {
 # same-run ratio) and nothing said it here, where it is decided (#787).
 check_ratio_needs_quiet_machine() {  # <name> <a> <b> <bound>
 	if [ "${PGC_SKIP_TIMING:-0}" = 1 ]; then
-		echo "SKIP  $1 (PGC_SKIP_TIMING: wall-clock ratio)"
+		pgc_record SKIP "$1" \
+			"SKIP  $1 (PGC_SKIP_TIMING: wall-clock ratio)" \
+			"PGC_SKIP_TIMING"
 		return 0
 	fi
 	check_ratio "$@"
@@ -1561,7 +1583,7 @@ pgc_skip() {  # pgc_skip <capability> <message>
 # did one level up for how many VERSIONS actually ran.
 pgc_summary() {
 	local _failed=$PGC_FAILED
-	local _sum=$((PGC_PASSED + PGC_FAILED + PGC_UNRUN))
+	local _sum=$((PGC_PASSED + PGC_FAILED + PGC_UNRUN + PGC_SKIPPED))
 	echo
 	echo "checks run: $PGC_CHECKS"
 	echo "checks unrunnable: $PGC_UNRUN"
@@ -1569,7 +1591,7 @@ pgc_summary() {
 	# go missing, and this harness has 3,762 check sites -- far past what anyone
 	# notices by reading. If this line does not add up the harness is lying about
 	# its own arithmetic, so it is a failure rather than a note.
-	echo "accounting: $PGC_PASSED passed + $_failed failed + $PGC_UNRUN unrunnable = $PGC_CHECKS"
+	echo "accounting: $PGC_PASSED passed + $_failed failed + $PGC_UNRUN unrunnable + $PGC_SKIPPED skipped = $PGC_CHECKS"
 	# A MEASUREMENT, not an identity. The failed count is its own counter rather
 	# than CHECKS - PASSED - UNRUN, because a derived third term makes
 	# P + (N-P-U) + U = N true for ANY values: a helper that counts a check and
@@ -1579,9 +1601,9 @@ pgc_summary() {
 	# line could not see it. Three counters maintained independently, reconciled
 	# against a fourth, is the only version of it that can fail.
 	if [ "$_sum" != "$PGC_CHECKS" ]; then
-		echo "FAIL  the summary does not reconcile: $PGC_PASSED passed + $PGC_FAILED failed + $PGC_UNRUN unrunnable = $_sum, but $PGC_CHECKS checks ran"
+		echo "FAIL  the summary does not reconcile: $PGC_PASSED passed + $PGC_FAILED failed + $PGC_UNRUN unrunnable + $PGC_SKIPPED skipped = $_sum, but $PGC_CHECKS checks ran"
 		echo "      A check was counted whose outcome nothing recorded. Find the helper"
-		echo "      that bumps PGC_CHECKS without touching PGC_PASSED, PGC_FAILED or PGC_UNRUN."
+		echo "      that bumps PGC_CHECKS without touching PGC_PASSED, PGC_FAILED, PGC_UNRUN or PGC_SKIPPED."
 		PGC_FAIL=1
 	fi
 	if [ "$PGC_FAIL" != "0" ]; then
@@ -1617,7 +1639,11 @@ pgc_summary() {
 		fi
 		exit 1
 	fi
-	if [ "$PGC_CHECKS" = "0" ]; then
+	# EVALUATED nothing, not ENCOUNTERED nothing. Before the fourth counter a
+	# skipped check left PGC_CHECKS at zero, so this branch caught the all-skipped
+	# suite by accident; now it is counted, and the suite would report PASSED with
+	# nothing behind it. The condition is what it always meant.
+	if [ "$((PGC_PASSED + PGC_FAILED + PGC_UNRUN))" = "0" ]; then
 		echo "$(basename "$0"): SKIPPED (ran no checks)"
 		exit $PGC_EXIT_SKIPPED
 	fi

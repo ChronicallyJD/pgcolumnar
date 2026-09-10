@@ -18,6 +18,40 @@ true until the next version shipped.
 
 ### Added
 
+- Every check result is machine-readable, and counting a check is the same
+  operation as recording it (#917).
+
+  `check`, `check_num` and `check_text` printed `PASS` or `FAIL` and nothing
+  else, so proving that a mutation reddened one NAMED check meant grepping prose
+  and retyping the result. That is also how a reverted guard once reported plain
+  green while the check count fell from 190 to 186: the suite passed, and the only
+  evidence anything had changed was a number nobody compared.
+
+  `lib.sh` had eleven places that bumped `PGC_CHECKS`, each with its own outcome
+  line beside it, which is eleven chances to add a twelfth and forget the line.
+  `projections.sh` did exactly that with an `expect_fail` at ten call sites, for
+  as long as it existed. There is now one, `pgc_record`, so a helper cannot report
+  an outcome without being counted and cannot be counted without reporting one.
+  Every human line is byte-identical; 3,762 call sites is past what a careful
+  refactor can be trusted on, so both harnesses pin the exact strings.
+
+  Each record names the suite, the part, the check, the verdict and the reason.
+  The part matters because `harness_selftest` sources 40-odd parts into one shell
+  and phrases its premises to be copied, so a key of suite and name is a key of
+  check NAMES rather than of checks: 583 records give 579 distinct pairs against
+  582 distinct triples. It is derived from `BASH_SOURCE`, not from a convention.
+
+  A skipped wall-clock check is a fourth counted outcome. Under
+  `PGC_SKIP_TIMING`, `check_timing` and `check_ratio_needs_quiet_machine` printed
+  a `SKIP` line a reader sees while leaving the count at zero and emitting no
+  record, in branches no arm reached. `checks run:` now reports the checks a suite
+  encountered rather than the ones it evaluated, and the summary reconciles four
+  counters against it. A suite that skipped every check reports `SKIPPED` rather
+  than `PASSED`, which the old zero-check condition caught only by accident.
+
+  The matrix reconciles each suite's records against the count its log states, and
+  names the cause rather than the arithmetic: more records than counted is a check
+  that ran in a subshell, fewer is a counter bumped outside `pgc_record`.
 - A ledger of which checks have ever been seen red, and under what (#918).
 
   Nothing recorded it. That is the gap that let 39 checks across 35 suites ship

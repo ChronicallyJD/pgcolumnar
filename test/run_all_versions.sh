@@ -933,7 +933,7 @@ pgc_log_shows_accounting() {	# pgc_log_shows_accounting LOGFILE -> yes|no
 	# of thing that reads as an oversight later.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
-	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log"; then
+	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+$' "$_log"; then
 		echo yes
 	else
 		echo no
@@ -963,6 +963,20 @@ pgc_reconcile_records() {	# pgc_reconcile_records LOGFILE -> 0 ok, 1 mismatch
 	fi
 	if [ "$_records" != "$_stated" ]; then
 		echo "    records=$_records but the log states checks run: $_stated"
+		# NAME THE CAUSE, not just the arithmetic. The two directions have
+		# different causes and a reader who has not met either has no route from
+		# a pair of numbers to the defect. Raised by OffgridwithJD.
+		if [ "$_records" -gt "$_stated" ]; then
+			echo "      $((_records - _stated)) check(s) reported an outcome the count never saw:"
+			echo "      a check ran in a subshell, so its counter bump died with it while its"
+			echo "      outcome and record still reached the log. The usual shape is a check"
+			# The example is ASSEMBLED, not written out: spelling the shape here
+			# made the sweep in selftest 400 flag this very line.
+			printf '      inside a piped loop -- `cmd %s while read x; do check ...; done`.\n' '|'
+		else
+			echo "      $((_stated - _records)) check(s) were counted without emitting a record:"
+			echo "      something bumped PGC_CHECKS without going through pgc_record."
+		fi
 		return 1
 	fi
 	return 0
@@ -979,9 +993,20 @@ pgc_log_shows_any_accounting() {	# pgc_log_shows_any_accounting LOGFILE -> yes|n
 	# Both are runtime-observable and derived rather than declared, so a suite
 	# that adopts either mechanism leaves the debt bucket on its own -- which is
 	# the property that keeps the debt file from becoming a permission slip.
+	# A HALF-MERGE WOULD BE CONFUSING RATHER THAN LOUD, and it is worth knowing
+	# which way. The `checks run:` alternative below answers YES to an accounting
+	# line of ANY shape, so it MASKS a change to that line: if the producer ever
+	# moved without this file, the population reconciliation would stay green
+	# while pgc_log_shows_accounting broke and the accounting reconciliation
+	# reddened. Two checks disagreeing about the same log is a worse signal than
+	# either failing.
+	#
+	# It cannot happen inside one tree -- producer and both readers move in the
+	# same commit -- so this is a note about what to look for, not a defect.
+	# Raised by OffgridwithJD while verifying the four-term shape change.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
-	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log" || true)" != 0 ] \
+	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+$' "$_log" || true)" != 0 ] \
 		|| [ "$(grep -cE '^checks run: [0-9]+$' "$_log" || true)" != 0 ]; then
 		echo yes
 	else
@@ -1332,11 +1357,31 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		echo "  the ledger is missing from the tree under test, which is not a pass"
 		verfail=1
 	else
+		# WHICH REF THE CEILING IS COMPARED AGAINST, chosen here and printed,
+		# because the two candidates enforce different things and a silent
+		# fallback would be the shape this gate exists to refuse.
+		#
+		# origin/main is the real property: a branch may not RAISE the ceiling
+		# relative to what is already on main. HEAD only catches a raise made in
+		# the working tree since the last commit, which is worth having locally
+		# and is much weaker.
+		#
+		# The tool fails closed when it cannot read the prior, so an unresolvable
+		# ref would redden rather than pass. Choosing here means the fallback is a
+		# decision someone can see rather than an error someone has to diagnose.
+		if git -C "$builddir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
+			_led_ref=origin/main
+		else
+			_led_ref=HEAD
+			echo "  origin/main does not resolve here, so the ledger ceiling is"
+			echo "  compared against HEAD: that catches an uncommitted raise only"
+		fi
 		# shellcheck disable=SC2086
 		if ! python3 "$builddir/test/pgc_ledger.py" gate \
 			--ledger "$builddir/test/check_ledger.tsv" \
 			--budget "$builddir/test/check_ledger_budget.txt" \
 			--registered "$_acc_registered" \
+			--against "$_led_ref" \
 			$_led_logs; then
 			echo "  PG$major has a check the ledger has never seen, which is not a pass"
 			verfail=1

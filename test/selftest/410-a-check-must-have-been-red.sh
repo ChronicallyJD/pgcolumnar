@@ -282,3 +282,93 @@ check "once the suite is covered, a new check in it IS refused" \
 check "and it is the new one that is named, not the one already ledgered" \
 	"$(_led_run gate --ledger "$_lw/g.tsv" --budget "$_lw/gb2.txt" --registered "$_lw/reg_both" "$_lw/other2.log" \
 		| grep -c 'not in the ledger: other	partX	newly added')" "1"
+
+# ---- the monotone check, in the REAL tree, with the REAL path ---------------
+#
+# The scratch-repo arms above prove the TOOL. They do not prove the WIRING, and
+# the two came apart exactly the way the gate-nothing-invokes finding did one
+# level down. OffgridwithJD measured it on the shipped form:
+#
+#   the runner's exact invocation, no --against    rc=0   the raise is not refused
+#   --against HEAD, absolute path                  rc=0   "no prior ceiling to compare"
+#   --against HEAD, repo-relative path             rc=1   correctly refused
+#
+# The middle line is the dangerous one: asked to compare, unable to compare, and
+# it printed a note that reads like a pass. `git show REF:PATH` needs a
+# repo-relative path, and the runner passes an absolute one inside a copied build
+# directory.
+#
+# So the tool resolves the path itself, and every failure to resolve it is an
+# ERROR rather than a shrug. These arms use the REAL budget at its real path.
+
+_mono_budget="$PGC_TESTDIR/check_ledger_budget.txt"
+_mono_reg="$_lw/mono_reg"
+cut -f1 "$_ledger" | sort -u > "$_mono_reg"
+_mono_log="$_lw/mono.log"
+awk -F'\t' 'NR<=2 {printf "RESULT\t%s\t%s\t%s\tPASS\t\n", $1, $2, $3}' "$_ledger" > "$_mono_log"
+
+check "premise: the real budget is inside a git repository" \
+	"$(git -C "$PGC_TESTDIR" rev-parse --show-toplevel >/dev/null 2>&1 && echo yes || echo no)" "yes"
+check "premise: the fixture log names checks the real ledger already knows" \
+	"$(_led_rc gate --ledger "$_ledger" --budget "$_mono_budget" --registered "$_mono_reg" "$_mono_log")" "0"
+
+# The absolute path the runner passes must WORK, not fail open.
+check "an absolute budget path resolves against git rather than shrugging" \
+	"$(_led_run gate --ledger "$_ledger" --budget "$_mono_budget" --registered "$_mono_reg" \
+		--against HEAD "$_mono_log" | grep -c 'ceiling against HEAD')" "1"
+check "and the comparison passes when the ceiling did not rise" \
+	"$(_led_rc gate --ledger "$_ledger" --budget "$_mono_budget" --registered "$_mono_reg" \
+		--against HEAD "$_mono_log")" "0"
+
+# A raise in the real tracked file, at its real path, must redden.
+_mono_raised="$PGC_TESTDIR/check_ledger_budget.txt.raised"
+sed 's/^suites_not_covered [0-9]*$/suites_not_covered 9999/' "$_mono_budget" > "$_mono_raised"
+check "premise: the raised copy really does carry a higher ceiling" \
+	"$(sed -n 's/^suites_not_covered //p' "$_mono_raised")" "9999"
+check "premise: and it is a file git has never seen, which is the case that used to fail open" \
+	"$(git -C "$PGC_TESTDIR" show "HEAD:test/check_ledger_budget.txt.raised" >/dev/null 2>&1 && echo tracked || echo untracked)" "untracked"
+check "a budget git does not know is an integrity failure, not a note" \
+	"$(_led_rc gate --ledger "$_ledger" --budget "$_mono_raised" --registered "$_mono_reg" \
+		--against HEAD "$_mono_log")" "2"
+check "and it says it was asked to compare and could not" \
+	"$(_led_run gate --ledger "$_ledger" --budget "$_mono_raised" --registered "$_mono_reg" \
+		--against HEAD "$_mono_log" | grep -c 'does not exist at HEAD')" "1"
+rm -f "$_mono_raised"
+
+# And the raise itself, on the tracked path, by rewriting it in place and putting
+# it back byte-exact.
+_mono_orig="$_lw/budget.orig"
+cp "$_mono_budget" "$_mono_orig"
+sed -i 's/^suites_not_covered [0-9]*$/suites_not_covered 9999/' "$_mono_budget"
+_mono_rc="$(_led_rc gate --ledger "$_ledger" --budget "$_mono_budget" --registered "$_mono_reg" \
+	--against HEAD "$_mono_log")"
+_mono_out="$(_led_run gate --ledger "$_ledger" --budget "$_mono_budget" --registered "$_mono_reg" \
+	--against HEAD "$_mono_log" | grep -c 'was raised from')"
+cp "$_mono_orig" "$_mono_budget"
+check "raising the ceiling in the tracked file is refused" "$_mono_rc" "1"
+check "and the refusal names the raise" "$_mono_out" "1"
+check "premise: the budget was restored byte-exact" \
+	"$(cmp -s "$_mono_orig" "$_mono_budget" && echo same || echo CHANGED)" "same"
+
+# ---- and the RUNNER must pass --against, or none of the above is wired -------
+
+check "the runner passes --against to the gate" \
+	"$(grep -A5 'pgc_ledger.py" gate' "$_rv" | grep -c -- '--against HEAD')" "1"
+
+# ---- and WHICH ref the runner compares against is a decision, not a default --
+#
+# `--against HEAD` compares a committed file against itself: for any change that
+# is already committed, the working budget and HEAD's are identical, so it catches
+# only an UNCOMMITTED raise. The property that matters is that a branch may not
+# raise the ceiling relative to MAIN, which needs origin/main as the ref.
+#
+# The runner therefore chooses, and prints the choice when it falls back. A silent
+# fallback to the weaker ref would be a gate quietly enforcing less than it says,
+# which is the shape this whole change exists to refuse.
+
+check "the runner prefers origin/main as the ceiling's reference" \
+	"$(grep -c '_led_ref=origin/main' "$_rv")" "1"
+check "and falls back to HEAD only after saying so" \
+	"$(grep -A3 '_led_ref=HEAD' "$_rv" | grep -c 'catches an uncommitted raise only')" "1"
+check "and the gate is given that ref rather than a literal" \
+	"$(grep -c -- '--against "\$_led_ref"' "$_rv")" "1"

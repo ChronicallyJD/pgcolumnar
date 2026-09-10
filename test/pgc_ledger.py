@@ -251,20 +251,48 @@ def read_budget(path):
 
 
 def _committed_budget(path, ref):
-    """The budget as of `ref`, or None when it does not exist there."""
+    """The budget as of `ref`. Raises rather than returning None.
+
+    `git show REF:PATH` needs a REPO-RELATIVE path. The production caller passes an
+    absolute one inside a copied build directory, so the first version returned
+    None and printed "no prior ceiling to compare" -- a message that reads like a
+    pass while the ceiling it was asked to enforce went unchecked. That is the
+    fail-open shape this whole change is about, in the code that closes it.
+    Reported by OffgridwithJD.
+
+    So the path is resolved here rather than demanded of the caller, and every
+    failure to resolve it is an ERROR. Asked to compare, unable to compare, is not
+    the same as nothing to compare.
+    """
+    abspath = pathlib.Path(path).resolve()
     try:
-        blob = subprocess.run(["git", "show", f"{ref}:{path}"],
+        top = subprocess.run(["git", "-C", str(abspath.parent), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    except (subprocess.CalledProcessError, OSError) as e:
+        raise LedgerError(
+            f"--against {ref} was given, but {path} is not inside a git repository, "
+            "so the prior ceiling cannot be read") from e
+    try:
+        rel = abspath.relative_to(pathlib.Path(top).resolve())
+    except ValueError as e:
+        raise LedgerError(f"{path} resolves outside its own repository at {top}") from e
+    try:
+        blob = subprocess.run(["git", "-C", top, "show", f"{ref}:{rel.as_posix()}"],
                               capture_output=True, text=True, check=True).stdout
-    except (subprocess.CalledProcessError, OSError):
-        return None
+    except (subprocess.CalledProcessError, OSError) as e:
+        raise LedgerError(
+            f"--against {ref} was given, but {rel.as_posix()} does not exist at {ref}, "
+            "so there is no prior ceiling to compare against") from e
     out = {}
     for line in blob.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        p = line.split()
-        if len(p) == 2 and p[1].isdigit():
-            out[p[0]] = int(p[1])
+        f = line.split()
+        if len(f) == 2 and f[1].isdigit():
+            out[f[0]] = int(f[1])
+    if "suites_not_covered" not in out:
+        raise LedgerError(f"the budget at {ref} names no suites_not_covered")
     return out
 
 
@@ -326,15 +354,13 @@ def cmd_gate(args):
     # MONOTONE, mechanically. The tracked file says the ceiling may only fall;
     # without this that sentence is prose and raising the number passes.
     if args.against:
-        prior = _committed_budget(args.budget, args.against)
-        if prior is None:
-            print(f"    no budget at {args.against}, so there is no prior ceiling to compare")
+        p_want = _committed_budget(args.budget, args.against)["suites_not_covered"]
+        if want > p_want:
+            print(f"    suites_not_covered was raised from {p_want} to {want}: "
+                  f"the ceiling may only fall")
+            rc = 1
         else:
-            p_want = prior.get("suites_not_covered")
-            if p_want is not None and want > p_want:
-                print(f"    suites_not_covered was raised from {p_want} to {want}: "
-                      f"the ceiling may only fall")
-                rc = 1
+            print(f"    ceiling against {args.against}: {p_want} -> {want}, which does not rise")
     return rc
 
 

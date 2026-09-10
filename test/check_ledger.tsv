@@ -551,18 +551,32 @@ harness_selftest	400-a-check-result-must-be-machine	a log with fewer records tha
 harness_selftest	400-a-check-result-must-be-machine	a log with more records than it claims is caught too	never	-
 harness_selftest	400-a-check-result-must-be-machine	a passing check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	a passing check still prints its old line	never	-
+harness_selftest	400-a-check-result-must-be-machine	a skipped ratio check emits exactly one record	never	-
+harness_selftest	400-a-check-result-must-be-machine	a skipped timing check emits exactly one record	never	-
+harness_selftest	400-a-check-result-must-be-machine	a suite that skipped every check did not pass	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check still prints its old line	never	-
+harness_selftest	400-a-check-result-must-be-machine	and is counted as a pass, not a skip	never	-
+harness_selftest	400-a-check-result-must-be-machine	and it is counted	never	-
+harness_selftest	400-a-check-result-must-be-machine	and it is counted, so checks run: reports it	never	-
+harness_selftest	400-a-check-result-must-be-machine	and its human line is unchanged	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its name field is the check's name, spaces intact	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says FAIL	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says PASS	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says UNRUN, which is neither of the other two	never	-
+harness_selftest	400-a-check-result-must-be-machine	and its verdict is SKIP	never	-
+harness_selftest	400-a-check-result-must-be-machine	and names its own cause instead	never	-
+harness_selftest	400-a-check-result-must-be-machine	and not a check after a one-line piped loop that already closed	never	-
+harness_selftest	400-a-check-result-must-be-machine	and not a piped loop with no check in it	never	-
+harness_selftest	400-a-check-result-must-be-machine	and not one inside a process-substitution loop, which keeps its shell	never	-
 harness_selftest	400-a-check-result-must-be-machine	and records FAIL	never	-
 harness_selftest	400-a-check-result-must-be-machine	and records FAIL, because nothing was compared	never	-
 harness_selftest	400-a-check-result-must-be-machine	and records PASS when the ratio is inside the bound	never	-
+harness_selftest	400-a-check-result-must-be-machine	and still reports the two numbers	never	-
 harness_selftest	400-a-check-result-must-be-machine	and that place is pgc_record	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the REASON_CODE travels in the reason field, not in prose	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the two numbers are named, not just the verdict	never	-
+harness_selftest	400-a-check-result-must-be-machine	and with timing enabled the skipped term is zero, not absent	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_num on a non-number emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_num's non-measurement line is unchanged	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_ratio on a non-number emits one record	never	-
@@ -570,18 +584,27 @@ harness_selftest	400-a-check-result-must-be-machine	check_ratio that forms a rat
 harness_selftest	400-a-check-result-must-be-machine	check_ratio with a zero side emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_text on an empty side emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_text's empty-side line is unchanged	never	-
+harness_selftest	400-a-check-result-must-be-machine	fewer records than counted checks is not described as a subshell	never	-
 harness_selftest	400-a-check-result-must-be-machine	lib.sh bumps PGC_CHECKS in exactly one place	never	-
+harness_selftest	400-a-check-result-must-be-machine	more records than counted checks names the cause, not just the arithmetic	never	-
+harness_selftest	400-a-check-result-must-be-machine	no suite calls a check inside a piped loop	never	-
 harness_selftest	400-a-check-result-must-be-machine	pgc_fail emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	pgc_pass emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: and that is this fragment, not the suite	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: it is callable	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: lib.sh is where the check helpers live	never	-
+harness_selftest	400-a-check-result-must-be-machine	premise: the fixtures carry the shapes this sweep is about	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: the probe ran every helper shape once	never	-
+harness_selftest	400-a-check-result-must-be-machine	the accounting line reconciles four outcomes against the count	never	-
 harness_selftest	400-a-check-result-must-be-machine	the record count equals the counter the summary reports	never	-
 harness_selftest	400-a-check-result-must-be-machine	the record names the part the check was asked from	never	-
 harness_selftest	400-a-check-result-must-be-machine	the runner calls the record reconciliation, not merely defines it	never	-
 harness_selftest	400-a-check-result-must-be-machine	the runner defines the record reconciliation	never	-
+harness_selftest	400-a-check-result-must-be-machine	the same ratio check, ENABLED, emits one record and passes	never	-
+harness_selftest	400-a-check-result-must-be-machine	the same timing check, ENABLED, emits one record and passes	never	-
+harness_selftest	400-a-check-result-must-be-machine	the sweep finds a check inside a PIPED loop	never	-
 harness_selftest	410-a-check-must-have-been-red	a before-log and an after-log together are refused, not silently empty	never	-
+harness_selftest	410-a-check-must-have-been-red	a budget git does not know is an integrity failure, not a note	never	-
 harness_selftest	410-a-check-must-have-been-red	a check in an UNCOVERED suite is not refused	never	-
 harness_selftest	410-a-check-must-have-been-red	a check merely added is not reported as a rename	never	-
 harness_selftest	410-a-check-must-have-been-red	a check observed red gains the date it was seen	never	-
@@ -594,22 +617,28 @@ harness_selftest	410-a-check-must-have-been-red	a real refusal is a different st
 harness_selftest	410-a-check-must-have-been-red	a rename in one part survives an addition in another	never	-
 harness_selftest	410-a-check-must-have-been-red	a run whose checks are all ledgered passes the gate	never	-
 harness_selftest	410-a-check-must-have-been-red	a second mutation ACCUMULATES rather than replacing the first	never	-
+harness_selftest	410-a-check-must-have-been-red	an absolute budget path resolves against git rather than shrugging	never	-
 harness_selftest	410-a-check-must-have-been-red	an empty log is one too, because there is nothing to reconcile	never	-
 harness_selftest	410-a-check-must-have-been-red	and a record missing its verdict	never	-
 harness_selftest	410-a-check-must-have-been-red	and a refused gate fails the major	never	-
 harness_selftest	410-a-check-must-have-been-red	and an empty mutation is a placeholder, not an empty last field	never	-
+harness_selftest	410-a-check-must-have-been-red	and falls back to HEAD only after saying so	never	-
 harness_selftest	410-a-check-must-have-been-red	and it entered as debt, not as an observation nothing made	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is named, so the author knows which one	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is the new one that is named, not the one already ledgered	never	-
 harness_selftest	410-a-check-must-have-been-red	and it runs before the build directory is removed, which is the only place it can	never	-
+harness_selftest	410-a-check-must-have-been-red	and it says it was asked to compare and could not	never	-
 harness_selftest	410-a-check-must-have-been-red	and none of them ends in a tab	never	-
 harness_selftest	410-a-check-must-have-been-red	and not against one that stayed green	never	-
 harness_selftest	410-a-check-must-have-been-red	and one that stayed green keeps its debt	never	-
 harness_selftest	410-a-check-must-have-been-red	and records neither as ever having been red	never	-
 harness_selftest	410-a-check-must-have-been-red	and the addition in the other part is not called a rename	never	-
+harness_selftest	410-a-check-must-have-been-red	and the comparison passes when the ceiling did not rise	never	-
+harness_selftest	410-a-check-must-have-been-red	and the gate is given that ref rather than a literal	never	-
 harness_selftest	410-a-check-must-have-been-red	and the history it is about to lose travels with it	never	-
 harness_selftest	410-a-check-must-have-been-red	and the message says how to fix it, because regenerating is the intended action	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names both values	never	-
+harness_selftest	410-a-check-must-have-been-red	and the refusal names the raise	never	-
 harness_selftest	410-a-check-must-have-been-red	but that suite is counted as not covered, which is the debt	never	-
 harness_selftest	410-a-check-must-have-been-red	each says what was wrong with the input	never	-
 harness_selftest	410-a-check-must-have-been-red	every committed row has five fields	never	-
@@ -619,13 +648,19 @@ harness_selftest	410-a-check-must-have-been-red	merging a green run records both
 harness_selftest	410-a-check-must-have-been-red	nor is one merely removed	never	-
 harness_selftest	410-a-check-must-have-been-red	once the suite is covered, a new check in it IS refused	never	-
 harness_selftest	410-a-check-must-have-been-red	one --mutation cannot be attributed across several runs at once	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and it is a file git has never seen, which is the case that used to fail open	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the budget is a tracked file too	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the budget was restored byte-exact	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the check has history before the rename	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the fixture log names checks the real ledger already knows	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger is not empty, so the partition means something	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger itself is a tracked file, not a variable	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger tool exists	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the raised copy really does carry a higher ceiling	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the real budget is inside a git repository	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the scratch repo has a prior ceiling committed	never	-
 harness_selftest	410-a-check-must-have-been-red	raising the ceiling above its committed value is refused	never	-
+harness_selftest	410-a-check-must-have-been-red	raising the ceiling in the tracked file is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	regenerating the ledger lets the new check through	never	-
 harness_selftest	410-a-check-must-have-been-red	the budget names a ceiling and a census, and says which is which	never	-
 harness_selftest	410-a-check-must-have-been-red	the ceiling refuses being exceeded	never	-
@@ -633,6 +668,8 @@ harness_selftest	410-a-check-must-have-been-red	the committed census matches the
 harness_selftest	410-a-check-must-have-been-red	the gate refuses to run without the registered suite list	never	-
 harness_selftest	410-a-check-must-have-been-red	the ledger partitions into observed and never	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner invokes the ledger gate	never	-
+harness_selftest	410-a-check-must-have-been-red	the runner passes --against to the gate	never	-
+harness_selftest	410-a-check-must-have-been-red	the runner prefers origin/main as the ceiling's reference	never	-
 harness_selftest	410-a-check-must-have-been-red	the same check in two logs is two runs, not a duplicate	never	-
 harness_selftest	410-a-check-must-have-been-red	the same name twice in ONE log is a duplicate, and is named	never	-
 harness_selftest	410-a-check-must-have-been-red	the stable check is not reported	never	-

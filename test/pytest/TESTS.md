@@ -1169,10 +1169,20 @@ cannot report an outcome without being counted, and cannot be counted without
 reporting one, because no code path does either alone. `checks run: N` and the N
 record lines are the same increment seen twice.
 
-The record is tab separated -- suite, name, verdict, reason -- so a check name with
-spaces survives, and the reason carries the `REASON_CODE` from #915. That is what
-makes it more than a reformat: an unrunnable check is distinguishable from a passing
-one without parsing prose.
+The record is tab separated, five columns after the `RESULT` marker:
+
+```
+RESULT <TAB> suite <TAB> part <TAB> name <TAB> verdict <TAB> reason
+```
+
+so a check name with spaces survives. The verdict is one of `PASS`, `FAIL`, `UNRUN` or
+`SKIP`, and the reason carries the `REASON_CODE` from #915 — which is what makes this
+more than a reformat: an unrunnable check is distinguishable from a passing one without
+parsing prose.
+
+There is **no mutation column here**. That belongs to the ledger (#918), which keys on
+`(suite, part, name)` and records which mutation reddened a check. A record is one
+observation, not a history.
 
 ### `test_lib_sh_counts_a_check_in_exactly_one_place`
 
@@ -1201,6 +1211,35 @@ pinned rather than the refactor trusted.
 
 One operation, so it cannot fail by drifting. It can fail if a helper is added that
 prints an outcome without recording it, which is the `expect_fail` shape.
+
+### `test_a_skipped_timing_check_is_counted_and_recorded`
+
+`check_timing` and `check_ratio_needs_quiet_machine` under `PGC_SKIP_TIMING=1` printed a
+human `SKIP` line and returned — **no count, no record**. Two outcomes a reader sees,
+invisible to both, inside the part whose whole argument is that counting and recording
+are one operation. Nothing reached those branches either: removing both emitters left
+every other arm green.
+
+`SKIP` is now a fourth outcome, counted like the other three, so `checks run:` reports
+the checks a suite **encountered** rather than the ones it managed to evaluate.
+
+It is deliberately **not** `check_unrunnable`. That third state exits the suite
+`INCOMPLETE`, and CI sets `PGC_SKIP_TIMING` on every run — so every run would go red. A
+wall-clock check deliberately not asked on a shared runner is a different thing from one
+that could not be answered.
+
+### `test_the_accounting_line_reconciles_four_outcomes`
+
+Four counters against the count, which is the same shape as three against it. The
+skipped term is printed even when zero: a term that disappears when empty is one a
+reader cannot tell from a term that was never there.
+
+### `test_a_suite_that_evaluated_nothing_did_not_pass`
+
+Before the fourth counter, a skipped check left `PGC_CHECKS` at zero, so an all-skipped
+suite hit the "ran no checks" branch **by accident**. Counting it would have made that
+suite report `PASSED` with nothing behind it, so the condition now says what it always
+meant: `PASSED + FAILED + UNRUN`, not `CHECKS`.
 
 ### `test_the_runner_reconciles_records_against_the_stated_count`
 
