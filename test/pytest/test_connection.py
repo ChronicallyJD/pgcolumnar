@@ -8,6 +8,8 @@ the string "100" and leaves every conversion to the reader.
 import decimal
 import pathlib
 
+import pgc_vacuity
+
 
 def test_cluster_fixture_gives_a_typed_connection(pgc_conn, expect):
     """count(*) must arrive as an int, not as text."""
@@ -184,3 +186,43 @@ def test_the_cluster_refuses_a_foreign_server(pgc_cluster, expect):
                        pgc_cluster.port)
     expect.text(impostor.is_ours(), False,
                 "a server whose datadir differs is refused")
+
+def test_the_connection_the_tests_use_is_watched(pgc_conn, expect, request):
+    """Writes through this fixture reach the zero-row guard.
+
+    THIS IS THE HALF THE DRIVER-FREE ARMS CANNOT PROVE. test_writes_wrote_rows.py
+    exercises the classifier and the refusal against stub cursors, which says
+    nothing about whether the connection the tests actually use is wrapped at all.
+    Proving a function and proving its call site are two proofs, and the second is
+    the one that goes missing: #917's pytest twin tested the reconciler's body and
+    left the runner's CALL to it uncovered, so deleting the call kept that half
+    green while the shell half went red.
+
+    BOTH PATHS, because the corpus uses both. 24 sites call `conn.execute` and 42
+    call `cur.execute` on a cursor the connection handed out, so a proxy that
+    watched only the connection would leave most of the corpus unwatched.
+    """
+    writes = pgc_vacuity._WRITES.setdefault(request.node.nodeid, [])
+    writes.clear()
+
+    pgc_conn.execute("CREATE TABLE watched (i int) USING pgcolumnar")
+    expect.num(len(writes), 0, "DDL carries no row count, so it is not a write")
+
+    cur = pgc_conn.execute("INSERT INTO watched SELECT g FROM generate_series(1,3) g")
+    expect.num(len(writes), 1, "a write through conn.execute is seen")
+    expect.num(writes[-1].count, 3, "with the count the server reported")
+    expect.text(writes[-1].tag, "INSERT", "and the command tag it reported")
+    expect.wrote(cur, 3, "and expect.wrote reads the same count back")
+
+    with pgc_conn.cursor() as c:
+        c.execute("INSERT INTO watched SELECT g FROM generate_series(1,2) g")
+        expect.num(len(writes), 2, "a write through a handed-out cursor is seen too")
+        expect.wrote(c, 2, "and its count is the one the server reported")
+
+    # A zero-row write through the real driver, which is the mode itself. Naming the
+    # zero is what keeps this test passing; without the name the guard would fail it,
+    # and that refusal is pinned in test_writes_wrote_rows.py where it can be caught.
+    empty = pgc_conn.execute("INSERT INTO watched SELECT g FROM generate_series(1,3) g "
+                             "WHERE false")
+    expect.num(len(writes), 3, "the empty write is recorded like any other")
+    expect.wrote(empty, 0, "and INSERT ... WHERE false wrote no rows, deliberately")

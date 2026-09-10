@@ -67,6 +67,7 @@ behaviour, the source of that number is named.
 - [19. Traps this corpus records](#19-traps-this-corpus-records)
 - [20. test_raises_sqlstate.py: which error, and which statement](#20-test_raises_sqlstatepy-which-error-and-which-statement)
 - [21. test_failed_query_sentinel.py: a failed query is not a comparison](#21-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
+- [22. test_writes_wrote_rows.py: a write that wrote nothing](#22-test_writes_wrote_rowspy-a-write-that-wrote-nothing)
 
 ## 1. How to read a test in here
 
@@ -779,6 +780,7 @@ written.
 | `test_each_test_gets_its_own_schema` | the schema is test-private and first on `search_path` |
 | `test_the_worker_owns_its_own_cluster` | the port is the one derived from THIS worker's id |
 | `test_the_cluster_refuses_a_foreign_server` | the identity check can return False |
+| `test_the_connection_the_tests_use_is_watched` | writes through `pgc_conn` reach the zero-row guard, on both the connection and a handed-out cursor |
 
 Two of these deserve their reasoning stated.
 
@@ -1375,15 +1377,19 @@ over tests nothing ran.
 ## 18. What this corpus does NOT yet refuse
 
 `VACUITY_MODES.md` is the inventory: 79 ways a pytest harness can report a pass while
-asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 27
-of them.** The other 45, of which 44 were demonstrated, are listed there with the
+asserting nothing, 73 of them demonstrated by an actual run. **This layer refuses 28
+of them.** The other 44, of which 43 were demonstrated, are listed there with the
 refusal design each would need and the order worth building them in.
 
-Read it before adding a test. Two gaps are most likely to affect a new test now.
+Read it before adding a test. One gap is most likely to affect a new test now.
 
-**A write is not required to have written anything.** `INSERT ... SELECT ... WHERE
-false` writes nothing, raises nothing, and leaves a `rowcount` of 0 that nobody
-reads.
+**`insert-wrote-no-rows` closed, and this paragraph used to be the gap.** It said a
+write was not required to have written anything, which stopped being true when
+section 22 landed: every write the test connection runs is recorded from the server's
+command tag, and a test that ran one reporting 0 rows fails unless it named the zero.
+The sentence is rewritten rather than deleted because a reader who knew the gap needs
+to find out where it went -- the same reason `VACUITY_MODES.md` keeps a
+back-reference for every mode that moves.
 
 **A `pytest.raises` block can still catch a failure from its own setup.** Section 17
 closed `raises-too-broad` — a broad family with no SQLSTATE pinned does not collect —
@@ -1611,3 +1617,85 @@ The cache matters: the five deleted lines are byte-identical, so three of the fi
 mutations leave the file the same size and Python reuses the stale bytecode. Without
 `rm -rf __pycache__` between runs, mutations 3, 4 and 5 report the same failure and
 the table reads as though two refusals did not bite.
+
+## 22. test_writes_wrote_rows.py: a write that wrote nothing
+
+`INSERT ... SELECT ... WHERE false` writes no rows and raises nothing. The fixture
+it was supposed to build does not exist, and every assertion below it then compares
+two empty things. That is `insert-wrote-no-rows` in `VACUITY_MODES.md` section 3.5,
+and before this guard nothing in the corpus read either the count or the command.
+
+**The tag decides, not the row count.** `SELECT 0` and `INSERT 0 0` both carry
+`rowcount == 0`, so a guard keyed on the count alone would refuse every test whose
+last statement was a SELECT over an empty result — a legitimate and common
+assertion. `statusmessage` is the server's own command tag, so this guard never
+parses SQL. Measured on PG 18 against a pgcolumnar table:
+
+```
+statusmessage       rowcount   statement
+CREATE TABLE              -1   CREATE TABLE t (i int) USING pgcolumnar
+INSERT 0 5                 5   INSERT INTO t SELECT g FROM generate_series(1,5) g
+INSERT 0 0                 0   INSERT ... WHERE false
+UPDATE 0                   0   UPDATE t SET i = i WHERE i > 100
+DELETE 0                   0   DELETE FROM t WHERE i > 100
+SELECT 0                   0   SELECT * FROM t WHERE false
+SET                       -1   SET search_path TO public
+TRUNCATE TABLE            -1   TRUNCATE t
+```
+
+**A deliberate zero stays writable.** A DELETE that must match nothing is a real
+negative control, and `expect.wrote(cur, 0, name)` is how a test says so: it
+compares the count and marks the write as named. An unnamed zero fails the test.
+The acknowledgement is not a waiver — a wrong count still fails.
+
+**The refusal runs in the CALL phase, not a teardown.** #931 measured that a guard
+run as a teardown fixture reports the test it guards as PASSED and fails
+separately, so a reader sees a green test beside an error.
+
+| test | asserts |
+| --- | --- |
+| `test_a_write_that_wrote_nothing_is_recorded` | an `INSERT 0 0` is recorded, with its count and its tag |
+| `test_update_and_delete_are_writes_too` | `UPDATE 0` and `DELETE 0` are writes, not only INSERT |
+| `test_a_select_matching_nothing_is_not_a_write` | `SELECT 0` is not a write; **the arm a count-only guard fails** |
+| `test_ddl_is_not_a_write` | `CREATE TABLE`, `SET`, `TRUNCATE TABLE`, `DROP SCHEMA` are not writes |
+| `test_a_write_that_wrote_rows_needs_no_acknowledgement` | a write that moved rows is recorded and needs no naming |
+| `test_an_unacknowledged_zero_row_write_fails_the_test` | the inner run fails, and the message names the mode and the command |
+| `test_expect_wrote_acknowledges_the_zero` | naming the zero lets a negative control pass |
+| `test_expect_wrote_refuses_a_count_that_is_not_a_count` | `rowcount == -1` is refused rather than compared |
+| `test_expect_wrote_still_compares` | acknowledging a count does not excuse a wrong one |
+| `test_several_writes_and_only_the_empty_one_is_named` | with three writes and one empty, the refusal names the empty one |
+
+### Two properties, two files, on purpose
+
+Every arm above runs with **no database**. A stub cursor carrying the two measured
+fields exercises the classifier and the refusal exactly, which is the whole of what
+those arms claim.
+
+It is not the whole of the guard. Whether the connection the tests actually use is
+wrapped at all is a different claim, and no driver-free arm can make it:
+`test_the_connection_the_tests_use_is_watched` in section 7 does, through a real
+`INSERT ... WHERE false`, and through both `conn.execute` and a cursor the
+connection handed out — because the corpus uses both, 24 sites and 42 sites, and a
+proxy watching only the connection would leave most of the corpus unwatched.
+
+Splitting them is not tidiness. #917's pytest twin tested the reconciler's body and
+left the runner's CALL to it uncovered: removing the call kept the pytest half at
+9 passed while the shell half went red by one. Proving a function and proving its
+call site are two proofs, and the second is the one that goes missing.
+
+### What made the arms themselves wrong twice
+
+Recorded because both produced a green that meant nothing.
+
+**An arm asserting only `failed=1` passed before the feature existed.**
+`test_expect_wrote_still_compares` ran an inner test that called a function not yet
+written, got an `AttributeError`, and reported a pass — satisfied by a failure that
+had nothing to do with the comparison. Naming the numbers in the message is what
+makes the red the right red.
+
+**A multi-word pattern can straddle pytest's word wrap.** `expect.refusal` anchors
+each pattern to one `E` line, and pytest wraps a long traceback line. Matching
+`wrote no rows` failed against a message that contained it, which reads exactly
+like "the guard did not fire". The refusal now leads with the mode's own
+kebab-case id, which is one token and cannot be split, and each arm matches one
+token per call.
