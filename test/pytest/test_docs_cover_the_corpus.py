@@ -429,3 +429,27 @@ def test_the_prose_totals_match_the_counted_modes(expect):
                     f"{path.name} states a refused total matching {pattern!r}")
         expect.num(int(m.group(1)), n,
                    f"{path.name}: the prose total is the number of ids named")
+
+def test_the_two_halves_of_the_refused_sentence_sum_to_the_named_total(expect):
+    """TESTS.md states the split twice in one sentence: how many modes the layer
+    refuses, and how many it does not. Only the first half was gated.
+
+    `selftest/350`'s TESTS.md total arm matches `This layer refuses [0-9]+`, which is the
+    half a change to the layer naturally updates. Closing a mode and updating that number
+    left "The other 47" behind, and 26 + 47 = 73 against the 72 the inventory names --
+    a contradiction introduced by the very change that fixed the other half, and caught
+    by nothing. Reported by @jdatcmd.
+
+    So both halves are read here, and checked against the inventory's own count of the
+    ids it names rather than against a number typed twice.
+    """
+    doc = (HERE / "TESTS.md").read_text()
+    m = re.search(r"This layer refuses (\d+)\s*\n?of them\.\*\*\s*The other (\d+)", doc)
+    expect.text("found" if m else "missing", "found",
+                "premise: the sentence states both halves in a form this arm can read")
+    refused, other = int(m.group(1)), int(m.group(2))
+    named = len(_named_modes()[0]) + len(_named_modes()[1])
+    expect.num(refused + other, named,
+               "the two halves sum to the number of modes the inventory names")
+    expect.num(refused, len(_named_modes()[0]),
+               "and the refused half is the count of ids section 2 claims")
