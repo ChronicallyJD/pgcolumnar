@@ -1292,10 +1292,25 @@ against 582 distinct `(suite, part, name)`. The part is derived from `BASH_SOURC
 rather than from a convention, so the next part written the same way is keyed correctly
 without anyone remembering.
 
-One duplicate survives that, and it is a genuine one:
-`340-the-binary-must-be-built-from` asks `premise: the fixture fingerprints at all`
-twice within the same part. That is the kind of thing the ledger can now name precisely
-instead of losing among convention artifacts.
+One duplicate survived that, and inspecting it showed it was worse than a repeat: at
+`340:268` and `340:894`, `premise: the fixture fingerprints at all` was asked once of the
+**source-partition fixture** and once of the **locale sweep** — two different questions
+about two different code paths, wearing one sentence. A shared row there is not merely
+imprecise: one failing would mark the other's premise as observed red.
+
+Both now name their subject, `premise: the partition fixture fingerprints at all` and
+`premise: every locale produced a fingerprint`, and the corpus has **zero** collisions:
+614 records, 614 distinct keys.
+
+That rename is also the detector's first test on real data rather than fixtures. Run
+against the ledger seeded before it:
+
+```
+possible rename: premise: the fixture fingerprints at all
+              -> premise: every locale produced a fingerprint
+   (in harness_selftest/340-the-binary-must-be-built-from, history: last red never)
+rename scan: appeared=2, vanished=1
+```
 
 ### `test_the_gate_refuses_a_check_the_ledger_has_never_seen`
 

@@ -340,9 +340,10 @@ harness_selftest	340-the-binary-must-be-built-from	one tree, one fingerprint, wh
 harness_selftest	340-the-binary-must-be-built-from	premise: and the stamp really was not written, so the arm is not vacuous	never	
 harness_selftest	340-the-binary-must-be-built-from	premise: at least two locales are installed to compare	never	
 harness_selftest	340-the-binary-must-be-built-from	premise: both fake configs report the same major, which is the whole point	never	
+harness_selftest	340-the-binary-must-be-built-from	premise: every locale produced a fingerprint	never	
 harness_selftest	340-the-binary-must-be-built-from	premise: the argument parser reads the second argument at all	never	
 harness_selftest	340-the-binary-must-be-built-from	premise: the build path ran to completion, so a stamp was due	never	
-harness_selftest	340-the-binary-must-be-built-from	premise: the fixture fingerprints at all	never	
+harness_selftest	340-the-binary-must-be-built-from	premise: the partition fixture fingerprints at all	never	
 harness_selftest	340-the-binary-must-be-built-from	premise: the same function returns a fingerprint for a real tree	never	
 harness_selftest	340-the-binary-must-be-built-from	premise: the spelling fixture fingerprints at all	never	
 harness_selftest	340-the-binary-must-be-built-from	premise: the sweep finds the call sites it is meant to police	never	
