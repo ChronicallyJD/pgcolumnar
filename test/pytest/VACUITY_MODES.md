@@ -354,8 +354,18 @@ exit 4, and no tests run at all.
 
 Each entry names the red test to write first.
 
-1. `test_expect_query_error_sentinel_is_unique_per_failure` — make something produce
-   `QUERY_ERROR.<seq>`; the constant exists and nothing writes it.
+1. ~~`test_expect_query_error_sentinel_is_unique_per_failure` — closes
+   `error-swallowed-to-empty`.~~ **Done, and this entry was wrong about the gap.** It
+   said "the constant exists and nothing writes it", and both halves were false:
+   `test_hilbert_locality.py` already minted sentinels by hand, one of them from inside
+   SQL, and the thing actually missing was not a producer but the REFUSAL in four of the
+   five comparisons — `expect.text`, `rows`, `row_set` and `ordered_rows` each passed
+   with a sentinel on both sides, and only `expect.hash` refused. 3.2 records that
+   measurement rather than quietly replacing it. `query_error()` now mints a value
+   unique per occurrence, as `lib.sh`'s `QUERY_ERROR.$seq` does, and
+   `test_failed_query_sentinel.py` holds ten arms over it — including the producer's
+   uniqueness and the constant's NON-uniqueness, which is the reason the producer
+   exists at all.
 2. ~~`test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.~~
    **Done**, and in two files rather than one, because it is two properties. The
    refusal and the tag-versus-count classification live in
@@ -381,9 +391,33 @@ Each entry names the red test to write first.
    remains, measured: a comprehension or a tuple instead of a `for`, and a helper defined
    in another file. Both are ordinary Python. The refused count therefore did not move.
 
-The three that turned a whole run green rather than one test are done. What remains
-is per-assertion work, so the ordering matters less: take the sentinel first, since
-the constant already exists and nothing writes it.
+**Every entry on this list is now struck, and the list is checked (#432).** Section 5
+was the one part of this document with no mechanism: 1a, 2 and 3 are all compared
+against the ids on disk, and this was prose. Entry 1 stayed wrong long after the work
+landed, which is the most expensive place in the document for a stale sentence — its
+only reader is someone about to build something.
+
+Two arms in `test_docs_cover_the_corpus.py` hold it now:
+
+- every entry names at least one mode id, so it is tied to the inventory at all.
+  Entry 1 named none, which is exactly how it stayed wrong: there was nothing to
+  check it against.
+- no UN-STRUCK entry names an id section 2 already claims as refused. An entry whose
+  id has reached section 2 is done by this document's own accounting, whatever the
+  test ended up being called.
+
+**What is not checkable, stated rather than implied.** "Has this work been done" is not
+mechanical — entry 1's work landed under four test names, none of them the one the
+entry proposed, so asking whether the NAMED test exists would have passed and said
+nothing. The id is the only durable anchor.
+
+And with every entry struck, the second arm has nothing to refuse on this document, so
+it is the planted fixture beside it that keeps it honest: a two-entry document where
+moving the open entry's id into section 2 must be caught. A sweep over an empty
+population reports the same clean answer as a correct one.
+
+When the next mode is taken, add it here with its id, un-struck, and the arms will
+hold the entry to the inventory from then on.
 
 ## 6. What this document cannot tell you
 

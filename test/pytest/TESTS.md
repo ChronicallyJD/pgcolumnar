@@ -840,6 +840,27 @@ many times.
 | `test_the_anchor_rule_drops_punctuation_and_keeps_underscores` | GitHub's derivation, on the heading the defect was found in |
 | `test_an_anchor_that_strips_the_underscores_is_caught` | the exact broken link that shipped, with a control |
 | `test_every_in_document_link_in_this_directory_reaches_a_heading` | every contents-list link resolves, with a coverage premise |
+| `test_the_next_steps_list_is_anchored_to_the_inventory` | every section 5 entry names a mode id, so the entry can be checked at all |
+| `test_no_open_next_step_names_work_the_document_calls_done` | an un-struck entry whose id reached section 2 is stale work to do |
+| `test_a_stale_next_step_is_caught_on_a_fixture` | **removal proof**: the shape, planted, with the control beside it |
+
+
+**Section 5 was the last unchecked part of VACUITY_MODES.md, and it was wrong (#432).**
+1a, 2 and 3 are all compared against the ids on disk; "what to add next" was prose.
+Entry 1 still said *"the constant exists and nothing writes it"* long after
+`query_error()` existed and `test_failed_query_sentinel.py` had ten arms over it — the
+most expensive place in the document for a stale sentence, because its only reader is
+someone about to build something. The near-miss one document over is the argument: a
+bad enumeration of `test/selftest/340` made an existing block look like a gap, and the
+duplicate was written and proven to discriminate before anyone noticed.
+
+**What is checkable is the anchor, not the work.** Entry 1's work landed under four
+test names, none of them the one the entry proposed, so asking whether the NAMED test
+exists would have passed and said nothing. So the arms check that every entry names a
+mode id, and that no un-struck entry names an id section 2 already claims.
+
+With every entry now struck, the second arm has nothing to refuse on the real
+document. That is what the fixture arm is for.
 
 The five fixture arms exist because everything above them passes on a healthy tree,
 which is exactly what a guard that does nothing also does. They run the identical

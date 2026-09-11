@@ -407,6 +407,51 @@ true until the next version shipped.
 
 ### Fixed
 
+- Section 5 of VACUITY_MODES.md, the "what to add next" list, is checked (#432).
+
+  1a, 2 and 3 are all compared against the mode ids on disk. Section 5 was prose, and
+  it was **wrong**: entry 1 still said "the constant exists and nothing writes it" long
+  after `query_error()` existed and `test_failed_query_sentinel.py` carried ten arms
+  over it, including the producer's uniqueness and the constant's non-uniqueness that
+  is the reason the producer exists.
+
+  **That is the most expensive place in the document for a stale sentence**, because
+  its only reader is someone about to build something. The near-miss one document over
+  is what it costs: a bad enumeration of `test/selftest/340` made an existing block
+  look like a coverage gap, and the duplicate was written and proven to discriminate
+  before the duplication was noticed.
+
+  **What is checkable is the anchor, not the work.** Entry 1's work landed under four
+  test names, none of them the one the entry proposed, so asking whether the NAMED test
+  exists would have passed and said nothing. Two arms hold the list instead:
+
+  - every entry names at least one mode id, so it is tied to the inventory at all.
+    Entry 1 named none, which is exactly how it stayed wrong.
+  - no UN-STRUCK entry names an id section 2 already claims as refused. An entry whose
+    id has reached section 2 is done by the document's own accounting, whatever the
+    test ended up being called.
+
+  Entry 1 is struck and anchored to `error-swallowed-to-empty`, and it records what the
+  entry got wrong rather than replacing it: both halves of "the constant exists and
+  nothing writes it" were false — two sites already minted sentinels by hand, and the
+  missing thing was the REFUSAL in four of the five comparisons.
+
+  **Fixing it made the second arm vacuous on this document**, because with every entry
+  struck there is nothing left to refuse. The planted fixture beside it is therefore
+  the whole of its evidence, and the document says so rather than leaving it implied: a
+  two-entry fixture where moving the open entry's id into section 2 must be named, with
+  the clean control beside it.
+
+  The totals do not move — 28 refused, 44 not refused, 72 named — because the mode was
+  already counted as refused. Only the list that tells the next person what to do was
+  wrong.
+
+  One instrument defect of mine, caught by that fixture: the parser matched the
+  SECTION HEADING as an entry. `re.split(r"^## ")` leaves a chunk beginning "5. What to
+  add next", which the numbered-item pattern also matches — inventing an entry 5 that
+  is the title and colliding with the real entry 5. The fixture reported 3 entries in a
+  two-entry document, which is how it was found.
+
 - A count `grep` never produced no longer reads as "present" (#929).
 
   #922 replaced roughly 28 `producer | grep -q PAT` tests with
