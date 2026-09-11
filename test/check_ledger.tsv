@@ -792,3 +792,35 @@ harness_selftest	420-a-deleted-part-must-be-visible	premise: and a part added wi
 harness_selftest	420-a-deleted-part-must-be-visible	premise: the manifest names something, so the comparison has two sides	never	-
 harness_selftest	420-a-deleted-part-must-be-visible	the parts manifest exists, because without it a deletion is invisible	never	-
 harness_selftest	420-a-deleted-part-must-be-visible	the three buckets account for every part on disk	never	-
+harness_selftest	430-the-self-test-must-not-report	a pg_config whose --bindir is empty is refused too, not run with a broken PATH	never	-
+harness_selftest	430-the-self-test-must-not-report	and it does not pretend to have run checks	never	-
+harness_selftest	430-the-self-test-must-not-report	and pairs each with the marker the runners require beside the status	never	-
+harness_selftest	430-the-self-test-must-not-report	and part 010 exits with exactly that status on its skip paths	never	-
+harness_selftest	430-the-self-test-must-not-report	and the refusal is the guard's own, naming the path it could not use	never	-
+harness_selftest	430-the-self-test-must-not-report	control: and the second, so a good pg_config is not refused	never	-
+harness_selftest	430-the-self-test-must-not-report	control: the pg_config this run was handed satisfies the first predicate	never	-
+harness_selftest	430-the-self-test-must-not-report	handed a pg_config that does not exist, the self-test refuses instead of exiting 0	never	-
+harness_selftest	430-the-self-test-must-not-report	no selftest part exits 0, which would exit the driver before its summary	never	-
+harness_selftest	430-the-self-test-must-not-report	part 010's skip status is the one lib.sh calls PGC_EXIT_SKIPPED	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: and a BARE exit too, which ends with the last status and is usually 0	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: and it answers --bindir with nothing	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: and it finds a planted exit 0 outside a heredoc	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: the driver this part is about is where it is expected	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: the stub is executable, so an -x test alone would accept it	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: the sweep reads every selftest part	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: while a deliberate non-zero exit is not an offence	never	-
+harness_selftest	430-the-self-test-must-not-report	premise: while a fixture script ending in exit 0 inside a heredoc is not an offence	never	-
+harness_selftest	440-a-count-grep-never-produced	an empty count is not 'present' under a numeric comparison	never	-
+harness_selftest	440-a-count-grep-never-produced	and the numeric form says so on stderr rather than silently	never	-
+harness_selftest	440-a-count-grep-never-produced	and the string comparison it replaces WOULD have said present	never	-
+harness_selftest	440-a-count-grep-never-produced	no count from grep -c is compared as a string, which answers present when grep could not answer	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: a real count compares the same both ways, so the conversion is behaviour-preserving	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: and a zero count does too	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: and it finds a planted string comparison on a grep -c	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: and it finds one whose PATTERN contains a parenthesis, which the first version could not	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: and the = 0 spelling too, which fails the same way	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: grep -c prints nothing at all on a pattern that does not compile	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: nor is one inside a generated fixture script	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: the sweep has a corpus to read	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: while a numeric comparison is not an offence	never	-
+harness_selftest	440-a-count-grep-never-produced	premise: while a valid pattern prints a number	never	-
