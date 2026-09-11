@@ -328,6 +328,59 @@ check "the committed census matches the committed ledger" \
 check "the budget names a ceiling and a census, and says which is which" \
 	"$(grep -cE '^(suites_not_covered|checks_never_observed_red) [0-9]+$' "$_budget")" "2"
 
+
+# ---- #952: the census is printed AND compared -------------------------------
+#
+# `gate` printed `ledger census: rows=N` and never compared it to the budget's
+# `checks_never_observed_red`. rc=0 on a twenty-row ledger claiming 5 was measured.
+# Reporting is not enforcing.
+#
+# The case it catches is a MERGE, not a PR: two PRs each rewrite the census from the
+# same base, so the composed tree keeps whichever side won the conflict while the
+# ledger takes both sets of rows. So the comparison must need NO prior, and nothing
+# in this block passes --against.
+_cw="$PGC_WORKDIR/census952"; mkdir -p "$_cw"
+printf 'demo\n' > "$_cw/reg"
+: > "$_cw/led"
+_led_run merge --ledger "$_cw/led" --date 2026-09-10 "$_lw/green.log" >/dev/null
+check "premise: the fixture ledger holds two rows" \
+	"$(grep -c . "$_cw/led" || true)" "2"
+check "premise: both are never, so this ledger's census is two" \
+	"$(awk -F'\t' '$4=="never"' "$_cw/led" | grep -c . || true)" "2"
+
+printf 'suites_not_covered 0\nchecks_never_observed_red 2\n' > "$_cw/ok.txt"
+check "a census that matches the ledger passes" \
+	"$(_led_rc gate --ledger "$_cw/led" --budget "$_cw/ok.txt" --registered "$_cw/reg" "$_lw/green.log")" "0"
+check "and the gate prints that it compared them" \
+	"$(_led_run gate --ledger "$_cw/led" --budget "$_cw/ok.txt" --registered "$_cw/reg" "$_lw/green.log" \
+	  | grep -c 'census stated 2, ledger holds 2')" "1"
+check "and the census line it always printed is still there" \
+	"$(_led_run gate --ledger "$_cw/led" --budget "$_cw/ok.txt" --registered "$_cw/reg" "$_lw/green.log" \
+	  | grep -c 'ledger census: rows=2')" "1"
+
+printf 'suites_not_covered 0\nchecks_never_observed_red 1\n' > "$_cw/low.txt"
+check "a census that understates the ledger is refused" \
+	"$(_led_rc gate --ledger "$_cw/led" --budget "$_cw/low.txt" --registered "$_cw/reg" "$_lw/green.log")" "1"
+check "and the refusal quotes the claim beside the measurement" \
+	"$(_led_run gate --ledger "$_cw/led" --budget "$_cw/low.txt" --registered "$_cw/reg" "$_lw/green.log" \
+	  | grep -c 'checks_never_observed_red 1, the ledger holds 2')" "1"
+
+# NOT A CEILING: a ceiling refuses a rise, and bounding this number deadlocks. What
+# is refused is a contradiction, so overstating is refused too.
+printf 'suites_not_covered 0\nchecks_never_observed_red 3\n' > "$_cw/high.txt"
+check "a census that overstates the ledger is refused too, because this is not a ceiling" \
+	"$(_led_rc gate --ledger "$_cw/led" --budget "$_cw/high.txt" --registered "$_cw/reg" "$_lw/green.log")" "1"
+
+# Absence is not a contradiction. Every other gate fixture in this part states only
+# suites_not_covered, so refusing here would redden arms testing other things; the
+# committed budget is held to naming both by the arm above.
+printf 'suites_not_covered 0\n' > "$_cw/absent.txt"
+check "a budget stating no census is not refused, because absence is not a contradiction" \
+	"$(_led_rc gate --ledger "$_cw/led" --budget "$_cw/absent.txt" --registered "$_cw/reg" "$_lw/green.log")" "0"
+check "but the gate says so, so the skip is visible rather than silent" \
+	"$(_led_run gate --ledger "$_cw/led" --budget "$_cw/absent.txt" --registered "$_cw/reg" "$_lw/green.log" \
+	  | grep -c 'names no checks_never_observed_red')" "1"
+
 # ---- the gate cannot refuse a check in a suite it has never seen -------------
 #
 # The suite restriction is the MEANING of suites_not_covered, not a softening of

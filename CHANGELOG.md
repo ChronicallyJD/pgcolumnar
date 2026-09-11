@@ -1259,6 +1259,29 @@ true until the next version shipped.
   now re-records. It names the two cases that remain: a declaration that no longer
   resolves, and the implicit base projection, which is not readable by name at all.
 
+- `pgc_ledger.py gate` no longer certifies a census that contradicts its own
+  ledger (#952).
+
+  The gate printed `ledger census: rows=N` and never compared that number to the
+  `checks_never_observed_red` the budget states, so it returned 0 on a twenty-row
+  ledger claiming five. Reporting is not enforcing. The comparison existed one layer
+  out, in a selftest arm, which runs on a pull request and therefore reports the
+  disagreement after the merge that creates it rather than before.
+
+  It creates it because the census is a measurement of the tree, so every merge
+  invalidates it: two pull requests each re-derive it from the same base, the merged
+  ledger takes both sets of rows, and the budget keeps whichever side won the
+  conflict. Three in flight at once set 769, 762 and 800 against a base of 756, and
+  no two composed. The new refusal is decidable from the two inputs alone, needing no
+  prior and no `--against`, which is what lets it speak about a merge commit.
+
+  It refuses a contradiction in either direction and does not make the census a
+  ceiling. A ceiling refuses a rise, and bounding this number deadlocks: every added
+  check enters as `never`, so landing one would mean raising a number the design says
+  may only fall. A budget that states no census at all is reported rather than
+  refused, since absence is not a contradiction; what holds the committed budget to
+  naming both numbers is a separate arm in each harness.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
