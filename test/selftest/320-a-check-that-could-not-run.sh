@@ -251,7 +251,7 @@ _cnt_lib=0; _cnt_lib_bad=""
 for _cnt_l in "${_cnt_sites[@]}"; do
 	_cnt_f="${_cnt_l%%:*}"
 	_cnt_ln="$(printf '%s' "$_cnt_l" | cut -d: -f2)"
-	[ "$(grep -c 'pgc_summary' "$_cnt_f" || true)" != 0 ] || continue
+	[ "$(grep -c 'pgc_summary' "$_cnt_f" || true)" -ne 0 ] || continue
 	_cnt_lib=$((_cnt_lib + 1))
 	[ "$_cnt_lib" -le 5 ] && _cnt_lib_bad="$_cnt_lib_bad ${_cnt_f##*/}:$_cnt_ln"
 done
@@ -280,7 +280,7 @@ printf '%s\necho "checks run: 1"\n' "$_cnt_bump" > "$_cnt_fx/private.sh"
 
 _cnt_fx_old() {	# the ORIGINAL rule, applied to one file
 	local _f="$1" _l
-	[ "$(grep -c 'pgc_summary' "$_f" || true)" != 0 ] || { echo exempt; return; }
+	[ "$(grep -c 'pgc_summary' "$_f" || true)" -ne 0 ] || { echo exempt; return; }
 	_l="$(grep -n 'PGC_CHECKS=\$((PGC_CHECKS' "$_f" | head -1 | cut -d: -f1)"
 	[ -n "$_l" ] || { echo none; return; }
 	if [ "$(sed -n "$((_l > 3 ? _l - 3 : 1)),$((_l + 6))p" "$_f" \
@@ -292,8 +292,8 @@ _cnt_fx_old() {	# the ORIGINAL rule, applied to one file
 }
 _cnt_fx_new() {	# the STRONGER rule, applied to one file
 	local _f="$1"
-	[ "$(grep -c 'pgc_summary' "$_f" || true)" != 0 ] || { echo exempt; return; }
-	[ "$(grep -c 'PGC_CHECKS=\$((PGC_CHECKS' "$_f" || true)" != 0 ] && echo flagged || echo none
+	[ "$(grep -c 'pgc_summary' "$_f" || true)" -ne 0 ] || { echo exempt; return; }
+	[ "$(grep -c 'PGC_CHECKS=\$((PGC_CHECKS' "$_f" || true)" -ne 0 ] && echo flagged || echo none
 }
 
 check "premise: the fixtures carry the shapes these rules are about" \
