@@ -32,6 +32,11 @@ on:
   schedule:
     - cron: "0 6 * * *" # nightly, 06:00 UTC
   workflow_dispatch:
+    inputs:
+      fire_drill:
+        description: "Exercise the red-nightly reporter without breaking anything"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,7 +52,12 @@ jobs:
     name: suites (PG ${{ matrix.pg }}, ${{ matrix.runner == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     strategy:
       fail-fast: false
       # The full packaged matrix on x86_64, and the current major on aarch64.
@@ -202,7 +212,12 @@ jobs:
     name: sanitizer gate (ASAN+UBSAN)
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     env:
       PG_VERSION: "18.4"
       SAN_PREFIX: /home/runner/pg_san
@@ -329,7 +344,12 @@ jobs:
     name: coverage report (PG 18)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -488,7 +508,12 @@ jobs:
     name: extension upgrade guard (PG 18)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     # Named ONCE. Two steps consume it, and a tag spelled separately in each is
     # the kind of duplication that goes stale in one place and not the other.
     env:
@@ -575,3 +600,61 @@ jobs:
             echo "::error::the guard skipped for want of an old source; in this job that is a failure"
           fi
           exit "$rc"
+
+  # ---- make a red nightly findable without knowing to look (#973) -----------
+  #
+  # The deep gate ran red two nights and nothing surfaced it; before that, 25
+  # consecutive nights. A scheduled run has no pull request to be red on, the job
+  # that failed is named like a reporting step rather than a gate, and GitHub
+  # notifies the ACTOR of a schedule event -- whoever last touched this file, not
+  # whoever broke it.
+  #
+  # `if: always()` and not `if: failure()`, because the GREEN path is half the
+  # mechanism: an alert that must be closed by hand becomes one nobody closes.
+  #
+  # THE VERDICT COMES FROM needs.*.result, WHICH CANNOT BE LATE. The failing job
+  # NAMES come from the run's own API, because `needs` keys say `coverage` where a
+  # reader needs `coverage report (PG 18)` -- and if that call fails the verdict
+  # still stands and the body says no name was reported, rather than reporting a
+  # green.
+  red-nightly:
+    name: report a red nightly
+    runs-on: ubuntu-latest
+    needs: [suites, sanitizer, coverage, upgrade-guard]
+    if: always() && (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: open, update or close the nightly's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUITES: ${{ needs.suites.result }}
+          SANITIZER: ${{ needs.sanitizer.result }}
+          COVERAGE: ${{ needs.coverage.result }}
+          UPGRADE: ${{ needs.upgrade-guard.result }}
+          DRILL: ${{ github.event.inputs.fire_drill }}
+        run: |
+          set -euo pipefail
+          verdict=success
+          for r in "$SUITES" "$SANITIZER" "$COVERAGE" "$UPGRADE"; do
+            # `skipped` is not a failure: a fork run skips every gated job.
+            case "$r" in failure|cancelled|timed_out) verdict=failure ;; esac
+          done
+          # A FIRE DRILL GOES THROUGH THIS SAME PATH, differing only in where the
+          # verdict came from. A drill that posts by a separate route proves the
+          # route, not the mechanism -- and a notifier never seen to fire is
+          # indistinguishable from none, which is what #973 is about.
+          if [ "${DRILL:-false}" = "true" ]; then verdict=failure; fi
+          echo "suites=$SUITES sanitizer=$SANITIZER coverage=$COVERAGE upgrade-guard=$UPGRADE -> $verdict"
+
+          names=()
+          if [ "$verdict" = failure ]; then
+            while IFS= read -r n; do [ -n "$n" ] && names+=("$n"); done < <(
+              gh run view "$GITHUB_RUN_ID" --json jobs                 --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null) | .name'                 2>/dev/null || true)
+            if [ "${DRILL:-false}" = "true" ] && [ "${#names[@]}" -eq 0 ]; then
+              names+=("fire drill: no job actually failed")
+            fi
+          fi
+          .github/scripts/nightly-report.sh "$verdict" ${names+"${names[@]}"}
