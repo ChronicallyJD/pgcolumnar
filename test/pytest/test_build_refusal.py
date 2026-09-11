@@ -18,9 +18,51 @@ Two levels of arm here, deliberately. The injected-runner arms pin what the
 Python side does with a verdict. The `bash` arms pin the SHELL PLUMBING -- the
 sourcing, the quoting and the exit-status path -- which an injected runner
 cannot reach and which is where a wrong quote would hide.
+
+WHAT THIS FILE REACHES INTO, AND WHAT IT NO LONGER DOES (#432).
+
+CONTEXT.md's independence rule: the two harnesses are parallel in functionality and
+independent in implementation, and a pytest test that drives `test/lib.sh` is the
+first measurement wearing a Python wrapper -- it agrees with the shell by
+construction and can never report it wrong. This file was the largest item on that
+inventory.
+
+The fingerprint and manifest arms no longer go through it. Their subject is
+`test/pgc_fingerprint.py`, which has been the ONE implementation since #907;
+`pgc_source_fingerprint` and `pgc_source_manifest` in lib.sh are thin wrappers that
+shell out to exactly that module, so the old path was
+python -> bash -> lib.sh -> python3 -> the module. They call the module now, in
+process where the property allows and through the module's own CLI where it needs a
+different user or locale. Measured before converting a single arm: the fingerprint is
+byte-identical through both paths, the manifest is identical line for line, and both
+agree across LC_ALL=C, C.UTF-8 and en_US.UTF-8.
+
+WHAT STILL GOES THROUGH bash, and why each one is not a wrapper to be removed:
+
+  * `pgc_write_source_stamp`, `pgc_source_stamp_path`, `pgc_freshness_report` and
+    `pgc_freshness_verdict` are pure shell. They are the shell harness's OWN
+    implementation, not a wrapper over shared code, so an arm here is a second
+    harness testing the first. Those belong to the shell harness and are the next
+    step, not this one.
+  * `test_the_two_fingerprint_implementations_cover_the_same_inputs` reaches across
+    ON PURPOSE and is the one arm that should. Its subject is that neither side
+    carries a private copy, which cannot be expressed without touching both.
+    CONTEXT.md's rule allows exactly this -- "say which, and say why" -- so this is
+    the saying: it caught four defects in one day (#907), it is the guard that
+    reddens on the first edit if a private implementation returns, and the property
+    is the relationship rather than either side.
+  * `test_the_fix_does_not_rebaseline_stamps_already_on_disk` embeds the PREVIOUS
+    shell algorithm as a fixture and compares today's value against it. The fixture
+    is a file the test builds itself, which the rule permits, but it calls
+    `pgc_source_build_dirs` out of the real lib.sh for its directory list. Feeding it
+    the module's own `build_dirs` would make it self-contained; that is a change to
+    a historical-parity arm and it is not in this one.
 """
 
+import hashlib
+import inspect
 import os
+import sys
 import tempfile
 import shutil
 import pwd
@@ -31,6 +73,7 @@ import subprocess
 import pytest
 
 from pgc_cluster import (build_and_install, build_once, make_cluster,
+                         source_manifest,
                          source_fingerprint)
 
 
@@ -358,6 +401,66 @@ def test_make_cluster_leaves_nothing_behind_when_setup_fails(tmp_path, expect):
                 "a failed make_cluster leaves no directory behind")
 
 
+def test_the_cleanup_guard_has_the_shape_the_leak_needs(expect):
+    """The arm above proves the tree is gone. It cannot prove WHY, and three of
+    the four properties that make the guard work are invisible to it.
+
+    `make_cluster` fails one way in that test: a missing `pg_config`. The guard
+    also has to survive a KeyboardInterrupt, stop a postmaster it already started,
+    and re-raise rather than return None. Each needs a different failure to
+    observe, and two of them cannot be provoked from a test at all -- you cannot
+    deliver SIGINT into `initdb` reliably, and a cluster that started is a cluster
+    this arm would then have to stop.
+
+    So these are SOURCE checks, and they are labelled as such rather than sold as
+    behavioural. They moved here from `test/selftest/380`, which read this file as
+    text across the harness boundary. A shell part can pin this text; what it
+    cannot do is what the arm above does. Reading our own module is not a
+    cross-harness reference, so the property lives where its subject lives.
+    """
+    import inspect
+    body = inspect.getsource(make_cluster)
+
+    # Cut to the handler. These shapes occur elsewhere in the module, and a check
+    # over the whole file reports a guard present that lives in another function.
+    expect.at_least(len(body.splitlines()), 15,
+                    "premise: the source of the function itself was read")
+
+    for fragment, name in (
+        ("except BaseException:",
+         "the handler catches BaseException, so an interrupt cleans up too"),
+        ("cluster.stop()",
+         "and it stops a partially started cluster"),
+        ("shutil.rmtree(root",
+         "and it removes the tree"),
+    ):
+        expect.num(body.count(fragment), 1, name)
+
+    # The bare re-raise, anchored to a line: `raise` appears inside this function
+    # in the is_ours() refusal too, as `raise RuntimeError(...)`, and a substring
+    # count would read that as the re-raise and pass with the re-raise deleted.
+    bare = [ln for ln in body.splitlines() if ln.strip() == "raise"]
+    expect.num(len(bare), 1,
+               "and the original error is re-raised rather than swallowed")
+
+
+def test_this_module_keeps_no_private_fingerprint(expect):
+    """One implementation, in `test/pgc_fingerprint.py`, since #907.
+
+    A second copy reappearing in a caller is the defect rather than a detail: it
+    agrees with the shared one until it does not, and nothing says when that was.
+    Also a source check, and also moved out of `test/selftest/380`.
+    """
+    import pgc_cluster
+    src = pathlib.Path(inspect.getsourcefile(pgc_cluster)).read_text(encoding="utf-8")
+    expect.at_least(len(src), 200, "premise: the module's own source was read")
+    for fragment, name in (
+        ("hashlib.md5", "no private md5 digest"),
+        ('glob("*/Makefile")', "and no private build-directory walk"),
+    ):
+        expect.num(src.count(fragment), 0, name)
+
+
 # ---------------------------------------------------------------------------
 # THE PYTEST TWIN of test/selftest/340's stamp arms, owed under jd's rule of
 # 2026-09-23... 2026-09-09: every test written twice. The .sh half could not
@@ -376,6 +479,70 @@ def _sh(srcdir, expr):
     """Evaluate one lib.sh expression against a tree, and return its stdout."""
     script = f'. "{SRCDIR}/test/lib.sh" || exit 1; {expr}'
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    return p.stdout.strip(), p.returncode
+
+
+# ---- the fingerprint machinery, called where it LIVES ---------------------------
+#
+# These used to go python -> bash -> test/lib.sh -> python3 -> test/pgc_fingerprint.py.
+# The last step is the ONE implementation (#907); the two before it are lib.sh's thin
+# wrapper, so the round trip made every one of these arms a test of the shell harness
+# as well as the module. That is the coupling CONTEXT.md's independence rule names: a
+# pytest test that drives `test/lib.sh` is the first measurement wearing a Python
+# wrapper, so it agrees with the shell by construction and can never report it wrong.
+#
+# Calling the module is not "testing a different thing". Measured on a fixture tree,
+# before any arm was converted: the fingerprint is byte-identical through both paths,
+# the manifest is byte-identical line for line, and both agree across LC_ALL=C,
+# C.UTF-8 and en_US.UTF-8. What is gone is the wrapper, not the subject.
+#
+# WHAT STILL GOES THROUGH bash, and why, is listed in the module docstring: the arms
+# whose subject IS lib.sh's own behaviour rather than the module's computation.
+
+
+_FP_MODULE = pathlib.Path(__file__).resolve().parent.parent / "pgc_fingerprint.py"
+
+
+def _fp_of(tree):
+    """The fingerprint of a tree, from the one implementation.
+
+    `""` rather than None for "could not be computed", which is the shape these arms
+    already compared against when they read it out of the shell.
+    """
+    return source_fingerprint(tree) or ""
+
+
+def _mf_of(tree):
+    """The manifest of a tree, from the one implementation.
+
+    Returned RAW, so None -- the module's "a digest failed" -- reaches the arm and
+    breaks it loudly instead of being smoothed into an empty manifest. That
+    distinction is the module's whole reason for returning None, and an `or ""` here
+    would be this file re-creating the defect the module exists to refuse.
+    """
+    return source_manifest(tree)
+
+
+def _fp_cli(tree, user="", env=None):
+    """The fingerprint, from the module's own CLI in a separate process.
+
+    OUT OF PROCESS because two properties need it: reading as an unprivileged user
+    (root ignores `chmod 000`, so an in-process call cannot see a denied read), and
+    running under a different locale. Neither needs the shell harness -- the module
+    ships the CLI that `test/lib.sh` itself invokes, so this is the same entry point
+    lib.sh uses with lib.sh taken out of the path.
+
+    Its contract, which is why the arms below read the same values they did through
+    bash: `fingerprint DIR` prints the hash and exits 0, and prints EMPTY when a digest
+    could not be read. lib.sh's wrapper passes that through unchanged.
+    """
+    argv = [sys.executable, str(_FP_MODULE), "fingerprint", str(tree)]
+    if user:
+        argv = ["runuser", "-u", user, "--"] + argv
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    p = subprocess.run(argv, capture_output=True, text=True, env=e)
     return p.stdout.strip(), p.returncode
 
 
@@ -419,11 +586,11 @@ def test_two_installations_of_one_major_do_not_share_a_stamp(tmp_path, expect):
 def test_moving_bytes_between_files_moves_the_shell_fingerprint(tmp_path, expect):
     """`xargs -0 cat | md5sum` could not see a repartition."""
     t = _tree_with_module(tmp_path, "rp")
-    before, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+    before = _fp_of(t)
     expect.at_least(len(before), 12, "premise: the tree fingerprints at all")
     (t / "src" / "a.c").write_text("int a;\nint b;\n")
     (t / "objstore" / "b.c").write_text("")
-    after, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+    after = _fp_of(t)
     expect.text(str(after != before), "True",
                 "moving bytes between files moves the fingerprint")
 
@@ -578,24 +745,24 @@ def test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one(expect):
         return
     root, t = _readable_tree("t")
     try:
-        base, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+        base, _ = _fp_cli(t, user=user)
         expect.at_least(len(base), 12, "premise: the tree fingerprints at all")
 
         # Premise for the mechanism itself: the unprivileged reader must agree
         # with a privileged one while nothing is denied, or the arm below would
         # be measuring the user switch rather than the failure.
-        mine, _ = _sh_fp_as("", f'pgc_source_fingerprint "{t}"')
+        mine, _ = _fp_cli(t)
         expect.text(base, mine, "premise: the unprivileged read agrees while readable")
 
         for name in ("b.c", "c.c"):
             f = t / "src" / name
             f.chmod(0o000)
-            got, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+            got, _ = _fp_cli(t, user=user)
             f.chmod(0o644)
             expect.text(got or "empty", "empty",
                         f"an unreadable {name} yields no fingerprint, not a wrong one")
 
-        after, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+        after, _ = _fp_cli(t, user=user)
         expect.text(after, base, "control: and the tree fingerprints again once readable")
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -615,7 +782,7 @@ def test_a_failed_digest_gives_unverified_and_never_a_false_stale(expect):
         return
     root, t = _readable_tree("v")
     try:
-        base, _ = _sh_fp_as(user, f'pgc_source_fingerprint "{t}"')
+        base, _ = _fp_cli(t, user=user)
         expect.at_least(len(base), 12, "premise: the tree fingerprints at all")
         (t / "src" / "b.c").chmod(0o000)
         verdict, _ = _sh_fp_as(
@@ -634,7 +801,7 @@ def test_one_tree_hashes_one_way_however_the_path_is_spelled(tmp_path, expect):
     t = _fp_tree(tmp_path, "s")
     link = tmp_path / "s_link"
     link.symlink_to(t)
-    plain, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    plain = _fp_of(t)
     expect.at_least(len(plain), 12, "premise: the fixture fingerprints at all")
     for label, spelling in (
         ("a trailing slash", f"{t}/"),
@@ -642,9 +809,14 @@ def test_one_tree_hashes_one_way_however_the_path_is_spelled(tmp_path, expect):
         ("a /src/.. segment", f"{t}/src/.."),
         ("a symlink", str(link)),
     ):
-        got, _ = _sh_fp(f'pgc_source_fingerprint "{spelling}"')
+        got = _fp_of(spelling)
         expect.text(got, plain, f"{label} hashes the same tree the same way")
-    rel, _ = _sh_fp(f'cd "{t}" && pgc_source_fingerprint .')
+    _cwd = os.getcwd()
+    try:
+        os.chdir(t)
+        rel = _fp_of(".")
+    finally:
+        os.chdir(_cwd)
     expect.text(rel, plain, "a relative path hashes the same tree the same way")
 
 
@@ -682,12 +854,12 @@ def test_the_fingerprint_still_moves_on_a_real_change(tmp_path, expect):
     its input, so the set needs one arm proving the hash still moves.
     """
     t = _fp_tree(tmp_path, "m")
-    before, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    before = _fp_of(t)
     (t / "src" / "a.c").write_text("int a = 2;\n")
-    after, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    after = _fp_of(t)
     expect.text(str(after != before), "True", "a real content change moves the fingerprint")
     (t / "src" / "a.c").write_text("int a;\n")
-    restored, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
+    restored = _fp_of(t)
     expect.text(restored, before, "and restoring the content restores it")
 
 
@@ -706,12 +878,12 @@ def test_a_tree_with_nothing_hashable_reports_no_fingerprint(tmp_path, expect):
     anything.
     """
     live = _fp_tree(tmp_path, "hollow_premise")
-    base, _ = _sh_fp(f'pgc_source_fingerprint "{live}"')
+    base = _fp_of(live)
     expect.at_least(len(base), 12,
                     "premise: the same helper returns a fingerprint for a real tree")
     empty = tmp_path / "hollow"
     empty.mkdir()
-    got, _ = _sh_fp(f'pgc_source_fingerprint "{empty}"')
+    got = _fp_of(empty)
     expect.text(got or "empty", "empty", "an unhashable tree yields no fingerprint")
 
 
@@ -738,7 +910,7 @@ def test_the_manifest_names_what_the_fingerprint_hashed(tmp_path, expect):
     answer.
     """
     t = _mf_tree(tmp_path, "mf")
-    out, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    out = _mf_of(t)
     lines = [l for l in out.splitlines() if l.strip()]
     expect.num(len(lines), 6, "the manifest names every file the fingerprint hashes")
     shaped = [l for l in lines if re.fullmatch(r"[A-Za-z0-9_./-]+ [0-9a-f]{32}", l)]
@@ -750,8 +922,8 @@ def test_the_manifest_names_what_the_fingerprint_hashed(tmp_path, expect):
 def test_the_fingerprint_is_the_hash_of_the_manifest(tmp_path, expect):
     """One is defined as the other, so the two cannot drift apart."""
     t = _mf_tree(tmp_path, "mh")
-    fp, _ = _sh_fp(f'pgc_source_fingerprint "{t}"')
-    via, _ = _sh_fp(f'pgc_source_manifest "{t}" | md5sum | cut -c1-12')
+    fp = _fp_of(t)
+    via = hashlib.md5((_mf_of(t) + "\n").encode()).hexdigest()[:12]
     expect.text(fp, via, "the fingerprint is the hash of the manifest")
 
 
@@ -764,9 +936,9 @@ def test_an_added_file_is_named_rather_than_merely_changing_the_hash(tmp_path, e
     same line.
     """
     t = _mf_tree(tmp_path, "add")
-    before, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    before = _mf_of(t)
     (t / "src" / "zz_appeared.c").write_text("int zz;\n")
-    after, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    after = _mf_of(t)
     gained = set(after.splitlines()) - set(before.splitlines())
     expect.num(len(gained), 1, "exactly one manifest line appears")
     expect.text(sorted(gained)[0].split()[0], "src/zz_appeared.c",
@@ -906,8 +1078,7 @@ def test_one_tree_hashes_one_way_however_the_locale_is_set(expect):
 
         seen = {}
         for loc in wanted:
-            got, _ = _sh_fp(f'pgc_source_fingerprint "{t}"',
-                            env={"LC_ALL": loc, "LANG": loc})
+            got, _ = _fp_cli(t, env={"LC_ALL": loc, "LANG": loc})
             seen[loc] = got
         expect.at_least(len(seen[wanted[0]]), 12,
                         "premise: the tree fingerprints at all")
@@ -948,7 +1119,7 @@ def test_a_symlinked_src_is_skipped_like_any_other_symlinked_build_dir(tmp_path,
     expect.num(len(list(real.iterdir())), 2,
                "premise: and the target holds sources find would otherwise hash")
 
-    out, _ = _sh_fp(f'pgc_source_manifest "{t}"')
+    out = _mf_of(t)
     lines = [l for l in out.splitlines() if l.strip()]
     expect.num(len([l for l in lines if l.startswith("src/")]), 0,
                "a symlinked src contributes nothing, as find -P contributes nothing")
@@ -960,6 +1131,6 @@ def test_a_symlinked_src_is_skipped_like_any_other_symlinked_build_dir(tmp_path,
     (real_tree / "src" / "a.c").write_text("int a;\n")
     (real_tree / "Makefile").write_text("all:\n\ttrue\n")
     (real_tree / "pgcolumnar.control").write_text("x\n")
-    out2, _ = _sh_fp(f'pgc_source_manifest "{real_tree}"')
+    out2 = _mf_of(real_tree)
     expect.num(len([l for l in out2.splitlines() if l.startswith("src/a.c ")]), 1,
                "control: a real src directory is still hashed")

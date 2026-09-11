@@ -415,6 +415,26 @@ def source_fingerprint(srcdir):
     return _fp.fingerprint(srcdir) or None
 
 
+def source_manifest(srcdir):
+    """Every file the fingerprint hashes, one "relpath digest" per line.
+
+    THE SAME TEXT test/lib.sh's `pgc_source_manifest` prints, because both are the
+    same call into test/pgc_fingerprint.py. A caller comparing the two is therefore
+    comparing one implementation with itself rather than two that can drift.
+
+    None, not "", when a file could not be read -- the module's contract, and
+    deliberate: a digest that FAILED must not look like one that succeeded. lib.sh's
+    wrapper substitutes a sentinel line there instead, which is the WRAPPER's
+    behaviour and not the module's, so a test of that belongs to the shell harness.
+
+    I wrote this as a join over (relpath, digest) pairs first. `manifest()` returns the
+    joined TEXT, and my probe had an `isinstance` fallback that quietly stringified it
+    and then reported the two "identical" -- so the wrong assumption read as verified
+    until the real call raised.
+    """
+    return _fp.manifest(srcdir)
+
+
 def build_once(srcdir, pg_config, major, lock_path=None, runner=None):
     """build_and_install, but at most once across xdist workers.
 

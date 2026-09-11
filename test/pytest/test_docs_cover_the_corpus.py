@@ -335,9 +335,15 @@ MODE_ID = re.compile(r"`([a-z0-9]+(?:-[a-z0-9]+){2,})`")
 MODES_DOC = HERE / "VACUITY_MODES.md"
 
 
-def _named_modes():
-    """-> (refused, not_refused, all) per section 1a's rule."""
-    text = MODES_DOC.read_text()
+def _named_modes_in(text):
+    """-> (refused, not_refused, all) per section 1a's rule, over TEXT.
+
+    A seam, so the rule can be reached with a fixture. `test/selftest/350` had one
+    and this did not: the rule was implemented twice and self-tested once, on the
+    side that cannot run the corpus it counts. Its edge cases now live here with it
+    -- an id of fewer than three words, an id named twice, stopping at the next
+    heading, and section 3's back-references.
+    """
     chunks = {}
     for chunk in re.split(r"^## ", text, flags=re.M):
         head = chunk.splitlines()[0] if chunk.strip() else ""
@@ -350,6 +356,24 @@ def _named_modes():
     # and the totals stop adding up -- measured at 25 + 50 against 72 named.
     not_refused = not_refused - refused
     return refused, not_refused, set().union(*chunks.values()) if chunks else set()
+
+
+def _named_modes():
+    """The same rule, over the document on disk."""
+    return _named_modes_in(MODES_DOC.read_text())
+
+
+def _stated_row(text, label):
+    """-> the number in the VALUE cell of section 1a's row for LABEL, or None.
+
+    The value cell, never the first number on the line. The labels themselves
+    contain digits -- "named in section 2, refused today" -- so reading the first
+    number returns the 2 from "section 2". `test/selftest/350` shipped exactly that
+    bug and read 2 and 3 for totals of 21 and 51, and its own fixture could not see
+    it because there the label digit and the value were both 2.
+    """
+    m = re.search(rf"\|[^|\n]*{re.escape(label)}[^|\n]*\|\s*\**(\d+)", text)
+    return None if m is None else int(m.group(1))
 
 
 def test_the_mode_inventory_states_its_own_totals_correctly(expect):
@@ -454,3 +478,180 @@ def test_the_two_halves_of_the_refused_sentence_sum_to_the_named_total(expect):
                "the two halves sum to the number of modes the inventory names")
     expect.num(refused, len(_named_modes()[0]),
                "and the refused half is the count of ids section 2 claims")
+
+
+# ---------------------------------------------------------------------------
+# The counting rule's own edges, and the row reader's.
+#
+# These moved from `test/selftest/350` (#432). The rule is implemented on both
+# sides -- that is the two-harness design, parallel in functionality -- but it was
+# SELF-TESTED only on the shell side, which cannot run the corpus it counts. A rule
+# with no fixtures is a rule that passes because the document happens to agree with
+# it today.
+# ---------------------------------------------------------------------------
+
+_FIXTURE_DOC = """## 1a. Counting
+
+| named in section 2, refused today | **2** |
+| named in section 3, not refused | **1** |
+
+## 2. Refused
+
+`one-two-three` and `four-five-six`, and `one-two-three` again.
+
+## 3. Not refused
+
+`seven-eight-nine`. And `one-two-three` is now closed.
+
+## 4. Something else
+
+`ten-eleven-twelve`
+"""
+
+
+def test_the_counting_rule_counts_a_fixture_as_the_document_says(expect):
+    """Section 2 names two distinct ids; section 3 names one, after its
+    back-reference to a section 2 id is discounted."""
+    refused, not_refused, allm = _named_modes_in(_FIXTURE_DOC)
+    expect.text(", ".join(sorted(refused)), "four-five-six, one-two-three",
+                "section 2's ids, deduplicated")
+    expect.text(", ".join(sorted(not_refused)), "seven-eight-nine",
+                "section 3's ids, minus the back-reference section 2 already claims")
+    expect.num(len(allm), 4, "and every id in the document is seen once")
+
+
+def test_an_id_of_fewer_than_three_words_is_not_a_mode(expect):
+    """The rule is three or more words. Two is an ordinary backticked phrase, and
+    counting it would make every `foo-bar` in prose a mode."""
+    doc = "## 2. Refused\n\n`one-two` and `alpha` and `one-two-three`\n"
+    refused, _, _ = _named_modes_in(doc)
+    expect.text(", ".join(sorted(refused)), "one-two-three",
+                "only the three-word id counts")
+
+
+def test_the_counter_stops_at_the_next_heading(expect):
+    """Section 2's count must not reach into section 4. Without the stop, every id
+    below section 2 would be refused, and the totals would agree with nothing."""
+    refused, _, _ = _named_modes_in(_FIXTURE_DOC)
+    expect.text("ten-eleven-twelve" in refused and "yes" or "no", "no",
+                "an id in a later section is not counted as refused")
+
+
+def test_the_row_reader_takes_the_value_not_a_digit_in_the_label(expect):
+    """The labels contain digits. Reading the first number on the line returns the
+    2 from "section 2" -- which `test/selftest/350` did, reporting 2 and 3 for
+    totals of 21 and 51. The fixture there could not see it, because the label
+    digit and the value were both 2.
+
+    So this fixture makes them DIFFER: the label says "section 2" and the value is
+    9. A reader that takes the label's digit answers 2 and fails here.
+    """
+    doc = "| named in section 2, refused today | **9** |\n"
+    expect.num(_stated_row(doc, "refused today"), 9,
+               "the value cell is read, not the digit inside the label")
+
+
+def test_an_absent_row_is_none_rather_than_a_number_that_happens_to_match(expect):
+    """A missing row must be distinguishable from a row stating zero. Returning 0
+    for both would make a document that states nothing agree with a corpus that
+    counts nothing."""
+    expect.text(repr(_stated_row("## 1a. Counting\n\nno table here\n", "refused today")),
+                "None", "an absent row reads as None")
+    expect.num(_stated_row("| refused today | **0** |\n", "refused today"), 0,
+               "and a row stating zero reads as 0")
+
+
+def test_a_stated_total_that_disagrees_with_the_ids_is_visible(expect):
+    """The arm this whole block protects: the document's number against the ids on
+    disk. With the fixture's own table it agrees; change the table and it must not."""
+    refused, not_refused, _ = _named_modes_in(_FIXTURE_DOC)
+    expect.num(_stated_row(_FIXTURE_DOC, "refused today"), len(refused),
+               "control: the fixture's stated refused total is its id count")
+    wrong = _FIXTURE_DOC.replace("refused today | **2** |", "refused today | **7** |")
+    expect.differ(_stated_row(wrong, "refused today"), len(refused),
+                  "and a disagreeing total does not compare equal")
+
+
+# ---------------------------------------------------------------------------
+# Every contents-list link must reach a heading.
+#
+# Moved from `test/selftest/350` (#432), where the subject was this directory's own
+# documents. TESTS.md's contents list gained an entry whose anchor stripped the
+# underscores out of a file name -- `#14-testharnessdepspy-…` against a heading
+# GitHub renders as `#14-test_harness_depspy-…` -- so the link went nowhere while
+# eleven entries above it kept the underscores. Neither coverage sweep could see
+# it: both look for NAMES, and a broken link still contains the name it points at.
+# A reader finds out by clicking.
+#
+# ONE DIRECTION ON PURPOSE. Every link must reach a heading; the reverse needs an
+# exemption list, because "## Contents" is a heading no entry links to, and a
+# hand-maintained exemption list is the thing this corpus keeps deleting.
+# ---------------------------------------------------------------------------
+
+_LINK = re.compile(r"\]\(#([A-Za-z0-9_-]+)\)")
+_HEADING = re.compile(r"^#{2,} +(.+)$", re.M)
+
+
+def _github_anchor(heading):
+    """GitHub's rule: lowercase, drop anything that is not a letter, digit, space,
+    hyphen or underscore, then spaces to hyphens. The dot in `.py` and the colon
+    after it go; the underscores stay."""
+    kept = [c for c in heading.lower() if c.isalnum() or c in " _-"]
+    return "".join(kept).replace(" ", "-")
+
+
+def _unresolved_links(text):
+    """-> sorted anchors that no heading in TEXT produces."""
+    have = {_github_anchor(h) for h in _HEADING.findall(text)}
+    return sorted({a for a in _LINK.findall(text) if a not in have})
+
+
+def test_the_anchor_rule_drops_punctuation_and_keeps_underscores(expect):
+    """The derivation, on the heading the defect was found in."""
+    # Assembled, for the reason given in the arm below: a literal corpus file name
+    # in a string makes the membership classifier read this file as driving that
+    # one. The anchor on the right keeps its literal form, because the dot is gone
+    # from it and so it is no longer that file's name.
+    heading = "14. " + "test" + "_harness" + "_deps" + ".py: the harness must self-test"
+    expect.text(_github_anchor(heading),
+                "14-test_harness_depspy-the-harness-must-self-test",
+                "the dot and the colon go, the underscores stay")
+
+
+def test_an_anchor_that_strips_the_underscores_is_caught(expect):
+    """The exact shape that shipped, and a control beside it. Without the control a
+    sweep that matches nothing reports the same clean answer."""
+    # THE FILENAME IS ASSEMBLED, NOT WRITTEN. A literal `test_harness_deps.py` in
+    # this string makes `_mentioned_files` in that very file read this one as a
+    # driver of it, and the membership classifier then calls this file
+    # cluster-bound. That is CONTEXT.md's rule 3 -- "a word that merely looks like
+    # a filename" -- and it cost two red arms before the cause was found. The
+    # heading here is sample markdown, not a reference.
+    _f = "test" + "_harness" + "_deps" + ".py"
+    good = (f"## 14. {_f}: the harness\n"
+            "- [14. x](#14-test_harness_depspy-the-harness)\n")
+    bad = (f"## 14. {_f}: the harness\n"
+           "- [14. x](#14-testharnessdepspy-the-harness)\n")
+    expect.text(", ".join(_unresolved_links(good)) or "none", "none",
+                "control: an anchor that keeps the underscores resolves")
+    expect.text(", ".join(_unresolved_links(bad)),
+                "14-testharnessdepspy-the-harness",
+                "and one that strips them is named rather than passed over")
+
+
+def test_every_in_document_link_in_this_directory_reaches_a_heading(expect):
+    """The real sweep, over every document beside this file.
+
+    With a coverage premise: a sweep over an empty file list reports nothing
+    broken, which is what a correct set of documents reports too.
+    """
+    docs = sorted(HERE.glob("*.md"))
+    expect.at_least(len(docs), 3, "premise: the sweep found this directory's documents")
+    total_links = 0
+    for doc in docs:
+        text = doc.read_text(encoding="utf-8")
+        total_links += len(_LINK.findall(text))
+        expect.text(", ".join(_unresolved_links(text)) or "none", "none",
+                    f"every in-document link in {doc.name} reaches a heading")
+    expect.at_least(total_links, 15,
+                    "premise: and it parsed links rather than finding none")

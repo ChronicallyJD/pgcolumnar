@@ -34,7 +34,6 @@
 340-the-binary-must-be-built-from.sh
 350-the-pytest-corpus-must-be.sh
 360-an-unrunnable-pytest-test-must.sh
-370-the-plan-marker-guard-must.sh
 380-the-pytest-cluster-helpers.sh
 390-a-registered-suite-must-account.sh
 400-a-check-result-must-be-machine.sh

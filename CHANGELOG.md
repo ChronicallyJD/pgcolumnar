@@ -505,6 +505,203 @@ true until the next version shipped.
   the guard stops being tested that run without anyone noticing" -- four lines above the
   first `exit 0`.
 
+- The pytest corpus reaches into the shell harness in three files instead of four, and
+  the inventory that records it is now a mechanism rather than prose (#432).
+
+  CONTEXT.md's rule: the two harnesses are parallel in functionality and independent in
+  implementation. A pytest test that drives `test/lib.sh` is the first measurement
+  wearing a Python wrapper -- it agrees with the shell by construction and can never
+  report it wrong -- so the coupling turns a twin into a mirror.
+
+  `test_build_refusal.py` was the largest item on that inventory at 36 cross-harness
+  calls. **22 of them are gone.** Their subject was `test/pgc_fingerprint.py`, which has
+  been the one implementation since #907, and `pgc_source_fingerprint` and
+  `pgc_source_manifest` in `lib.sh` are thin wrappers that shell out to exactly that
+  module -- so the path was python -> bash -> lib.sh -> python3 -> the module, and taking
+  the middle two out changed no subject. Measured before converting a single arm: the
+  fingerprint is byte-identical through both paths, the manifest identical line for line,
+  and both agree across `LC_ALL=C`, `C.UTF-8` and `en_US.UTF-8`.
+
+  Two of those arms need a separate process rather than an in-process call -- one reads
+  as an unprivileged user, because root ignores `chmod 000`, and one varies the locale --
+  and both now use the module's own CLI, which is the entry point `lib.sh` itself uses
+  with `lib.sh` taken out of the path.
+
+  13 calls remain and only 7 are debt: they drive `pgc_write_source_stamp`,
+  `pgc_source_stamp_path`, `pgc_freshness_report` and `pgc_freshness_verdict`, which are
+  PURE SHELL rather than wrappers over shared code, so those properties belong to the
+  shell harness. Two are the one permitted cross-reference, named as the rule asks, and
+  two are a historical-parity arm whose fixture is its own.
+
+  **`SHELL_REFERENCES` in `test_harness_deps.py` makes the inventory falsifiable.** It
+  declares which files reach across and by what mechanism, and asserts set equality in
+  both directions: a new file that reaches in reddens, and a file that stops reaching and
+  is left in the list reddens too -- which is what stops a record of debt becoming a
+  permanent exemption.
+
+  A file-level guard, which is what the rule asks for and the most it can honestly be:
+  within a flagged file it cannot tell a path joined onto the real tree from the same
+  name joined onto a `tmp_path`, because both are the string `lib.sh` and only the
+  dataflow says which.
+
+  **The other direction: `test/selftest/370` is deleted.** It pinned the POSITION of
+  `plan_marker`'s empty-plan refusal by reading the Python source as text, which is all a
+  shell part can see. It cannot run the function, so it cannot tell a refusal that still
+  fires from one stranded behind an early return -- the only thing the position is for.
+  The property moved into `test_guards_pinned.py` as
+  `test_the_empty_plan_refusal_precedes_the_arms_it_protects`, which takes the class off
+  the `expect` fixture so the file still imports nothing. 370's other three properties
+  were already covered; confirmed by running those arms, not by reading them.
+
+  That arm discriminates -- move the refusal to the end of `plan_marker` and it fails --
+  and it is NOT load-bearing today: with the refusal at the end,
+  `plan_marker([], absent=True)` still refuses, because `plan_marker` has no early
+  return. So 370's stated reason, that the absent arm returns a pass first, describes a
+  shape the function does not have. It is labelled prospective insurance against a
+  refactor that adds one, rather than sold as a live hole.
+
+  **CONTEXT.md said seven shell files reach across and the number is three.** `lib.sh`,
+  `selftest/030` and `selftest/040` matched only `pgc_cluster_datadir` and
+  `pgc_cluster_is_ours`, which are shell functions defined in `lib.sh` -- rule 3 of that
+  entry, "a word that merely looks like a filename", caught for the second time in the
+  entry that states it. `selftest/350`, `360` and `380` are the real three.
+
+  **`test/selftest/360` is rewritten rather than deleted, and it now checks more.**
+  Eleven of its seventeen arms were text pins on `pgc_vacuity.py`: that the
+  unrunnable field is written, that something reads it, that the read reaches
+  `session.exitstatus`, that the override is conditional. Those are gone. What is
+  left is the kind CONTEXT.md permits -- a property that IS the relationship between
+  the two harnesses, so it cannot be stated from one side -- and there turned out to
+  be THREE such properties where the part checked one.
+
+  The part checked the INCOMPLETE exit code and left two duplications beside it
+  unchecked: the closed list of unrunnable reasons, and the one-line shape an
+  unrunnable check prints. Both are now parsed out of both files and compared, with
+  a drifted fixture for each so the comparison can fail. The reason list is the
+  worse omission of the two, because being closed on both sides is its whole purpose.
+
+  Both deletions were measured first. With `session.exitstatus = EXIT_INCOMPLETE`
+  made unreachable in `pgc_vacuity.py` -- the defect exactly as it shipped -- the
+  four behavioural arms in `test_layer.py` go from `4 passed` to `2 failed, 2
+  passed`. Two is correct rather than partial: the other two assert exit 1 for a run
+  with a real failure and exit 0 for a run with nothing unrunnable, and neither
+  outcome moves. The file was restored and compared byte-for-byte afterwards.
+
+  **And the reason the part gave for keeping those pins was true when written and is
+  not now.** It said the behavioural arms "need pytest, psycopg and a virtualenv; CI
+  installs none of them". CI has a `pytest-guards` job that installs pytest pinned
+  from `requirements-test.txt`, asserts psycopg is absent, and runs the
+  database-free file list -- which contains `test_layer.py`. A stale justification
+  for keeping coverage in the wrong place is harder to find than a missing check,
+  because nothing reddens.
+
+  Two instrument defects of my own, both caught by the new arms' own premises. The
+  shape parse took the FIRST line matching the print marker, which in
+  `pgc_vacuity.py` is the DOCSTRING that spells the shape out for a reader;
+  requiring a quote before the marker selects the code in both languages. And the
+  drifted-shape fixture wrote one space where the real shape has two, so the parse
+  found nothing and the comparison was empty-against-real -- which "differs", for
+  the wrong reason. Its premise arm said so.
+
+  **`test/selftest/380` keeps finding 1 and hands finding 2 to the pytest corpus.**
+  The part covers two of @linuxhikerpm's #897 findings, and they have different
+  subjects. Finding 1 is `test/pgc_fingerprint.py`, which `lib.sh` runs with the
+  system interpreter and which is not part of the pytest harness, so checking it is
+  this part's own business and it stays. Finding 2 is `test/pytest/pgc_cluster.py`,
+  and the nine arms that read it as text are gone.
+
+  Seven of its twenty-one checks had a cross-harness subject, not twenty-one: the
+  other fourteen read `pgc_fingerprint.py`, `lib.sh`, or fixtures the part writes
+  itself. Counting the whole file would have deleted coverage that was never debt.
+
+  `make_cluster`'s cleanup SHAPE moved to `test_build_refusal.py` as
+  `test_the_cleanup_guard_has_the_shape_the_leak_needs`, beside the behavioural arm
+  that provokes a real failed setup. It has to be a source check, and it says so:
+  `make_cluster` fails exactly one way in the behavioural arm -- a missing
+  `pg_config` -- while three more properties decide whether the guard works, and two
+  of those cannot be provoked at all. You cannot deliver SIGINT into `initdb`
+  reliably, and a cluster that started is one the arm would then have to stop.
+
+  Five mutations say the moved arms discriminate, each asserted to have applied,
+  each leaving the module well-formed, restored byte-for-byte afterwards:
+  `BaseException` narrowed to `Exception`, `cluster.stop()` removed, the bare
+  re-raise turned into `pass`, a private `hashlib.md5` added, and
+  `shutil.rmtree(root, …)` removed. The two whose effect reaches the filesystem
+  redden the behavioural arm as well; the three that redden only the source arm are
+  exactly the properties the behavioural arm cannot see.
+
+  One of those five did not apply on the first attempt -- the `cluster.stop()`
+  pattern assumed twelve spaces of indentation and the call sits at sixteen, inside
+  a nested `try`. The harness refused to report a result for it rather than printing
+  a green, which is the only safe behaviour for a mutation that did not land.
+
+  **And one thing went wrong that is worth more than the change itself.** I ran the
+  selftest before naming the two new pytest arms in `TESTS.md`, so the run was red on
+  the doc-coverage check -- and then merged that log into `check_ledger.tsv`, whose
+  entire subject is which checks have ever been red. It recorded a red for
+  `350`'s "every test file and every test in the corpus is named in TESTS.md",
+  a check that failed only because my own change was half-finished. Reverted with
+  `git checkout HEAD --`; there is no second copy to repair from.
+
+  The merge step now refuses a log that is not definitely green: a numeric
+  `checks run:` line, a floor on it so an aborted run cannot pass, zero `FAIL`
+  lines, and rc=0. The absence of a `FAIL` line is not enough, because an aborted
+  run has none either -- the same shape as a pending-count that cannot see a job
+
+  **`test/selftest/350` goes from 50 checks to 5, and two of its rules moved rather
+  than being deleted.** Forty-six of the fifty had a subject on the other side of the
+  boundary: they globbed `test/pytest/*.py` and parsed Python out of it, or swept the
+  markdown in that directory. The pytest corpus asserts all three properties natively
+  in `test_docs_cover_the_corpus.py`, where the subject is, so the shell copy could
+  only ever agree with it.
+
+  Two of the three rules were implemented on BOTH sides and self-tested only on the
+  shell side -- the side that cannot run the corpus it counts. Deleting those
+  fixtures would have left the Python implementation with no fixtures at all, so they
+  went with them:
+
+  - the mode-counting rule's edges: an id of fewer than three words, an id named
+    twice, stopping at the next heading, section 3's back-references, and the row
+    reader taking the value cell rather than a digit inside its label
+  - the contents-list anchor rule: GitHub's derivation, the broken link that shipped,
+    and a control beside it
+
+  `_named_modes_in(text)` and `_stated_row(text, label)` are new seams, so a fixture
+  can reach the rules at all. The row reader's fixture makes the label digit and the
+  value DIFFER -- label "section 2", value 9 -- because `350`'s own fixture had both
+  as 2 and could not see the bug it was written for.
+
+  **What stays in 350 is its arms over `ci.yml`**, whose subject is neither harness.
+  A shell part may read the workflow for the same reason it may read the Makefile, and
+  no pytest arm can assert that the gate runs pytest without assuming the thing in
+  question. One arm is added while the part's subject is being settled: the job must
+  ASSERT `psycopg` is absent rather than assume it.
+
+  ### The stale justification, in triplicate
+
+  TESTS.md section 6 said "Nothing runs pytest. Not `run_all_versions.sh`, not any
+  workflow under `.github/`", and concluded that the `.sh` half was therefore the
+  enforcement. CI has a `pytest-guards` job: it installs pytest pinned from
+  `requirements-test.txt`, asserts `psycopg` is absent, derives the file list from
+  `NO_CLUSTER`, and runs it.
+
+  That claim was load-bearing in THREE places at once -- TESTS.md section 6,
+  `selftest/360` and `selftest/380` -- each asserting the behavioural half could not
+  run in CI. Nothing was wrong in any of them; the reason was, three times, and **no
+  arm reddens on a stale justification.** All three are corrected.
+
+  ### Where the two harnesses now stand
+
+  Shell parts holding a reference to anything under `test/pytest/`: **one**, and it is
+  deliberate. `selftest/360` reads `pgc_vacuity.py` to compare the three values the
+  two harnesses both write down -- the INCOMPLETE exit code, the closed list of
+  unrunnable reasons, and the line an unrunnable check prints. That is CONTEXT.md's
+  permitted cross-reference: a property that IS the relationship, so it cannot be
+  stated from one side. The inventory said seven; the measured answer was three plus a
+  deleted fourth; the end state is one.
+  which never started.
+
+
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
 
