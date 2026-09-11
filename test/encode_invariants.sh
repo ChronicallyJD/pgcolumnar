@@ -224,4 +224,27 @@ done
 check "no vector selects FSST at or below the distinct cap, so skipping its build cannot change output" \
 	"$([ -z "$lofail" ] && echo none || echo "selected:$lofail")" "none"
 
+# ---- the block compression default is pinned to its measurement (#890) -------
+#
+# The roadmap proposed making this default depend on a storage tier, on the premise
+# that block compression trades CPU for I/O. Phase 1 refuted the premise ON THIS
+# ENGINE: the cascade runs lightweight encodings first, so zstd works on
+# already-reduced bytes and its remaining cost is small against the memory traffic
+# it removes. PG 17.10, 400k rows, minimum of 12, arms round-robined, and the
+# none/zstd ranges do not overlap on any shape:
+#
+#     shape   marginal bytes saved   scan time vs none
+#     rep                   +76.6%   0.92  (faster)
+#     rand                   -1.7%   1.14  (slower -- incompressible)
+#     mix                   +12.0%   0.92  (faster)
+#
+# Warm cache, which UNDERSTATES the saving because no physical read happens on
+# either arm. A pin, not a discovery: changing this default should be a deliberate
+# act with a new measurement attached. Incompressible data is a real cost and the
+# answer there is the per-table override, not a different global default.
+check "the block compression default is zstd, pinned to #890 phase 1" \
+	"$(q "SHOW pgcolumnar.compression")" "zstd"
+check "and its level is 3" \
+	"$(q "SHOW pgcolumnar.compression_level")" "3"
+
 pgc_summary
