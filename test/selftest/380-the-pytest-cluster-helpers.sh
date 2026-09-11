@@ -15,19 +15,33 @@
 #      the directory -- and conftest.py cannot clean up after it, because
 #      `cluster, root = make_cluster(...)` never completes when the call raises.
 #
-# WHY STATIC, same division as selftests 360 and 370: the behavioural arms live
-# in test/pytest/test_build_refusal.py, which needs pytest, psycopg and a
-# virtualenv that CI does not install. This half pins the structure they rest on.
+# WHAT THIS PART COVERS, AND WHAT MOVED (#432). Finding 1 is here: its subject is
+# test/pgc_fingerprint.py, which lib.sh runs with the system interpreter and which
+# is NOT part of the pytest harness, so checking it is this part's own business.
+#
+# FINDING 2 HAS MOVED. Its subject is test/pytest/pgc_cluster.py, and the arms that
+# read it as text are now source checks in test/pytest/test_build_refusal.py, beside
+# the behavioural arm that provokes a real failed setup and asserts no directory is
+# left. Python reading its own module is not a cross-harness reference; a shell part
+# grepping it is the one CONTEXT.md refuses.
+#
+# AND THE OLD REASON FOR KEEPING THEM HERE IS STALE. It said those arms "need pytest,
+# psycopg and a virtualenv that CI does not install". CI has a `pytest-guards` job
+# that installs pytest pinned from requirements-test.txt, asserts psycopg is absent,
+# and runs the database-free file list, which contains test_build_refusal.py.
+#
+# MEASURED BEFORE MOVING ANYTHING. Five mutations of pgc_cluster.py, each asserted to
+# have applied and each leaving the file well-formed: BaseException narrowed to
+# Exception, cluster.stop() removed, the bare re-raise turned into pass, a private
+# hashlib.md5 added, and shutil.rmtree(root) removed. Every one reddens on the python
+# side -- three of them only the source arm, two of them the behavioural arm as well.
+# Restored byte-for-byte after each.
 #
 # THE DERIVATION IS THE POINT OF THE FIRST GROUP. Hard-coding objstore/ would fix
 # today and fail the next time a module is added, so the arms below require the
 # GLOB rather than the name -- and require that the name does NOT appear, which
 # is the only way to tell a derivation from a list that happens to be complete.
 
-_pc_cl="$PGC_TESTDIR/pytest/pgc_cluster.py"
-
-check "premise: the pytest cluster helper is where this part thinks it is" \
-	"$([ -f "$_pc_cl" ] && echo yes || echo no)" "yes"
 
 # THE FINGERPRINT MOVED (#907). It was an independent Python implementation in
 # pgc_cluster.py and an independent shell one in lib.sh; the pair produced four
@@ -57,10 +71,6 @@ check "and no longer mixes in the bare filename" \
 	"$(grep -c 'h.update(path.name.encode())' "$_pc_fp")" "0"
 
 # AND NEITHER CALLER MAY KEEP A PRIVATE COPY. This is the arm that would catch
-# #907 recurring: the whole point is one implementation, so a second one
-# reappearing in either caller is the defect, not a detail.
-check "the pytest helper keeps no private fingerprint implementation" \
-	"$(grep -cE 'hashlib\.md5|glob\("\*/Makefile"\)' "$_pc_cl")" "0"
 
 check "and the shell keeps none either" \
 	"$(grep -cE 'md5sum < |xargs -0 cat' "$PGC_TESTDIR/lib.sh")" "0"
@@ -71,40 +81,11 @@ check "and the shell keeps none either" \
 check "the module imports nothing from the pytest tree" \
 	"$(grep -cE '^(import|from) +(pgc_|conftest|pytest|psycopg)' "$_pc_fp")" "0"
 
-# ---- and the lifecycle ------------------------------------------------------
-#
-# Cut make_cluster's body out before grepping: these shapes occur elsewhere in
-# the file, and an arm that greps the whole file reports a guard present that
-# lives in another function.
-_pc_body="$(awk '/^def make_cluster\(/{f=1} f&&/^def /&&!/make_cluster/{exit} f' "$_pc_cl")"
-
-check "premise: make_cluster's body was actually cut out of the file" \
-	"$([ "$(printf '%s\n' "$_pc_body" | wc -l)" -ge 15 ] && echo yes || echo "too short")" "yes"
-
-check "make_cluster removes its tree when setup raises" \
-	"$(printf '%s\n' "$_pc_body" | grep -c 'shutil.rmtree(root')" "1"
-
-# BaseException, not Exception: a KeyboardInterrupt during initdb leaks a datadir
-# and a possibly-running postmaster exactly like an error does.
-check "and it catches BaseException, so an interrupt cleans up too" \
-	"$(printf '%s\n' "$_pc_body" | grep -c 'except BaseException:')" "1"
-
-check "and it stops a partially started cluster before removing the tree" \
-	"$(printf '%s\n' "$_pc_body" | grep -c 'cluster.stop()')" "1"
-
-# Re-raising is what keeps the failure visible. Swallowing it would turn a failed
-# setup into a silent None.
-check "and the original error is re-raised rather than swallowed" \
-	"$(printf '%s\n' "$_pc_body" | grep -c '^        raise$')" "1"
 
 # ---- and these greps must be able to FAIL -----------------------------------
 
 _pc_fix="$PGC_WORKDIR/clusterhelpers"; rm -rf "$_pc_fix"; mkdir -p "$_pc_fix"
 
-printf 'def make_cluster(a, b):\n    root = mkdtemp()\n    return cluster, root\n' \
-	> "$_pc_fix/noguard.py"
-check "a make_cluster with no cleanup is caught" \
-	"$(grep -c 'shutil.rmtree(root' "$_pc_fix/noguard.py")" "0"
 
 printf '    dirs = [root / "src"]\n' > "$_pc_fix/srconly.py"
 check "a fingerprint that reads src only is caught" \
@@ -131,7 +112,5 @@ check "and a hard-coded module list is caught by the name arm" \
 check "premise: while the real module satisfies the derivation arm" \
 	"$(grep -cE '_is_plain_file\(d / "Makefile"\)' "$_pc_fp")" "1"
 
-check "premise: and the real helper still carries its cleanup" \
-	"$(grep -cE 'shutil.rmtree\(root' "$_pc_cl")" "1"
 
-unset _pc_cl _pc_fp _pc_body _pc_fix
+unset _pc_fp _pc_fix

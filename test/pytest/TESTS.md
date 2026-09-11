@@ -466,6 +466,37 @@ is where a wrong quote would hide.
 | `test_the_fingerprint_covers_a_separately_built_module` | an `objstore/` edit moves the hash |
 | `test_an_objstore_edit_forces_a_second_build` | and forces a rebuild, end to end |
 | `test_make_cluster_leaves_nothing_behind_when_setup_fails` | a failed setup leaks no directory |
+| `test_the_cleanup_guard_has_the_shape_the_leak_needs` | **source check**: the guard catches `BaseException`, stops the cluster, removes the tree, and re-raises |
+| `test_this_module_keeps_no_private_fingerprint` | **source check**: no second digest implementation in this caller |
+
+**Two of these are SOURCE checks, and they say so.** `test_make_cluster_leaves_nothing_behind_when_setup_fails`
+provokes a real failed setup and asserts no directory is left; that is the property.
+But `make_cluster` fails exactly one way in that arm — a missing `pg_config` — while
+three more properties decide whether the guard works at all: it must survive a
+`KeyboardInterrupt`, stop a postmaster it already started, and re-raise rather than
+return `None`. Two of those cannot be provoked from a test (you cannot deliver SIGINT
+into `initdb` reliably, and a cluster that started is one the arm would then have to
+stop), so they are read off `inspect.getsource(make_cluster)` instead.
+
+They arrived from `test/selftest/380`, which read this file as text across the harness
+boundary. Reading our own module is not a cross-harness reference; a shell part
+grepping it is the thing CONTEXT.md refuses. What the shell part could never do is the
+behavioural arm above it.
+
+Five mutations say the source arms discriminate, each asserted to have applied and
+each leaving the module well-formed, restored byte-for-byte afterwards:
+
+| mutation of `pgc_cluster.py` | what reddens |
+| --- | --- |
+| `except BaseException:` narrowed to `except Exception:` | the source arm |
+| `cluster.stop()` removed | the source arm |
+| the bare `raise` turned into `pass` | the source arm **and** the behavioural one |
+| a private `hashlib.md5` added | the no-private-digest arm |
+| `shutil.rmtree(root, …)` removed | the source arm **and** the behavioural one |
+
+The two that redden both are the two whose effect reaches the filesystem. The three
+that redden only the source arm are exactly the properties the behavioural arm cannot
+see, which is why they are written down separately rather than folded into it.
 | `test_the_stamp_writer_reports_failure` | `\|\| true` made both controllers' warnings unreachable |
 | `test_two_installations_of_one_major_do_not_share_a_stamp` | the key names the installation, not just the major |
 | `test_moving_bytes_between_files_moves_the_shell_fingerprint` | the digest sees a repartition |

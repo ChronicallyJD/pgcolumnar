@@ -60,6 +60,7 @@ WHAT STILL GOES THROUGH bash, and why each one is not a wrapper to be removed:
 """
 
 import hashlib
+import inspect
 import os
 import sys
 import tempfile
@@ -398,6 +399,66 @@ def test_make_cluster_leaves_nothing_behind_when_setup_fails(tmp_path, expect):
     leaked = sorted(set(glob.glob("/tmp/pgc-pytest-*")) - before)
     expect.text(", ".join(leaked) or "none", "none",
                 "a failed make_cluster leaves no directory behind")
+
+
+def test_the_cleanup_guard_has_the_shape_the_leak_needs(expect):
+    """The arm above proves the tree is gone. It cannot prove WHY, and three of
+    the four properties that make the guard work are invisible to it.
+
+    `make_cluster` fails one way in that test: a missing `pg_config`. The guard
+    also has to survive a KeyboardInterrupt, stop a postmaster it already started,
+    and re-raise rather than return None. Each needs a different failure to
+    observe, and two of them cannot be provoked from a test at all -- you cannot
+    deliver SIGINT into `initdb` reliably, and a cluster that started is a cluster
+    this arm would then have to stop.
+
+    So these are SOURCE checks, and they are labelled as such rather than sold as
+    behavioural. They moved here from `test/selftest/380`, which read this file as
+    text across the harness boundary. A shell part can pin this text; what it
+    cannot do is what the arm above does. Reading our own module is not a
+    cross-harness reference, so the property lives where its subject lives.
+    """
+    import inspect
+    body = inspect.getsource(make_cluster)
+
+    # Cut to the handler. These shapes occur elsewhere in the module, and a check
+    # over the whole file reports a guard present that lives in another function.
+    expect.at_least(len(body.splitlines()), 15,
+                    "premise: the source of the function itself was read")
+
+    for fragment, name in (
+        ("except BaseException:",
+         "the handler catches BaseException, so an interrupt cleans up too"),
+        ("cluster.stop()",
+         "and it stops a partially started cluster"),
+        ("shutil.rmtree(root",
+         "and it removes the tree"),
+    ):
+        expect.num(body.count(fragment), 1, name)
+
+    # The bare re-raise, anchored to a line: `raise` appears inside this function
+    # in the is_ours() refusal too, as `raise RuntimeError(...)`, and a substring
+    # count would read that as the re-raise and pass with the re-raise deleted.
+    bare = [ln for ln in body.splitlines() if ln.strip() == "raise"]
+    expect.num(len(bare), 1,
+               "and the original error is re-raised rather than swallowed")
+
+
+def test_this_module_keeps_no_private_fingerprint(expect):
+    """One implementation, in `test/pgc_fingerprint.py`, since #907.
+
+    A second copy reappearing in a caller is the defect rather than a detail: it
+    agrees with the shared one until it does not, and nothing says when that was.
+    Also a source check, and also moved out of `test/selftest/380`.
+    """
+    import pgc_cluster
+    src = pathlib.Path(inspect.getsourcefile(pgc_cluster)).read_text(encoding="utf-8")
+    expect.at_least(len(src), 200, "premise: the module's own source was read")
+    for fragment, name in (
+        ("hashlib.md5", "no private md5 digest"),
+        ('glob("*/Makefile")', "and no private build-directory walk"),
+    ):
+        expect.num(src.count(fragment), 0, name)
 
 
 # ---------------------------------------------------------------------------

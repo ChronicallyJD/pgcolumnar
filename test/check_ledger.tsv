@@ -479,25 +479,16 @@ harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses agree on t
 harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses print an unrunnable check in the same shape	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a caller that reimplements the digest is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a fingerprint that reads src only is caught	never	-
-harness_selftest	380-the-pytest-cluster-helpers	a make_cluster with no cleanup is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	an import from the pytest tree is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and a hard-coded module list is caught by the name arm	never	-
-harness_selftest	380-the-pytest-cluster-helpers	and it catches BaseException, so an interrupt cleans up too	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and it names no module directory, so it is a derivation and not a list	never	-
-harness_selftest	380-the-pytest-cluster-helpers	and it stops a partially started cluster before removing the tree	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and no longer mixes in the bare filename	never	-
-harness_selftest	380-the-pytest-cluster-helpers	and the original error is re-raised rather than swallowed	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and the shell keeps none either	never	-
-harness_selftest	380-the-pytest-cluster-helpers	make_cluster removes its tree when setup raises	never	-
-harness_selftest	380-the-pytest-cluster-helpers	premise: and the real helper still carries its cleanup	never	-
-harness_selftest	380-the-pytest-cluster-helpers	premise: make_cluster's body was actually cut out of the file	never	-
 harness_selftest	380-the-pytest-cluster-helpers	premise: the one fingerprint implementation is where this part thinks it is	never	-
-harness_selftest	380-the-pytest-cluster-helpers	premise: the pytest cluster helper is where this part thinks it is	never	-
 harness_selftest	380-the-pytest-cluster-helpers	premise: while the real module satisfies the derivation arm	never	-
 harness_selftest	380-the-pytest-cluster-helpers	the fingerprint derives its build directories from a Makefile on disk	never	-
 harness_selftest	380-the-pytest-cluster-helpers	the hash mixes in each file's path relative to the tree, not its name	never	-
 harness_selftest	380-the-pytest-cluster-helpers	the module imports nothing from the pytest tree	never	-
-harness_selftest	380-the-pytest-cluster-helpers	the pytest helper keeps no private fingerprint implementation	never	-
 harness_selftest	390-a-registered-suite-must-account	a NEW unaccounted suite fails even while the known debt is excused	never	-
 harness_selftest	390-a-registered-suite-must-account	a comment mentioning pgc_summary is not a declaration	never	-
 harness_selftest	390-a-registered-suite-must-account	a declared suite that produced no accounting is caught	never	-

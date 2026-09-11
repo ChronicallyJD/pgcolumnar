@@ -603,6 +603,52 @@ true until the next version shipped.
   found nothing and the comparison was empty-against-real -- which "differs", for
   the wrong reason. Its premise arm said so.
 
+  **`test/selftest/380` keeps finding 1 and hands finding 2 to the pytest corpus.**
+  The part covers two of @linuxhikerpm's #897 findings, and they have different
+  subjects. Finding 1 is `test/pgc_fingerprint.py`, which `lib.sh` runs with the
+  system interpreter and which is not part of the pytest harness, so checking it is
+  this part's own business and it stays. Finding 2 is `test/pytest/pgc_cluster.py`,
+  and the nine arms that read it as text are gone.
+
+  Seven of its twenty-one checks had a cross-harness subject, not twenty-one: the
+  other fourteen read `pgc_fingerprint.py`, `lib.sh`, or fixtures the part writes
+  itself. Counting the whole file would have deleted coverage that was never debt.
+
+  `make_cluster`'s cleanup SHAPE moved to `test_build_refusal.py` as
+  `test_the_cleanup_guard_has_the_shape_the_leak_needs`, beside the behavioural arm
+  that provokes a real failed setup. It has to be a source check, and it says so:
+  `make_cluster` fails exactly one way in the behavioural arm -- a missing
+  `pg_config` -- while three more properties decide whether the guard works, and two
+  of those cannot be provoked at all. You cannot deliver SIGINT into `initdb`
+  reliably, and a cluster that started is one the arm would then have to stop.
+
+  Five mutations say the moved arms discriminate, each asserted to have applied,
+  each leaving the module well-formed, restored byte-for-byte afterwards:
+  `BaseException` narrowed to `Exception`, `cluster.stop()` removed, the bare
+  re-raise turned into `pass`, a private `hashlib.md5` added, and
+  `shutil.rmtree(root, …)` removed. The two whose effect reaches the filesystem
+  redden the behavioural arm as well; the three that redden only the source arm are
+  exactly the properties the behavioural arm cannot see.
+
+  One of those five did not apply on the first attempt -- the `cluster.stop()`
+  pattern assumed twelve spaces of indentation and the call sits at sixteen, inside
+  a nested `try`. The harness refused to report a result for it rather than printing
+  a green, which is the only safe behaviour for a mutation that did not land.
+
+  **And one thing went wrong that is worth more than the change itself.** I ran the
+  selftest before naming the two new pytest arms in `TESTS.md`, so the run was red on
+  the doc-coverage check -- and then merged that log into `check_ledger.tsv`, whose
+  entire subject is which checks have ever been red. It recorded a red for
+  `350`'s "every test file and every test in the corpus is named in TESTS.md",
+  a check that failed only because my own change was half-finished. Reverted with
+  `git checkout HEAD --`; there is no second copy to repair from.
+
+  The merge step now refuses a log that is not definitely green: a numeric
+  `checks run:` line, a floor on it so an aborted run cannot pass, zero `FAIL`
+  lines, and rc=0. The absence of a `FAIL` line is not enough, because an aborted
+  run has none either -- the same shape as a pending-count that cannot see a job
+  which never started.
+
 
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
