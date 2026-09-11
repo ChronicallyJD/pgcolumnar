@@ -652,7 +652,12 @@ jobs:
           names=()
           if [ "$verdict" = failure ]; then
             while IFS= read -r n; do [ -n "$n" ] && names+=("$n"); done < <(
-              gh run view "$GITHUB_RUN_ID" --json jobs                 --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != null) | .name'                 2>/dev/null || true)
+              # SELECT WHAT FAILED, NOT WHAT DID NOT SUCCEED. The first version filtered
+              # negatively and the fire drill caught it at once: this job is still RUNNING
+              # when it asks, so it does not match "success" and listed ITSELF as a failing
+              # job. On a real red the issue would have named the reporter beside the genuine
+              # failures. A positive list cannot admit a state nobody thought of.
+              gh run view "$GITHUB_RUN_ID" --json jobs --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name' 2>/dev/null || true)
             if [ "${DRILL:-false}" = "true" ] && [ "${#names[@]}" -eq 0 ]; then
               names+=("fire drill: no job actually failed")
             fi
