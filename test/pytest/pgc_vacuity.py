@@ -366,6 +366,47 @@ class Expect:
                 f"order is observable before asserting order."
             )
 
+    # -- inequality ----------------------------------------------------------
+    def differ(self, got, want, name):
+        """Assert that two arms of an A/B are observably different.
+
+        `mutation-arm-unobservable`: both arms produce the identical answer and both
+        are green, because the assertion that would catch it is the one nobody writes.
+        Before this the layer had eight helpers asserting equality and one asserting
+        inequality -- `ordering_observable`, specific to a forward/reverse pair -- so
+        the general case was hand-rolled as `expect.num(int(after != before), 1, ...)`
+        at two sites. That idiom throws BOTH VALUES AWAY: when it fails it says
+        `got 0 want 1`, and a reader cannot tell arms that were both empty from arms
+        that were both wrong from arms correctly identical. Three defects, one message.
+
+        TWO FAILED QUERIES ARE NOT TWO ARMS, and that refusal is the inverse of the
+        one #930 added. `query_error()` makes each failure UNIQUE precisely so two
+        failures cannot compare EQUAL and pass an equality assertion -- which makes
+        them compare UNEQUAL, so an arms-differ assertion passes on a pair of
+        statements that both blew up. Measured: two calls give
+        `QUERY_ERROR.1.<detail>` and `QUERY_ERROR.2.<detail>`, which are `!=`. The fix
+        for one direction opened the other, which is why this is checked rather than
+        inherited from the equality helpers' refusal.
+        """
+        for side, v in (("left", got), ("right", want)):
+            if _failed_query(v):
+                raise VacuityError(
+                    # ONE UNBREAKABLE TOKEN FIRST: pytest word-wraps a long traceback
+                    # line, so an arm matching a multi-word phrase against a single
+                    # `E` line can miss a message that contains it.
+                    f"{name}: failed-query-is-not-an-arm: the {side} arm is a failed "
+                    f"query: {v!r}. query_error() makes each failure unique, so two "
+                    f"failures do not compare equal -- which means they DIFFER, and "
+                    f"this assertion would report the mutation as observable. Assert "
+                    f"the failure you expect instead of differencing two of them."
+                )
+        self._counted()
+        if got == want:
+            raise AssertionError(
+                f"{name}: arms-do-not-differ: {got!r} on both arms. An A/B whose arms "
+                f"agree cannot show that the thing between them did anything."
+            )
+
     # -- row counts ---------------------------------------------------------
     def rowcount(self, got, want, name):
         """Compare a row count, refusing psycopg's "no count available" sentinel.
@@ -1349,6 +1390,20 @@ def _sqlstate_pinned_names(fn):
     return pinned
 
 
+# Every statement that can HOLD other statements. Built by lookup rather than
+# written out, because `TryStar` and `Match` exist only on newer Pythons and a
+# missing name would be a NameError at import rather than a rule that quietly does
+# less. The inventory named only the `for` spelling; a rule catching only that one
+# would leave three spellings of the same shape, which is closing an example rather
+# than a mode.
+_COMPOUND_STATEMENTS = tuple(
+    c for c in (getattr(ast, n, None) for n in (
+        "For", "AsyncFor", "While", "If", "With", "AsyncWith", "Try", "TryStar",
+        "Match",
+    )) if c is not None
+)
+
+
 def _raises_sites(path):
     """Every `with pytest.raises(...)` in one file, and what is wrong with it.
 
@@ -1434,6 +1489,14 @@ def _raises_sites(path):
         return []
     out = []
     name = pathlib.Path(path).name
+    # EVERY FUNCTION THIS FILE DEFINES, nested ones included. A `pytest.raises` block
+    # whose one statement calls one of these is the helper shape: the helper can run
+    # any number of statements and nothing in the block says which of them failed. A
+    # call to an IMPORTED function, or a method, is the thing under test -- which is
+    # the shape all five blocks in this corpus use, so the rule turns on where the
+    # function is DEFINED rather than on the statement being a call.
+    local_defs = {n.name for n in ast.walk(tree)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     for fn in [n for n in ast.walk(tree)
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
         pinned = _sqlstate_pinned_names(fn)
@@ -1474,13 +1537,18 @@ def _raises_sites(path):
                 broad = [c for c in _raises_class_names(expected)
                          if c in broad_families]
                 if broad and (bound is None or bound not in pinned):
-                    # THE OFFENCE PHRASE STAYS ON ONE SOURCE LINE. The message
-                    # assembly below filters for this exact substring, and selftest
-                    # 440 counts both copies to catch them drifting apart. Split as
-                    # `"... names no " f"SQLSTATE"` it reads identically at runtime
-                    # and the arm counts one where it wants two -- a guard that can
-                    # no longer see its own drift. Measured: that split is what
-                    # reddened 440 the first time this scan ran under it.
+                    # THE OFFENCE PHRASE STAYS ON ONE SOURCE LINE, and the reason
+                    # has CHANGED. It was selftest 440, which grepped this source for
+                    # the phrase and counted the copies, so a split into
+                    # `"... names no " f"SQLSTATE"` read identically at runtime while
+                    # the count saw one where it wanted two. **Selftest 440 no longer
+                    # exists** -- #927 deleted it under the harness-independence rule,
+                    # because a shell part asserting a text pin cannot prove a python
+                    # arm is caught. Nothing greps this source for the phrase today, so
+                    # the one-line form is now a convention rather than a guarded
+                    # property. What IS still load-bearing is the RUNTIME string: the
+                    # arms in test_raises_sqlstate.py match it against stderr, and a
+                    # split f-string would not change that at all.
                     where = f"{name}:{call.lineno}"
                     out.append(
                         f"{where} pytest.raises({broad[0]}) names no SQLSTATE"
@@ -1494,6 +1562,42 @@ def _raises_sites(path):
                     f"{held} {len(node.body)} statements, "
                     f"so which one raised is not pinned"
                 )
+            # AND ONE STATEMENT IS NOT ENOUGH, which is the half `raises-catches-setup`
+            # stayed open on. Two shapes are one top-level statement and still hide the
+            # setup inside the block, so the count rule above saw nothing:
+            #
+            #     with pytest.raises(...): _setup_then_run(conn)   # a helper call
+            #     with pytest.raises(...):                         # a compound
+            #         for stmt in (setup, under_test): run(stmt)
+            #
+            # Both were measured reporting `1 passed`, exit 0, zero offences, with the
+            # setup raising and the statement under test never running. The fix is not a
+            # RECURSIVE count -- that would also refuse a legitimate single-statement
+            # loop -- it is a claim about which statement raised.
+            elif sites:
+                only = node.body[0]
+                kind = type(only).__name__
+                if isinstance(only, _COMPOUND_STATEMENTS):
+                    # One source line for the phrase, as above.
+                    out.append(
+                        f"{name}:{node.lineno} the pytest.raises block holds a {kind}, "
+                        f"so which statement inside it raised is not pinned"
+                    )
+                else:
+                    # ANYWHERE IN THE STATEMENT, not only as the whole of it: a helper
+                    # hides just as well in `x = _helper()` or `assert _helper()` as it
+                    # does in a bare call.
+                    called = sorted({
+                        n.func.id for n in ast.walk(only)
+                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                        and n.func.id in local_defs
+                    })
+                    if called:
+                        out.append(
+                            f"{name}:{node.lineno} the pytest.raises block calls "
+                            f"{called[0]}(), defined in this file, so which statement "
+                            f"raised is not pinned"
+                        )
     return out
 
 
@@ -1550,8 +1654,13 @@ def pytest_collection_modifyitems(config, items):
         excepts = [o for o in offenders if "catches Exception broadly" in o]
         ordered = [o for o in offenders if "feeds an ordered claim" in o]
         raises_broad = [o for o in offenders if "names no SQLSTATE" in o]
-        raises_setup = [o for o in offenders
-                        if "which one raised is not pinned" in o]
+        # THE FILTER IS THE COMMON TAIL OF ALL THREE PHRASES. It was the exact
+        # sentence of the statement-COUNT rule, so the two rules added for the helper
+        # and compound shapes refused the run and then printed NOTHING -- the layer
+        # said "refuses this run: ." and the arms could not tell a fired rule from an
+        # unfired one. Measured: both new arms reddened on a missing message while the
+        # refusal itself was working.
+        raises_setup = [o for o in offenders if "raised is not pinned" in o]
         parts = []
         if skips:
             parts.append(
@@ -1584,9 +1693,10 @@ def pytest_collection_modifyitems(config, items):
             )
         if raises_setup:
             parts.append(
-                "a pytest.raises block holding more than one statement cannot say "
-                "which statement raised, so a failure in the SETUP passes for a "
-                "failure in the statement under test: "
+                "a pytest.raises block must say WHICH statement raised, or a "
+                "failure in the SETUP passes for a failure in the statement under "
+                "test -- more than one statement, a compound statement holding "
+                "several, or a call to a helper defined in the same file all hide it: "
                 + "; ".join(raises_setup)
                 + " -- move the setup above the block, leaving the statement under "
                   "test alone inside it"

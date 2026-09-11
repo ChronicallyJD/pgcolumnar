@@ -15,10 +15,17 @@ for _try in $(seq 1 20); do
 		break
 	fi
 done
+# A SOURCED PART MUST NOT exit 0. This file is sourced by harness_selftest.sh, so
+# `exit` here ends the DRIVER -- and a zero status said "610 checks passed" when the
+# truth was "nothing ran" (#934). 66 is the status lib.sh calls PGC_EXIT_SKIPPED and
+# the runners already pair with a `SKIPPED (ran no checks)` line; it is spelled as a
+# literal because lib.sh arrives in part 020 and this part runs first, and part 430
+# asserts the literal still equals the constant so the two cannot drift.
 if [ "$SQ_PORT" = 0 ]; then
-	check_skip "the squatter cluster" "SKIP  could not find a free port for the squatter cluster" "no free port"
+	echo "SKIP  could not find a free port for the squatter cluster"
+	echo "$(basename "${BASH_SOURCE[0]}"): SKIPPED (ran no checks)"
 	rm -rf "$SQ_DIR"
-	exit 0
+	exit 66
 fi
 _runpg=(env)
 if [ "$(id -u)" = "0" ]; then
@@ -49,10 +56,12 @@ sq_datadir() {
 		-d postgres -At -c 'SHOW data_directory' 2>/dev/null
 }
 
+# Same reason as the port bail above: a zero here ends the driver saying success.
 if [ -z "$(sq_datadir)" ]; then
-	check_skip "the squatter cluster" "SKIP  could not stand up a squatter cluster to test against" "could not stand it up"
+	echo "SKIP  could not stand up a squatter cluster to test against"
+	echo "$(basename "${BASH_SOURCE[0]}"): SKIPPED (ran no checks)"
 	squatter_down
-	exit 0
+	exit 66
 fi
 echo "-- squatter listening on $SQ_PORT ($(sq_datadir))"
 

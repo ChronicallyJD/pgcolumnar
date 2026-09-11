@@ -24,7 +24,37 @@
 set -uo pipefail
 
 PGC_SELFTEST_PG_CONFIG="${1:-/usr/local/pg17/bin/pg_config}"
+
+# REFUSE A pg_config THIS BOX DOES NOT HAVE, before anything is sourced (#934).
+#
+# `_bindir` used to be assigned from a command that had failed, and the suite then
+# ran on with every PATH wrong. Part 010 took its own skip path, called `exit 0`,
+# and because a part is SOURCED that exited the DRIVER -- 4 lines of output, no
+# summary, status 0. A caller cannot tell that from the 610-check pass it looks
+# like. Measured on main:
+#
+#     /usr/local/pg18a/bin/pg_config    rc=0  1246 lines  checks run: 610
+#     /usr/local/pgNOPE/bin/pg_config   rc=0     4 lines  no summary at all
+#
+# The default above is `/usr/local/pg17`, which the audit container does not have,
+# so the wrong invocation is the EASY one to make -- and it cost a whole mutation
+# round, because the control and the mutation both reported rc=0 with zero FAIL
+# lines, which reads exactly like "the mutation changed nothing".
+#
+# TWO PREDICATES, because one is not enough. A `pg_config` can exist and be
+# executable and still answer nothing: that is the shape that produced the empty
+# `_bindir`, so `-x` alone would have accepted it.
+if [ ! -x "$PGC_SELFTEST_PG_CONFIG" ]; then
+	echo "FATAL  no-pg-config: $PGC_SELFTEST_PG_CONFIG is not an executable pg_config"
+	echo "       pass one as the first argument, e.g. /usr/local/pg18a/bin/pg_config"
+	exit 2
+fi
 _bindir="$("$PGC_SELFTEST_PG_CONFIG" --bindir)"
+if [ -z "$_bindir" ] || [ ! -d "$_bindir" ]; then
+	echo "FATAL  no-pg-config: $PGC_SELFTEST_PG_CONFIG --bindir gave [$_bindir],"
+	echo "       which is not a directory, so every PATH built from it would be wrong"
+	exit 2
+fi
 
 # ---- the checks themselves live in test/selftest/, one file per subject ------
 #
