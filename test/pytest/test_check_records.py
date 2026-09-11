@@ -410,3 +410,289 @@ def test_a_recording_method_takes_exactly_one_record_per_call(expect):
         deltas.append(e.count - before)
     expect.rows([str(d) for d in deltas], ["1"] * len(calls),
                 "every call, including the delegating one, took exactly one record")
+
+
+# ---- phase 3: the session's records reconcile, and the check can fail --------
+#
+# THE OBVIOUS RECONCILIATION HERE IS VACUOUS BY CONSTRUCTION, and phase 1 is what
+# made it so. `count` IS `len(self._records)`, so reconciling the count against
+# the records compares a value with its own definition. #937 warns twice that the
+# shell side shipped `inputs == sum(buckets)` that could not go red, and both were
+# caught only by mutating them -- shipping a third would be worse for having been
+# warned.
+#
+# Partitioning the records into PASS/FAIL/UNRUN and checking the parts sum to the
+# whole is the same trap wearing a different hat: the buckets are derived from the
+# list being counted.
+#
+# So the reconciliation is between two routes that are genuinely different:
+#
+#   1. what the recorder HELD, read in the process that ran the test
+#   2. what ARRIVED, read back off the report after it was built -- crossing the
+#      report boundary, and under `-n` crossing a process boundary as well
+#
+# `_UnrunnableCollector` already records why that second route has to exist: a
+# worker's own state is invisible to the controller, so the value has to travel on
+# the report. Measured on the pinned runner, `user_properties` survive the xdist
+# boundary intact, which is what makes route 2 available at all.
+
+
+def test_the_session_totals_are_reconciled(pytester, expect):
+    """The positive control. A clean run reports its totals and does not refuse."""
+    pytester.makepyfile(
+        """
+        def test_two_claims(expect):
+            expect.num(1, 1, "first")
+            expect.num(2, 2, "second")
+
+        def test_one_claim(expect):
+            expect.text("a", "a", "third")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a clean run passes", passed=2, failed=0)
+    result.stdout.fnmatch_lines(["*checks run: 3*"])
+
+
+def test_the_total_separates_records_from_passes_and_from_tests(pytester, expect):
+    """THREE DISTINCT NUMBERS, because two were not enough (@OffgridwithJD).
+
+    My first version used an all-PASS fixture: five claims across two tests, so
+    records 5 and passes 5. A totals line counted from PASSES would have been
+    indistinguishable from one counted from records, and only the test count was
+    separated. Measured on that fixture:
+
+        checks run: 5
+        accounting: 5 pass + 0 fail + 0 unrun = 5
+
+    Making one of the five claims false and catching it gives three numbers that
+    disagree, so the line can only be right for one reason:
+
+        records 5    passes 4    tests 2
+
+    One dead end recorded so it is not tried again: `cannot_run` contributes an
+    UNRUN record but fails its own test, so an unrunnable fixture does not
+    separate them either.
+    """
+    pytester.makepyfile(
+        """
+        def test_four_claims(expect):
+            expect.num(1, 1, "a")
+            expect.num(2, 2, "b")
+            expect.num(3, 3, "c")
+            try:
+                expect.num(4, 99, "d -- deliberately false, and caught")
+            except AssertionError:
+                pass
+
+        def test_one_claim(expect):
+            expect.num(5, 5, "e")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "premise: two tests, both passing", passed=2, failed=0)
+    result.stdout.fnmatch_lines(["*checks run: 5*"])
+    result.stdout.fnmatch_lines(["*accounting: 4 pass + 1 fail + 0 unrun = 5*"])
+
+
+def test_a_record_lost_in_transport_is_refused(pytester, expect):
+    """THE ARM THIS PHASE EXISTS FOR, and it is written before the reconciliation.
+
+    A conftest that drops one record on its way onto the report is exactly the
+    silent failure the two routes exist to catch: the recorder held three, two
+    arrived, and without a reconciliation the run reports 2 and nobody knows a
+    claim went missing.
+
+    It has to be injected from a conftest because no in-tree code does this -- the
+    point of the arm is that the reconciliation CAN fail, and an arm that waits for
+    a real defect to appear is not evidence that it can.
+
+    `tryfirst=True` IS LOAD-BEARING, NOT DECORATION. Both this hook and the
+    layer's are wrappers, and a wrapper's code after its `yield` runs in the
+    REVERSE of call order. My first version used `trylast`, which made this the
+    innermost wrapper, so it ran before the layer attached anything and saw an
+    empty `user_properties` -- the inner run then passed and the arm read exactly
+    like a reconciliation that does not fire. Measured: the debug print inside the
+    loop never executed.
+    """
+    pytester.makepyfile(
+        """
+        def test_three_claims(expect):
+            expect.num(1, 1, "a")
+            expect.num(2, 2, "b")
+            expect.num(3, 3, "c")
+        """
+    )
+    pytester.makeconftest(
+        """
+        import pytest
+
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                for i, (key, value) in enumerate(report.user_properties):
+                    if key == "pgc_records" and value:
+                        report.user_properties[i] = (key, value[:-1])
+            return report
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a record that did not arrive is refused")
+    result.stderr.fnmatch_lines(["*held 3 record(s) and 2 arrived*"])
+
+
+def test_the_two_values_are_not_aliases_of_one_list(pytester, expect):
+    """The attack that FAILS, and it is stronger evidence than the xdist run.
+
+    @OffgridwithJD's objection: the transport arm drops a record with `value[:-1]`,
+    which COPIES. So the unfair-in-my-favour reading is that the report carries the
+    recorder's own list and the only reason the arm fires is the slice.
+
+    Mutating in place settles it. `value.pop()` reaches whatever object the report
+    actually holds, and the run is still refused -- so `held` and `arrived` are not
+    two views of one list. `held` is an int; `pgc_records` is a freshly built list
+    of fresh tuples; there is no shared object to reach.
+
+    WHY THIS IS THE STRONGER HALF. The xdist run proves the comparison survives
+    serialisation. This proves the two values are not aliases, IN A SINGLE PROCESS,
+    which xdist cannot show because serialisation copies everything by definition.
+    """
+    pytester.makepyfile(
+        """
+        def test_three_claims(expect):
+            expect.num(1, 1, "a")
+            expect.num(2, 2, "b")
+            expect.num(3, 3, "c")
+        """
+    )
+    pytester.makeconftest(
+        """
+        import pytest
+
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                for key, value in report.user_properties:
+                    if key == "pgc_records" and value:
+                        value.pop()          # IN PLACE, not a slice
+            return report
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "an in-place removal is refused too")
+    result.stderr.fnmatch_lines(["*held 3 record(s) and 2 arrived*"])
+
+
+def test_a_verdict_outside_the_closed_set_is_refused(pytester, expect):
+    """The schema half. A verdict the reader cannot key on is a record that says
+    nothing, and `pgc_record` refuses the same thing on the shell side rather than
+    dropping the check -- dropping it would leave the count bumped with no outcome,
+    which is the reconciliation failure itself."""
+    pytester.makepyfile(
+        """
+        def test_one_claim(expect):
+            expect.num(1, 1, "a")
+        """
+    )
+    pytester.makeconftest(
+        """
+        import pytest
+
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                for i, (key, value) in enumerate(report.user_properties):
+                    if key == "pgc_records" and value:
+                        report.user_properties[i] = (key, [("SORTOF", n) for _, n in value])
+            return report
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a verdict outside the closed set is refused")
+    result.stderr.fnmatch_lines(["*SORTOF*"])
+
+
+def test_the_recorder_is_only_observed_once_and_both_sides_of_that_are_blind(
+        pytester, expect):
+    """THE LIMIT, pinned in BOTH directions. My first version named half of it.
+
+    Phase 3 compares two values taken from ONE read of the recorder at ONE
+    instant, so anything that changes the recorder outside that instant is
+    invisible. That has two halves and I pinned only the later one:
+
+        a record appended AFTER the read     invisible -- run passes
+        a record removed BEFORE the read     invisible -- run passes
+
+    @OffgridwithJD injected the second and got a clean pass: `checks run: 2`,
+    `accounting: 2 pass + 0 fail + 0 unrun = 2`, rc 0. **The early half is the
+    more reachable one**, and that is the part my framing got backwards: a late
+    append needs someone outside the layer to do it, while an early loss is what
+    a bug inside the recorder would look like.
+
+    THE REASON IS NARROWER THAN I WROTE, TOO. I said the controller has no
+    recorder to consult under `-n`. The real reason needs no xdist at all: the
+    `expect` fixture's teardown pops the recorder (`pgc_vacuity.py`, the `expect`
+    fixture), so nothing after `makereport` can read it in a single process
+    either.
+
+    AND "NOT STRAIGHTFORWARDLY FIXABLE" OVERSTATED IT. @OffgridwithJD's proposal:
+    keep the final COUNT -- an int, not the records -- in a session-level map that
+    survives teardown, and reconcile the sum at worker-side `sessionfinish`, where
+    the worker has its own slice and needs nothing from the controller. Today
+    `sessionfinish` returns early for workers, which is correct for the
+    collected-versus-reported check and is what forecloses this one. Unbuilt and
+    unmeasured, so it is a named proposal rather than a plan.
+    """
+    pytester.makepyfile(
+        """
+        def test_three_claims(expect):
+            expect.num(1, 1, "a")
+            expect.num(2, 2, "b")
+            expect.num(3, 3, "c")
+        """
+    )
+    pytester.makeconftest(
+        """
+        import pytest
+        import pgc_vacuity
+
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                rec = pgc_vacuity._RECORDERS.get(item.nodeid)
+                if rec is not None:
+                    rec._records.append(pgc_vacuity._Record("a record created LATE"))
+            return report
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a LATE append does not refuse the run -- half the limit",
+                    passed=1, failed=0)
+    result.stdout.fnmatch_lines(["*checks run: 3*"])
+
+    # THE OTHER HALF, and the more reachable one. trylast makes this the INNERMOST
+    # wrapper, so it runs BEFORE the layer reads the recorder -- the mirror of the
+    # tryfirst above.
+    pytester.makeconftest(
+        """
+        import pytest
+        import pgc_vacuity
+
+        @pytest.hookimpl(wrapper=True, trylast=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                rec = pgc_vacuity._RECORDERS.get(item.nodeid)
+                if rec is not None and rec._records:
+                    rec._records.pop()
+            return report
+        """
+    )
+    early = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(early, "an EARLY removal does not refuse it either",
+                    passed=1, failed=0)
+    early.stdout.fnmatch_lines(["*checks run: 2*"])
