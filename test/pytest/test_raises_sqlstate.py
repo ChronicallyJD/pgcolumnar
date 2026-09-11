@@ -577,6 +577,19 @@ def test_a_conftest_cannot_switch_the_broad_family_list_off(pytester, expect):
     The list is therefore bound inside `_raises_sites` rather than at module level.
     The conftest below writes BOTH plausible spellings of the name onto the module
     and then presents the refused shape. The run must still be refused.
+
+    WHAT THIS ARM DOES NOT COVER, and the sentence above was read as covering it
+    (#924, @OffgridwithJD). Binding the list inside the reader protects the DATA.
+    `_raises_sites` -- the reader itself -- is a module-level name, and
+    `pgc_vacuity._raises_sites = lambda p: []` switched this exact rule off,
+    measured. None of the three names this conftest writes has ever existed on the
+    module, so this arm cannot fail on that: it pins that GUESSING the data name
+    does not work, which is a smaller claim than it reads as.
+
+    The reader is covered by the binding snapshot instead, and by
+    `test_a_conftest_cannot_switch_off_the_raises_scan` in test_layer.py. It is not
+    re-asserted here: two files claiming the same thing is how one of them stops
+    being read.
     """
     pytester.makeconftest('''
         import pgc_vacuity

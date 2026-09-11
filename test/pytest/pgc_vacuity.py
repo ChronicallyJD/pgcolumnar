@@ -1622,12 +1622,102 @@ def _raises_sites(path):
     return out
 
 
-def pytest_collection_modifyitems(config, items):
+# THE LAYER'S OWN BINDINGS, AND WHY THEY ARE CHECKED RATHER THAN HIDDEN (#924).
+#
+# pytest imports `conftest.py` FROM THE DIRECTORY IT IS POLICING into the policing
+# interpreter, before collection, with no opt-out. Every module-level name here is
+# therefore writable by the code this layer judges. That is what conftest is for; it
+# is a defect here only because this layer's job is to refuse, and a refusal that can
+# be deleted in two lines is a suggestion.
+#
+# THE SHELL HARNESS HAS NO EQUIVALENT, and not because bash is simpler: its policing
+# runs in a DIFFERENT PROCESS from the code it polices. `selftest/260` reads
+# `$TESTDIR/lib.sh` with grep and awk and never sources the file it judges, so
+# nothing a policed suite writes can reach the judge's namespace.
+#
+# #958 closed the datum one exploit used, by binding the killer list in a default
+# argument. The three scans that READ such data are module-level names themselves,
+# one frame further out. Measured on main 226f805 with the pinned runner, each was a
+# two-line conftest away from being a no-op:
+#
+#     GUARD               no conftest    with `pgc_vacuity.<scan> = lambda p: []`
+#     order collapse      REFUSED rc=4   PASSED rc=0
+#     broad except        REFUSED rc=4   PASSED rc=0
+#     raises not pinned   REFUSED rc=4   PASSED rc=0
+#
+# SO THE FIX IS NOT A FOURTH NAME MOVED OUT OF REACH. Plugging names one at a time is
+# what reopened #924 after #958, and the transitive closure from the eight hooks is
+# 31 of this module's 47 names -- `ast` among them. The layer notices instead that one
+# of its own bindings CHANGED, which covers the names added after this was written.
+#
+# THE SNAPSHOT IS EXACT WITH NO ALLOWLIST because this module contains no `global`
+# statement anywhere: after import, every module-level binding here is constant.
+# Verified rather than assumed, and it is the property that makes a bare identity
+# comparison correct.
+#
+# A NEW ATTRIBUTE IS NOT A REBIND. `pgc_vacuity._something_new = 1` changes no
+# behaviour, and refusing it would make this a tripwire on the mere act of importing
+# the module -- the false-positive engine this layer's own budget forbids. The arm
+# for that is a control in test_layer.py.
+#
+# WHAT IT STILL DOES NOT STOP, stated because a guard's blind spots are part of its
+# meaning. Anything sharing the interpreter can eventually win: reaching into
+# `pytest_collection_modifyitems.__defaults__` reaches the closure below. The
+# criterion #924 set is COST, not impossibility -- the hatch must cost more than
+# stating a reason, and that shape is unmistakably deliberate where two lines of
+# assignment are not. It also checks at COLLECTION only, so a test that rebinds a
+# name inside its own body and restores it is untouched; two arms in
+# test_failed_query_sentinel.py do exactly that, legitimately.
+def _binding_guard():
+    snapshot = {}
+    missing = object()
+
+    def arm(ns):
+        snapshot.update({k: v for k, v in ns.items() if not k.startswith("__")})
+
+    def changed(ns):
+        return sorted(k for k, v in snapshot.items() if ns.get(k, missing) is not v)
+
+    # RESTORED BEFORE THE REFUSAL, not after it, and this is load-bearing rather than
+    # tidiness. `pytester` runs its inner session IN-PROCESS on this same module
+    # object, so a rebind made by an inner conftest stays made for every test that
+    # follows in the outer run -- the hazard `_RunShape` already paid for once. The
+    # arms that prove this refusal would otherwise poison the rest of their own file.
+    def restore(ns):
+        ns.update(snapshot)
+
+    return arm, changed, restore
+
+
+_arm_bindings, _changed_bindings, _restore_bindings = _binding_guard()
+
+
+def pytest_collection_modifyitems(config, items,
+                                  _changed=_changed_bindings,
+                                  _restore=_restore_bindings):
     """Refuse a bare skip, which exits 0 and reads as success.
 
     Measured: two skipped tests report `2 skipped` and exit 0. A skip is allowed
     only through expect.cannot_run(), which names a reason from a closed list.
     """
+    # FIRST, because every rule below is read through a name a conftest can write.
+    # Captured in this signature at DEFINITION time, so rebinding `_changed_bindings`
+    # or `_restore_bindings` on the module does not reach what runs here.
+    _rebound = _changed(globals())
+    if _rebound:
+        _restore(globals())
+        raise pytest.UsageError(
+            "the pgColumnar vacuity layer refuses this run: a conftest or plugin "
+            "rebound the layer's own "
+            + ("names " if len(_rebound) > 1 else "name ")
+            + ", ".join(_rebound)
+            + " -- a rule this layer enforces is read through that binding, so the "
+            "run would have reported on rules that were switched off. The bindings "
+            "have been restored. If a check is wrong for your case, say so where the "
+            "run records it: expect.cannot_run(REASON, detail), which names a reason "
+            "from a closed list, or fix the test the rule is objecting to."
+        )
+
     offenders = []
     seen_files = set()
     for item in items:
@@ -1725,3 +1815,10 @@ def pytest_collection_modifyitems(config, items):
         raise pytest.UsageError(
             "the pgColumnar vacuity layer refuses this run: " + ". ".join(parts) + "."
         )
+
+
+# ARMED HERE, AT THE BOTTOM, because a snapshot taken earlier would miss every name
+# defined after it -- including this hook. Import order is what makes this safe: the
+# module is fully executed before pytest imports any conftest, so nothing the policed
+# tree writes can be in the snapshot.
+_arm_bindings(globals())
