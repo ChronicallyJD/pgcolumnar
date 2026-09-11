@@ -446,6 +446,18 @@ true until the next version shipped.
   already counted as refused. Only the list that tells the next person what to do was
   wrong.
 
+  **And 3.6 now records measured populations, so the next entry is chosen on evidence.**
+  Section 5's new rule is that an entry must name a mode id, which makes WHICH id worth
+  measuring. Four of 3.6's were counted by AST scan over the whole corpus:
+  `truthy-cursor-from-execute` has 7 sites and **all are benign** — every one is
+  `x = cur.execute(...)`, idiomatic in psycopg3, and **zero** branch on it, which is the
+  dangerous form; `empty-query-string-succeeds` has 0; the multistatement mode has 1, a
+  setup that fetches nothing with a `count(*)` premise right after it; and the
+  server-cursor rowcount mode has 2, both legitimate. So all four are PROSPECTIVE, and a
+  guard for any of them would be insurance rather than a closure. Recorded because a
+  refusal with no population has not refused anything, and 1a counts section 2 as
+  "refused today".
+
   One instrument defect of mine, caught by that fixture: the parser matched the
   SECTION HEADING as an entry. `re.split(r"^## ")` leaves a chunk beginning "5. What to
   add next", which the numbered-item pattern also matches — inventing an entry 5 that

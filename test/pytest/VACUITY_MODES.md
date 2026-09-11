@@ -297,6 +297,27 @@ binds the exception and the body pins its SQLSTATE. See section 2.
 - `executemany-returning-fetchall-sees-only-the-first-batch`,
   `server-cursor-rowcount-is-not-a-row-count`, `empty-query-string-succeeds`
 
+**MEASURED POPULATIONS, so the next entry is chosen on evidence (#432).** Section 5's
+new rule is that an entry must name a mode id, which makes *which* id worth measuring
+rather than guessing. Four of 3.6's were counted over the whole corpus by AST scan:
+
+| mode | sites | what they are |
+| --- | ---: | --- |
+| `truthy-cursor-from-execute` | 7 | **all benign.** Every one is `x = cur.execute(...)`, which is idiomatic psycopg3 — `execute` returns the cursor. **Zero** branch on it (`if`, `while`, `assert`), which is the dangerous form. |
+| `empty-query-string-succeeds` | 0 | no `execute()` on an empty or whitespace literal anywhere. |
+| `multistatement-execute-positions-on-the-first-result` | 1 | `test_saop_element_pushdown.py`, a three-statement SETUP that fetches nothing. The arm immediately after asserts `count(*) = 40000`, so the INSERT is proven to have run. |
+| `server-cursor-rowcount-is-not-a-row-count` | 2 | **both legitimate.** A `DELETE`'s `rowcount` with an `at_least` premise on it, and a field on a stub cursor class. |
+
+**So all four are prospective.** A guard for any of them would be insurance against a
+shape the corpus has not yet written, not a closure of one it has — and it should say
+so, the way `test_the_empty_plan_refusal_precedes_the_arms_it_protects` does.
+
+That is not an argument against writing them. It is an argument against writing them
+and calling the mode closed: the counting rule in 1a treats section 2 as "refused
+today", and a refusal with no population has not refused anything yet. The cheapest of
+the four is the branching form of the first, because the dangerous spelling is distinct
+from the benign one and a planted fixture separates them in two lines.
+
 The enumerating agent's own summary is worth keeping: psycopg **fixes** the half of
 issue #418 where an error read as empty, because a failed statement raises and `[]`
 can only mean zero rows. That improvement is exactly what will tempt a port to drop
