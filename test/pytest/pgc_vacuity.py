@@ -1171,85 +1171,106 @@ def pytest_collection_finish(session):
 # sorted() to reach for.
 #
 # Parsed, not grepped, for the same reason as the except scan below.
-_ORDER_KILLERS = ("sorted", "set", "frozenset")
+# THE KILLER LIST IS BOUND AT DEFINITION TIME, in a default argument, and that
+# is the whole mechanism rather than a style choice (#924).
+#
+# `_ORDER_KILLERS` used to live as a module-level name. A conftest imported
+# before collection rebound it to () and the order-collapse refusal stopped
+# firing for every test in that directory, with no reason recorded. Two lines,
+# less to type than the honest form, which is the hatch the layer's own
+# false-positive budget forbids. Measured on main: the same collapse test was
+# uncollectable with no extra file, and reported `1 passed` with only
+#
+#     import pgc_vacuity
+#     pgc_vacuity._ORDER_KILLERS = ()
+#
+# The layer already closed this shape for QUERY_ERROR. The same default-argument
+# bind is used here: the tuple is evaluated once, when the factory is defined,
+# and is not read from the module namespace afterwards. There is no module-level
+# name left to rebind.
+def _order_guard(_killers=("sorted", "set", "frozenset")):
+    def _order_killed_names(fn):
+        """Names bound to an order-killing value earlier in one function body.
 
+        -> {name: (lineno, how)}
 
-def _order_killed_names(fn):
-    """Names bound to an order-killing value earlier in one function body.
+        The inline spelling is only the shortest way to write the collapse. These two
+        are the same defect and read as more careful code, which is worse:
 
-    -> {name: (lineno, how)}
+            g = sorted(got)                 # bound to an order-killing call
+            expect.ordered_rows(g, want)
 
-    The inline spelling is only the shortest way to write the collapse. These two
-    are the same defect and read as more careful code, which is worse:
+            got.sort()                      # killed in place
+            expect.ordered_rows(got, want)
 
-        g = sorted(got)                 # bound to an order-killing call
-        expect.ordered_rows(g, want)
-
-        got.sort()                      # killed in place
-        expect.ordered_rows(got, want)
-
-    WHAT THIS DOES NOT SEE, stated because a guard's blind spots are part of its
-    meaning: it is one function deep, so a helper that sorts and returns is invisible;
-    it does not follow aliases (`h = g`), attributes (`self.rows.sort()`), branches,
-    or a name re-bound to something honest after being killed. It is a floor, not a
-    proof of order-sensitivity. The suite's own removal proofs are what establish
-    that an ordered claim can actually fail on order.
-    """
-    killed = {}
-    for node in ast.walk(fn):
-        # X = sorted(...) / set(...) / frozenset(...)
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            f = node.value.func
-            if isinstance(f, ast.Name) and f.id in _ORDER_KILLERS:
-                for t in node.targets:
-                    if isinstance(t, ast.Name):
-                        killed.setdefault(t.id, (node.lineno, f"{f.id}()"))
-        # X.sort() -- in place, and the name keeps its spelling at the call site
-        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            f = node.value.func
-            if (isinstance(f, ast.Attribute) and f.attr == "sort"
-                    and isinstance(f.value, ast.Name)):
-                killed.setdefault(f.value.id, (node.lineno, ".sort()"))
-    return killed
-
-
-def _sorted_ordered_sites(path):
-    try:
-        tree = ast.parse(pathlib.Path(path).read_text())
-    except (OSError, SyntaxError):
-        return []
-    out = []
-    name = pathlib.Path(path).name
-    # Per function, because a killed name means nothing outside the body that
-    # killed it, and a module-level walk would carry one test's `g` into the next.
-    fns = [n for n in ast.walk(tree)
-           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-    for fn in fns:
-        killed = _order_killed_names(fn)
+        WHAT THIS DOES NOT SEE, stated because a guard's blind spots are part of its
+        meaning: it is one function deep, so a helper that sorts and returns is invisible;
+        it does not follow aliases (`h = g`), attributes (`self.rows.sort()`), branches,
+        or a name re-bound to something honest after being killed. It is a floor, not a
+        proof of order-sensitivity. The suite's own removal proofs are what establish
+        that an ordered claim can actually fail on order.
+        """
+        killed = {}
         for node in ast.walk(fn):
-            if not isinstance(node, ast.Call):
-                continue
-            f = node.func
-            if not (isinstance(f, ast.Attribute) and f.attr in ("ordered_rows",
-                                                                "ordering_observable")):
-                continue
-            for arg in node.args:
-                if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
-                        and arg.func.id in _ORDER_KILLERS):
-                    out.append(
-                        f"{name}:{node.lineno} {arg.func.id}() feeds an ordered claim"
-                    )
-                elif isinstance(arg, ast.Name) and arg.id in killed:
-                    where, how = killed[arg.id]
-                    # Only a kill that already happened. A name sorted AFTER the
-                    # claim was made did not affect it, and flagging that would be
-                    # a false red -- the thing this whole layer exists to refuse.
-                    if where < node.lineno:
+            # X = sorted(...) / set(...) / frozenset(...)
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                f = node.value.func
+                if isinstance(f, ast.Name) and f.id in _killers:
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            killed.setdefault(t.id, (node.lineno, f"{f.id}()"))
+            # X.sort() -- in place, and the name keeps its spelling at the call site
+            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                f = node.value.func
+                if (isinstance(f, ast.Attribute) and f.attr == "sort"
+                        and isinstance(f.value, ast.Name)):
+                    killed.setdefault(f.value.id, (node.lineno, ".sort()"))
+        return killed
+
+
+    def _sorted_ordered_sites(path):
+        try:
+            tree = ast.parse(pathlib.Path(path).read_text())
+        except (OSError, SyntaxError):
+            return []
+        out = []
+        name = pathlib.Path(path).name
+        # Per function, because a killed name means nothing outside the body that
+        # killed it, and a module-level walk would carry one test's `g` into the next.
+        fns = [n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for fn in fns:
+            killed = _order_killed_names(fn)
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                f = node.func
+                if not (isinstance(f, ast.Attribute) and f.attr in ("ordered_rows",
+                                                                    "ordering_observable")):
+                    continue
+                for arg in node.args:
+                    if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
+                            and arg.func.id in _killers):
                         out.append(
-                            f"{name}:{node.lineno} {arg.id} was order-killed by "
-                            f"{how} at line {where} and feeds an ordered claim"
+                            f"{name}:{node.lineno} {arg.func.id}() feeds an ordered claim"
                         )
-    return out
+                    elif isinstance(arg, ast.Name) and arg.id in killed:
+                        where, how = killed[arg.id]
+                        # Only a kill that already happened. A name sorted AFTER the
+                        # claim was made did not affect it, and flagging that would be
+                        # a false red -- the thing this whole layer exists to refuse.
+                        if where < node.lineno:
+                            out.append(
+                                f"{name}:{node.lineno} {arg.id} was order-killed by "
+                                f"{how} at line {where} and feeds an ordered claim"
+                            )
+        return out
+
+
+    return _order_killed_names, _sorted_ordered_sites
+
+
+_order_killed_names, _sorted_ordered_sites = _order_guard()
 
 
 def _broad_except_sites(path):

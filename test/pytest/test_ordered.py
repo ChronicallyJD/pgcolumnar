@@ -137,6 +137,43 @@ def test_layer_allows_a_name_sorted_after_the_claim(pytester, expect):
                     passed=1, failed=0)
 
 
+def test_a_conftest_cannot_switch_off_the_order_collapse_guard(pytester, expect):
+    """#924. The scan reads `_ORDER_KILLERS` from the module, and a conftest
+    is imported before collection, so two lines switch the guard off.
+
+    Measured on main: the same collapse test is uncollectable with no extra
+    file, and reports `1 passed` when the only extra file is
+
+        import pgc_vacuity
+        pgc_vacuity._ORDER_KILLERS = ()
+
+    That is less to type than the honest form, and the run records no reason.
+    The layer already closed this shape for QUERY_ERROR by binding the prefix
+    at definition time; the killer list was still a module-level name.
+    """
+    pytester.makepyfile(
+        """
+        def test_order_collapsed(expect):
+            got = ["b", "a"]
+            g = sorted(got)
+            expect.ordered_rows(g, ["a", "b"], "rows in order")
+        """
+    )
+    plain = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(plain, "premise: the collapse is refused when nobody rebinds")
+    plain.stderr.fnmatch_lines(["*order-killed*"])
+
+    pytester.makeconftest(
+        """
+        import pgc_vacuity
+        pgc_vacuity._ORDER_KILLERS = ()
+        """
+    )
+    hatched = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(hatched, "and it is still refused after a conftest rebinds the name")
+    hatched.stderr.fnmatch_lines(["*order-killed*"])
+
+
 def test_the_order_killer_scan_is_one_function_deep(pytester, expect):
     """A named limit, pinned so it cannot quietly become a claim of completeness.
 
