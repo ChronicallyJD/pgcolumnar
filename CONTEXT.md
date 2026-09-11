@@ -211,13 +211,53 @@ for it to stop being one.
 
 **The debt this starts with, on 2026-09-10: 3 python files and 7 shell files.**
 
+**Progress, 2026-09-11.** The fourth never arrived: #923 deleted
+`test_check_results_are_machine_readable.py` rather than land a fresh violation. And
+`test_build_refusal.py` is down from 36 cross-harness calls to 13, of which 7 are the
+debt proper, 2 are the permitted cross-reference below, and 2 are one historical-parity
+arm. **Counted by mechanism rather than by line, because a line total moves with the
+pattern:** the real executable coupling across the whole corpus was six sites in three
+files -- `pgc_cluster.py` once, `test_build_refusal.py` three times, and
+`test_suite_accounting.py` twice -- and the two `lib.sh` writes in
+`test_build_refusal.py` are fake trees under `tmp_path`, rule 2, not references.
+
 Python that reaches into shell:
 
-- `test_build_refusal.py` -- sources the real `test/lib.sh` in three helpers
-  (`_sh`, `_sh_fp`, `_sh_fp_as`), behind 36 calls. The largest of these. Counted
-  with `ast`, not `grep`: the pattern `[^_a-z]_sh(` also matches `def _sh(`, which
-  is how the first draft said 39 -- 36 calls plus the 3 definitions. Reported by
-  @OffgridwithJD. Rule 3 above, caught in the very entry that states it.
+- `test_build_refusal.py` -- **reduced, not cleared.** It sourced the real
+  `test/lib.sh` in three helpers (`_sh`, `_sh_fp`, `_sh_fp_as`) behind 36 calls and
+  was the largest item here. Counted with `ast`, not `grep`: the pattern
+  `[^_a-z]_sh(` also matches `def _sh(`, which is how the first draft said 39 -- 36
+  calls plus the 3 definitions. Reported by @OffgridwithJD. Rule 3 above, caught in
+  the very entry that states it.
+
+  **22 of those calls are gone.** Their subject was `test/pgc_fingerprint.py`, the ONE
+  implementation since #907, and `pgc_source_fingerprint` and `pgc_source_manifest`
+  are thin wrappers that shell out to exactly it -- so the path was
+  python -> bash -> lib.sh -> python3 -> the module, and removing the middle two
+  changed no subject. Measured before converting anything: byte-identical
+  fingerprint, identical manifest line for line, and agreement across LC_ALL=C,
+  C.UTF-8 and en_US.UTF-8. Two of them needed a separate process rather than an
+  in-process call -- one reads as an unprivileged user because root ignores
+  `chmod 000`, one varies the locale -- and both use the module's own CLI, which is
+  the entry point lib.sh uses with lib.sh taken out of the path.
+
+  **13 calls remain, in three groups, and only the first is debt.** Seven drive
+  `pgc_write_source_stamp`, `pgc_source_stamp_path`, `pgc_freshness_report` and
+  `pgc_freshness_verdict`, which are PURE SHELL rather than wrappers over shared
+  code: those properties belong to the shell harness and moving them is the next
+  step. Two are `test_the_two_fingerprint_implementations_cover_the_same_inputs`,
+  which reaches across on purpose -- see below. The last two are a historical-parity
+  arm whose fixture is its own, bar one call for a directory list.
+
+- **The one permitted cross-reference, named as the rule asks.**
+  `test_the_two_fingerprint_implementations_cover_the_same_inputs` asserts that the
+  shell path and the Python path give the same value, which is to say that neither
+  side carries a private copy. That property IS the relationship, so it cannot be
+  expressed from one side: the rule's own escape clause -- "say which, and say why"
+  -- applies, and this is the saying. It caught four defects in one day (#907), and
+  it is what reddens on the FIRST edit if a private implementation comes back rather
+  than on the first edit that happens to diverge. Every other reference in this
+  inventory is expected to go; this one is expected to stay.
 - `test_suite_accounting.py` -- reads `run_all_versions.sh`'s text, sources the
   real `lib.sh` from a suite it writes, and executes the real runner.
 - `pgc_cluster.py` -- sources the real `test/lib.sh`.

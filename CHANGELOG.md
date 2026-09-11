@@ -505,6 +505,45 @@ true until the next version shipped.
   the guard stops being tested that run without anyone noticing" -- four lines above the
   first `exit 0`.
 
+- The pytest corpus reaches into the shell harness in three files instead of four, and
+  the inventory that records it is now a mechanism rather than prose (#432).
+
+  CONTEXT.md's rule: the two harnesses are parallel in functionality and independent in
+  implementation. A pytest test that drives `test/lib.sh` is the first measurement
+  wearing a Python wrapper -- it agrees with the shell by construction and can never
+  report it wrong -- so the coupling turns a twin into a mirror.
+
+  `test_build_refusal.py` was the largest item on that inventory at 36 cross-harness
+  calls. **22 of them are gone.** Their subject was `test/pgc_fingerprint.py`, which has
+  been the one implementation since #907, and `pgc_source_fingerprint` and
+  `pgc_source_manifest` in `lib.sh` are thin wrappers that shell out to exactly that
+  module -- so the path was python -> bash -> lib.sh -> python3 -> the module, and taking
+  the middle two out changed no subject. Measured before converting a single arm: the
+  fingerprint is byte-identical through both paths, the manifest identical line for line,
+  and both agree across `LC_ALL=C`, `C.UTF-8` and `en_US.UTF-8`.
+
+  Two of those arms need a separate process rather than an in-process call -- one reads
+  as an unprivileged user, because root ignores `chmod 000`, and one varies the locale --
+  and both now use the module's own CLI, which is the entry point `lib.sh` itself uses
+  with `lib.sh` taken out of the path.
+
+  13 calls remain and only 7 are debt: they drive `pgc_write_source_stamp`,
+  `pgc_source_stamp_path`, `pgc_freshness_report` and `pgc_freshness_verdict`, which are
+  PURE SHELL rather than wrappers over shared code, so those properties belong to the
+  shell harness. Two are the one permitted cross-reference, named as the rule asks, and
+  two are a historical-parity arm whose fixture is its own.
+
+  **`SHELL_REFERENCES` in `test_harness_deps.py` makes the inventory falsifiable.** It
+  declares which files reach across and by what mechanism, and asserts set equality in
+  both directions: a new file that reaches in reddens, and a file that stops reaching and
+  is left in the list reddens too -- which is what stops a record of debt becoming a
+  permanent exemption.
+
+  A file-level guard, which is what the rule asks for and the most it can honestly be:
+  within a flagged file it cannot tell a path joined onto the real tree from the same
+  name joined onto a `tmp_path`, because both are the string `lib.sh` and only the
+  dataflow says which.
+
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
 

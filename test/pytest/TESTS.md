@@ -1292,6 +1292,8 @@ fixtures are read off `conftest.py` rather than named in the classifier.
 | `test_the_gate_runs_the_membership_decision_rather_than_only_this_file` | selftest 350 runs the decision, and the command line it uses works |
 | `test_ci_derives_the_file_list_rather_than_repeating_it` | the CI job asks this module for `NO_CLUSTER`, names no file literally, and states no count |
 | `test_the_job_installs_no_database_driver` | the job asserts psycopg is absent rather than assuming it |
+| `test_the_shell_reference_detector_sees_code_and_not_prose` | the premise: a docstring is prose, a string passed to bash is a reference, an f-string counts once |
+| `test_the_harness_independence_inventory_is_exactly_what_the_corpus_does` | CONTEXT.md's inventory, asserted in both directions |
 
 **THIS IS NOW IN THE GATE.** `.github/workflows/ci.yml` runs a `pytest-guards`
 job: no database, no build, an interpreter and the two pinned runner packages.
@@ -1316,6 +1318,36 @@ rather than the harness, could not run beside anything else, and would leave the
 environment broken if the test died. A module that raises on import, first on the
 path, is the same observation and reversible by construction. Both behavioural
 arms assert the shim actually bites before believing anything it produces.
+
+### The harness-independence inventory, as a mechanism
+
+CONTEXT.md's rule is that the two harnesses are parallel in functionality and
+independent in implementation: **a pytest test that drives `test/lib.sh` is the first
+measurement wearing a Python wrapper**, so it agrees with the shell by construction and
+can never report it wrong. Its inventory of what still reaches across was **prose** —
+falsifiable by hand, but nothing reddened when a new reference appeared. #923 nearly
+landed a fourth coupled file, and what caught it was a person reading.
+
+`SHELL_REFERENCES` declares the three files that reach across and **why each one does**,
+and the arm asserts set equality in both directions. A new file that reaches in reddens
+it; a file that stops reaching and is left in the declaration reddens it too — which is
+what stops the list rotting into a permanent exemption, the way every hand-maintained
+exempt list in this tree has gone wrong.
+
+**A file-level guard, which is what the rule asks for and also the most it can honestly
+be.** Within a flagged file it cannot tell a path joined onto the real tree from the
+same name joined onto a `tmp_path`: both are the string `lib.sh`, and only the dataflow
+says which. `test_build_refusal.py` contains both, and CONTEXT.md already records the
+fake ones as rule 2 rather than references. So the assertion is over the **set of
+files**, and each entry carries the mechanism a reader needs to check it by hand.
+
+**Two things the first version got wrong, both found by running it.** It counted an
+f-string as two references, because the pieces of one are `Constant` nodes of their own.
+And it flagged **this file**, because the declaration's own descriptions named the shell
+files — four files where the tree has three. The descriptions now name the mechanism
+without the filenames, and the detector's fixtures assemble the name from fragments. A
+scan flagging its own test data is the third time that shape cost a measurement in one
+session.
 
 ## 16. test_harness_deps_classifier.py: the classifier, in the file the gate runs
 
