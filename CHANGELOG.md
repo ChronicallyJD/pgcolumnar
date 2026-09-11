@@ -1619,6 +1619,51 @@ true until the next version shipped.
   removed from the reader's `PATH` to prove the skip branch can be reached, since an
   `else` that cannot run proves nothing either.
 
+- The per-file coverage table is computed from the tracefile, so it no longer ranks
+  the best-covered files as the worst (#974).
+
+  The nightly's "least covered first" table printed
+
+      columnar_parquet_codec.c  | 2.0%    100|3200%     2|    -      0
+
+  for a file whose records say `LF:100 LH:100 FNF:2 FNH:2 BRF:64 BRH:47`. A file at
+  100% presented as 2.0% and sorted to the top of a list headed least covered, with a
+  function rate above 100% on its face and an empty branch column where the tracefile
+  carries 13,900 branches. Four of the files it named as least covered were between
+  94% and 100%. A coverage table is read to decide where to spend effort, and this one
+  inverted the ranking.
+
+  The table came from `lcov --list`. The run's own `lcov --summary`, four lines
+  earlier and on the same tracefile, was correct, and so was `lcov --list` run here on
+  the run's own uploaded tracefile. The two builds differ only in distro patch level
+  -- the runner installs `2.0-4ubuntu2`, this was checked on `2.0-1` -- and which
+  patch does it has not been bisected.
+
+  So the table is computed instead. A rate is a division of two integers the tracefile
+  states outright, and `LF:` cannot be got wrong by a patch to `--list`. Cross-checked
+  against `lcov --list` on all 39 files in that tracefile and independently against the
+  raw counters: no disagreement in either comparison. `lcov --summary` keeps its job.
+
+  The format now carries hit/found rather than only the total, because `93.7% 22765`
+  cannot be checked by a reader and `93.7% 21320/22765` can -- and a reader who can
+  check the number is the only one who will notice when it is wrong again.
+
+  An absent counter prints `-`, not `0.0%`. A header with no branches at 0.0% would
+  sort to the top and read as the least covered file in the tree, which is how a table
+  misleads while every individual number in it is defensible.
+
+  Twelve arms in `250-the-coverage-runner-must-refuse` drive the generator over a
+  synthetic tracefile rather than grepping it, because a static check that the runner
+  calls the right script cannot tell whether the script is correct, and "the table is
+  wrong" was the defect. Three of them failed when first written: two matched the
+  comments in the runner that explain the replaced call, and the third asserted a cell
+  by the wrong field number. They are counted over code with comments stripped now,
+  under a premise that stripping comments did not strip the code.
+
+  A fourth failed on a substring: `0\.0%` matches inside `50.0%`, which is the line
+  rate of the fixture that has no branches. It is anchored, and a control with a
+  genuinely zero-covered file proves the anchor did not defeat the assertion.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added

@@ -143,3 +143,92 @@ check "premise: the containment and the copy were both located" \
 check "the copy-back refuses a destination outside the tree (#740)" \
 	"$([ -n "$_cov_contain" ] && [ -n "$_cov_cp" ] &&
 	   [ "$_cov_contain" -lt "$_cov_cp" ] && echo yes || echo no)" "yes"
+
+# ---- the per-file table must be computed, not parsed out of lcov --list ------
+#
+# #974. The nightly's "least covered first" table printed
+# `columnar_parquet_codec.c | 2.0% 100|3200% 2| - 0` for a file whose records say
+# `LF:100 LH:100 FNF:2 FNH:2 BRF:64 BRH:47`. A file at 100% presented as 2.0% and
+# ranked the worst in the tree, four of the named files between 94% and 100%, and
+# function rates above 100% on their face. The same command on the same tracefile
+# gave correct rows on lcov 2.0-1 and wrong ones on the runner's 2.0-4ubuntu2, so
+# the table moved with a distro patch rather than with the data.
+#
+# A rate is a division of two integers the tracefile states outright, so the fix is
+# to do the division. `lcov --summary` keeps its job: it was right on both builds.
+#
+# THE ARMS DRIVE THE GENERATOR over a synthetic tracefile rather than grepping it.
+# A static check that the runner calls the right script cannot tell whether the
+# script is correct, and "the table is wrong" was the defect.
+_covtab="$TESTDIR/pgc_coverage_table.py"
+check "premise: the table generator is present and parses" \
+	"$([ -f "$_covtab" ] && python3 -c "import ast,sys;ast.parse(open(sys.argv[1]).read())" "$_covtab" 2>/dev/null && echo yes || echo no)" \
+	"yes"
+
+# COUNTED OVER CODE, NOT OVER TEXT. The first version of these three greps counted
+# comment lines, and two of them failed on MY OWN comments in the runner explaining
+# why the call was replaced -- a guard defeated by the sentence documenting it. That
+# is the third time today a comment carrying a token tripped a grep that wanted the
+# call: a `pgc_summary` mention in #969 and a `shellcheck` mention in #972 were the
+# others. Strip comments first, so a future explanation cannot redden the arm.
+_cov_code() {	# _cov_code PATTERN -> count of matching NON-comment lines
+	grep -vE '^[[:space:]]*#' "$_cov" | grep -cE "$1"
+}
+check "the coverage runner computes the table instead of parsing lcov --list (#974)" \
+	"$(_cov_code 'pgc_coverage_table\.py')" "1"
+check "and no lcov --list call survives in the runner (#974)" \
+	"$(_cov_code 'lcov --list')" "0"
+check "while the lcov --summary call stays, being correct on both builds (#974)" \
+	"$(_cov_code 'lcov --summary')" "1"
+# The premise for all three: stripping comments must not strip the code. Without it
+# a grep that matches nothing reports the same 0 as a grep over an emptied file.
+check "premise: stripping comments leaves the runner's code behind" \
+	"$([ "$(grep -vE '^[[:space:]]*#' "$_cov" | grep -cE 'genhtml|lcov')" -ge 2 ] && echo yes || echo no)" \
+	"yes"
+
+# Counters chosen so every cell is distinguishable from every failure mode:
+#   worst.c    partially covered, must sort FIRST
+#   perfect.c  100% lines -- the shape the nightly printed as 2.0%
+#   nobranch.h no branch counter at all -- must print `-`, never 0.0%, or it
+#              sorts to the top and reads as the least covered file in the tree
+_covtf="$(mktemp "${TMPDIR:-/tmp}/pgc-covtab.XXXXXX")"
+{
+	printf 'TN:\nSF:/x/src/worst.c\nFNF:4\nFNH:1\nBRF:10\nBRH:2\nLF:100\nLH:25\nend_of_record\n'
+	printf 'TN:\nSF:/x/src/perfect.c\nFNF:2\nFNH:2\nBRF:64\nBRH:47\nLF:100\nLH:100\nend_of_record\n'
+	printf 'TN:\nSF:/x/src/nobranch.h\nFNF:0\nFNH:0\nLF:8\nLH:4\nend_of_record\n'
+} > "$_covtf"
+_covout="$(python3 "$_covtab" "$_covtf" --limit 0 2>&1)"
+
+check "premise: the generator produced a row for each of the three files" \
+	"$(printf '%s\n' "$_covout" | grep -cE '^\s+(worst\.c|perfect\.c|nobranch\.h)')" "3"
+
+check "the least covered file sorts first (#974)" \
+	"$(printf '%s\n' "$_covout" | grep -oE '(worst|perfect|nobranch)\.[ch]' | head -1)" "worst.c"
+
+check "a file at 100% reads 100.0%, not a small number (#974)" \
+	"$(printf '%s\n' "$_covout" | awk '/perfect\.c/ {print $2}')" "100.0%"
+
+check "the rate carries hit/found so a reader can check it (#974)" \
+	"$(printf '%s\n' "$_covout" | awk '/worst\.c/ {print $2, $3}')" "25.0% 25/100"
+
+# The one that matters for ordering: an absent counter is not a zero. A `-` keeps
+# the file where its line rate puts it; a 0.0% would claim it is the worst branch
+# coverage in the tree on the strength of having no branches.
+#
+# THE PROPERTY FIRST, POSITION SECOND. The first version asserted the dash by field
+# number and got it wrong -- absent cells collapse to one token each, so the dashes
+# are $4 and $5, not $6. The property does not depend on where the cell lands.
+# ANCHORED, because `0\.0%` is a SUBSTRING of `50.0%` and this row's line rate is
+# exactly that. The unanchored form reported one match and read as the generator
+# printing a zero rate for an absent counter, which it does not.
+check "a row with absent counters never reads as 0.0% (#974)" \
+	"$(printf '%s\n' "$_covout" | awk '/nobranch\.h/' | grep -cE '(^|[^0-9.])0\.0%')" "0"
+check "an absent counter prints a dash instead (#974)" \
+	"$(printf '%s\n' "$_covout" | awk '/nobranch\.h/ {print $4, $5}')" "- -"
+
+check "and the function rate is computed too, not copied (#974)" \
+	"$(printf '%s\n' "$_covout" | awk '/worst\.c/ {print $4, $5}')" "25.0% 1/4"
+
+rm -f "$_covtf"
+unset _covtab _covtf _covout
+unset -f _cov_code

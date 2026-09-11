@@ -175,17 +175,29 @@ harness_selftest	240-the-nightly-enumeration-must-not	premise: at least three ni
 harness_selftest	240-the-nightly-enumeration-must-not	premise: the nightly paragraph was located and is not empty	never	-
 harness_selftest	240-the-nightly-enumeration-must-not	premise: the nightly workflow and the testing doc are both present	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	GCOV_PREFIX is exported before the suites run (#740)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	a file at 100% reads 100.0%, not a small number (#974)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	a row with absent counters never reads as 0.0% (#974)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	an absent counter prints a dash instead (#974)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	and no lcov --list call survives in the runner (#974)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	and the function rate is computed too, not copied (#974)	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	premise: both stray-counter probes were located	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	premise: both the counter refusal and the lcov capture were located	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	premise: stripping comments leaves the runner's code behind	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	premise: the containment and the copy were both located	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	premise: the coverage runner is present and parses	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	premise: the generator produced a row for each of the three files	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	premise: the guard's count directory and the capture's were both located	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	premise: the redirect, the suite invocation and the copy-back were located	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	premise: the table generator is present and parses	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	the copy-back refuses a destination outside the tree (#740)	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	the counters are returned beside their objects before the refusal (#740)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	the coverage runner computes the table instead of parsing lcov --list (#974)	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	the coverage runner refuses zero counters before it calls lcov (#740)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	the least covered file sorts first (#974)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	the rate carries hit/found so a reader can check it (#974)	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	the refusal looks in GCOV_PREFIX before the tree-wide walk (#740)	never	-
 harness_selftest	250-the-coverage-runner-must-refuse	the zero-counter guard counts the directory lcov captures (#740)	never	-
+harness_selftest	250-the-coverage-runner-must-refuse	while the lcov --summary call stays, being correct on both builds (#974)	never	-
 harness_selftest	260-an-ordered-comparison-must-use-the	and it is the same suites, not merely the same count	never	-
 harness_selftest	260-an-ordered-comparison-must-use-the	every diff_query_ordered site actually names an ORDER BY	never	-
 harness_selftest	260-an-ordered-comparison-must-use-the	every suite using the ordered oracle asserts its premise	never	-

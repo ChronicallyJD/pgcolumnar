@@ -286,11 +286,15 @@ echo
 lcov --summary "$OUT/coverage.info" --rc branch_coverage=1 \
 	--ignore-errors inconsistent 2>&1 | grep -vE "^(Reading|lcov: (WARNING|Note))" | sed 's/^/  /'
 echo
+# COMPUTED FROM THE TRACEFILE, not parsed out of `lcov --list` (#974). That
+# command printed a 100%-covered file as 2.0% and ranked it least covered on the
+# nightly runner, while giving correct rows for the same tracefile on another build
+# of the same lcov 2.0. The counters it would have to get wrong -- `LF:`, `LH:` --
+# are stated outright in the file, so the division happens here.
+#
+# `lcov --summary` above is untouched: it was right on both builds.
 echo "-- per file, least covered first"
-lcov --list "$OUT/coverage.info" --rc branch_coverage=1 \
-	--ignore-errors inconsistent 2>/dev/null \
-	| awk '/\|/ && !/Total:/ && !/^Filename/ {print}' \
-	| sort -t'|' -k2 -n | head -20 | sed 's/^/  /'
+python3 "$SRCDIR/test/pgc_coverage_table.py" "$OUT/coverage.info" --limit 20
 echo
 echo "report: $OUT/html/index.html"
 
