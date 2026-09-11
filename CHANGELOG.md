@@ -1445,6 +1445,35 @@ true until the next version shipped.
   The refusal on a changed source had never been exercised by anyone before this
   change, only read. It is now driven end to end, along with the three other states.
 
+- `smoke.sh` records its checks, so the ledger can see them (#965).
+
+  Ten registered suites print their own `PASS <name>: <value>` lines and their own
+  verdict and emit no machine-readable records at all. Counted across the ten, 293
+  checks were invisible to every mechanism built on that vocabulary: the ledger, the
+  census, the count of checks never observed red, the red-observation record, and the
+  duplicate-name detection. They pass, and nothing that reads records can see them.
+
+  This converts the first of the ten. Its nine checks now emit a record each and a
+  total, measured on PG18: nine records where there were none, and `checks run: 9`
+  where there was no total.
+
+  The human output is unchanged, byte for byte. `pgc_record` takes the display whole,
+  so each line still reads `PASS  count(*): 100000` with the measured value rather
+  than a label. That value is the comparison, not a message, which is why the local
+  helper records through `pgc_record` rather than delegating to `lib.sh`'s own
+  `check` -- the latter composes its own display and would drop the value.
+
+  The suite's own verdict line stays, and so does its exit logic. That line is
+  load-bearing until a reconciliation replaces it: `smoke.sh` runs under
+  `set -euo pipefail`, so a failing command aborts it, and the verdict is what
+  distinguishes a suite that finished from one that stopped. Removing it in the same
+  change would make the suite report less than it did before.
+
+  It does not add the suite to the ledger. Making a suite coverable and covering it
+  are separate decisions, and the second one is blocked on a measurement: check NAMES
+  differ between majors in at least one suite, the ledger has no major dimension, and
+  a gate seeded from one major would refuse runs on another.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
