@@ -172,7 +172,7 @@ idx_plan_is_index_scan() {
 	local _plan
 	_plan="$(q "$IDX_SETUP
 	   EXPLAIN (COSTS OFF) SELECT count(*) FROM ix_tgt WHERE id BETWEEN 100 AND 199;")"
-	[ "$(grep -ci 'Index.*Scan' <<<"$_plan" || true)" != 0 ] && echo yes || echo no
+	[ "$(grep -ci 'Index.*Scan' <<<"$_plan" || true)" -ne 0 ] && echo yes || echo no
 }
 seq_count() {  # force a sequential scan
 	q "SET enable_indexscan = off; SET enable_bitmapscan = off;

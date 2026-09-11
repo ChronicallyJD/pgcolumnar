@@ -239,7 +239,7 @@ for _tsm_d in "${_tsm_dirs[@]}"; do
 	_tsm_b="$(basename "$_tsm_d")"
 	# grep -c on a here-string, not `printf | grep -q`; see selftest 080 and the
 	# note in 350. The piped form reports a present name as absent under load.
-	[ "$(grep -c "^$_tsm_b/" <<<"$_tsm_named" || true)" != 0 ] \
+	[ "$(grep -c "^$_tsm_b/" <<<"$_tsm_named" || true)" -ne 0 ] \
 		|| _tsm_uncovered="$_tsm_uncovered $_tsm_b"
 done
 check "premise: and they name at least one command in every swept directory" \

@@ -221,7 +221,7 @@ for _cnt_l in "${_cnt_sites[@]}"; do
 	grep -q 'pgc_summary' "$_cnt_f" || continue
 	# grep -c on a captured window, not a pipe into grep -q; see selftest 080.
 	_cnt_win="$(sed -n "$((_cnt_ln > 3 ? _cnt_ln - 3 : 1)),$((_cnt_ln + 6))p" "$_cnt_f")"
-	if [ "$(grep -cE 'PGC_PASSED=|PGC_FAILED=|PGC_UNRUN=' <<<"$_cnt_win" || true)" = 0 ]; then
+	if [ "$(grep -cE 'PGC_PASSED=|PGC_FAILED=|PGC_UNRUN=' <<<"$_cnt_win" || true)" -eq 0 ]; then
 		_cnt_n=$((_cnt_n + 1))
 		[ "$_cnt_n" -le 5 ] && _cnt_bad="$_cnt_bad ${_cnt_f##*/}:$_cnt_ln"
 	fi

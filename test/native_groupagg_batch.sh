@@ -63,7 +63,7 @@ is_groupvec() {	# query -> yes|no
 	# pgc_is_columnar_scan for the mechanism and the measurement.
 	local _plan
 	_plan="$(q "EXPLAIN (COSTS OFF) $1")"
-	[ "$(grep -c 'Columnar Vectorized Group Keys' <<<"$_plan" || true)" != 0 ] \
+	[ "$(grep -c 'Columnar Vectorized Group Keys' <<<"$_plan" || true)" -ne 0 ] \
 		&& echo yes || echo no
 }
 
