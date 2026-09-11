@@ -33,22 +33,75 @@ from pgc_vacuity import QUERY_ERROR, VacuityError, query_error
 # signature rather than listed, so an assertion added later is covered by the arm
 # below instead of being the next hole -- which is how this mode survived: `hash`
 # had a refusal and the four written after it did not.
-def _comparisons():
-    cls = pgc_vacuity.Expect
-    out = []
+#
+# THE EXCLUSION IS DERIVED TOO (#938). Selection used to be the only rule, so
+# "not selected" was a residue: `wrote(cur, want, name)` sat outside because its
+# first parameter is not called `got`, which happens to be the right answer and
+# would also be the answer for a future comparison whose first parameter was
+# `left`. A method matching neither rule must fail an arm, not land in a third
+# bucket. The kind of the left operand is a property of the signature; this layer
+# has no annotations, so the first parameter name is how the signature records that
+# kind.
+def _params(fn):
+    return list(inspect.signature(fn).parameters)[1:]
+
+
+def _is_comparison(fn):
+    params = _params(fn)
+    # (forward, reverse) AS WELL AS (got, want). `ordering_observable` compares two
+    # caller-supplied readings under different parameter names, so a derivation
+    # keyed on "got" missed it -- and it was the one assertion the unique producer
+    # made WEAKER, turning a loud red into a silent pass. Reported by @jdatcmd.
+    return len(params) >= 2 and (
+            (params[0] == "got" and params[1] in ("want", "floor"))
+            or (params[0], params[1]) == ("forward", "reverse"))
+
+
+# First-parameter names that mean the left operand is not a caller-supplied value.
+# The map is keyed on a property of the signature, not on the method name: a new
+# method whose first parameter is `cur` is excluded for the same reason `wrote`
+# is, and a method whose first parameter is `left` matches neither rule.
+_LEFT_OPERAND_KIND = {
+    "cur": "cursor: the count comes from cur.rowcount, a sentinel cannot arrive",
+    "result": "inner pytest run result, not a query value",
+    "plan": "EXPLAIN plan, not a query value",
+    "exc": "exception object, not a query value",
+    "reason": "unrunnable declaration, not a comparison",
+}
+
+
+def _exclusion_reason(fn):
+    params = _params(fn)
+    if not params:
+        return None
+    return _LEFT_OPERAND_KIND.get(params[0])
+
+
+def _partition(cls):
+    selected, excluded, residue = [], [], []
     for name, fn in inspect.getmembers(cls, inspect.isfunction):
         if name.startswith("_"):
             continue
-        params = list(inspect.signature(fn).parameters)[1:]
-        # (forward, reverse) AS WELL AS (got, want). `ordering_observable` compares two
-        # caller-supplied readings under different parameter names, so a derivation
-        # keyed on "got" missed it -- and it was the one assertion the unique producer
-        # made WEAKER, turning a loud red into a silent pass. Reported by @jdatcmd.
-        if len(params) >= 2 and (
-                (params[0] == "got" and params[1] in ("want", "floor"))
-                or (params[0], params[1]) == ("forward", "reverse")):
-            out.append((name, params[1]))
-    return sorted(out)
+        sel = _is_comparison(fn)
+        reason = _exclusion_reason(fn)
+        if sel and reason is not None:
+            residue.append((name, "matches both rules"))
+        elif sel:
+            selected.append((name, _params(fn)[1]))
+        elif reason is not None:
+            excluded.append((name, reason))
+        else:
+            residue.append((name, "matches neither rule"))
+    return (
+        sorted(selected),
+        sorted(excluded),
+        sorted(residue),
+    )
+
+
+def _comparisons():
+    selected, _, _ = _partition(pgc_vacuity.Expect)
+    return selected
 
 
 def test_the_comparison_surface_is_what_this_file_thinks_it_is(expect):
@@ -90,14 +143,9 @@ VALID = {
     "differ":        ("abc", "xyz"),
 }
 
-# NOT EVERY ASSERTION IS IN THIS SWEEP, and the reason is worth stating because the
-# exclusion is currently an accident of naming rather than a judgement. The
-# derivation keys on the first two parameter names, so `wrote(cur, want, name)` is
-# outside it: its left side is a CURSOR rather than a value a query returned, and a
-# sentinel cannot arrive there -- the count comes from `cur.rowcount`. That happens to
-# be the right answer, but a future assertion whose first parameter is not called
-# `got` would be excluded just as silently and for no good reason. A declared
-# exclusion list with a reason per entry is the fix; it is not in this commit.
+# NOT EVERY ASSERTION IS IN THIS SWEEP. `wrote` is outside it because its left
+# operand is a cursor, not because its first parameter fails to be called `got`.
+# The partition below is what makes that a decision rather than a residue.
 
 # How a sentinel arrives for each: bare for a scalar comparison, and as a CELL for a
 # row comparison, because that is what a one-column query that failed looks like
@@ -112,6 +160,57 @@ def test_the_shape_table_covers_every_comparison_the_layer_offers(expect):
     """premise: no comparison is silently outside the arm below."""
     missing = sorted(n for n, _ in _comparisons() if n not in VALID)
     expect.num(len(missing), 0, f"every comparison has a declared valid pair; missing: {missing}")
+
+
+def test_every_public_assertion_is_selected_or_excluded(expect):
+    """#938. No third state: a method matching neither rule is the silent hole.
+
+    Selection remains the derivation this file already had. Exclusion is a
+    POSITIVE match on the kind of the left operand, so "not selected" is no
+    longer a bucket. `inputs == selected + excluded` fails when a method matches
+    neither rule, which is what happens today when a parameter is not called `got`.
+    """
+    selected, excluded, residue = _partition(pgc_vacuity.Expect)
+    public = [n for n, fn in inspect.getmembers(pgc_vacuity.Expect, inspect.isfunction)
+              if not n.startswith("_")]
+    expect.num(len(selected) + len(excluded), len(public),
+               f"inputs {len(public)} == selected {len(selected)} + excluded {len(excluded)}")
+    expect.num(len(residue), 0,
+               f"no public method matches neither rule; residue: {residue}")
+    for name, reason in excluded:
+        expect.at_least(len(reason.split()), 3,
+                        f"{name} is excluded with a stated reason, not a missing entry")
+
+
+def test_wrote_is_excluded_because_its_left_operand_is_a_cursor(expect):
+    """The case that showed the residue was an accident of naming."""
+    excluded = dict(_partition(pgc_vacuity.Expect)[1])
+    expect.num(1 if "wrote" in excluded else 0, 1, "wrote is in the excluded bucket")
+    expect.num(1 if "cursor" in excluded["wrote"] else 0, 1,
+               "and the reason is the cursor, not the method name")
+
+
+def test_a_caller_supplied_value_not_named_got_fails_the_partition(expect):
+    """Acceptance: a value comparison whose first parameter is not `got` is residue.
+
+    A declared name-list of exclusions would put this method in the same silent
+    bucket `wrote` used to occupy. The partition must go red instead.
+    """
+    class Probe:
+        def num(self, got, want, name):
+            return (got, want, name)
+        def wrote(self, cur, want, name):
+            return (cur, want, name)
+        def eq(self, left, want, name):
+            return (left, want, name)
+
+    selected, excluded, residue = _partition(Probe)
+    residue_names = [n for n, _ in residue]
+    expect.num([n for n, _ in selected].count("num"), 1, "num(got, want) is selected")
+    expect.num([n for n, _ in excluded].count("wrote"), 1,
+               "wrote(cur, want) is excluded once the left operand is a cursor")
+    expect.num(residue_names.count("eq"), 1,
+               "eq(left, want) matches neither rule, so it is residue rather than excluded")
 
 
 def test_every_comparison_refuses_a_failed_query_on_either_side(expect):
