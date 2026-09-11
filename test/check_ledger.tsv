@@ -352,11 +352,13 @@ harness_selftest	340-the-binary-must-be-built-from	adding a source file moves it
 harness_selftest	340-the-binary-must-be-built-from	an added file appears in the manifest by name	never	-
 harness_selftest	340-the-binary-must-be-built-from	an added file shows up in the report	never	-
 harness_selftest	340-the-binary-must-be-built-from	an empty manifest is reported as empty, not as silence	never	-
+harness_selftest	340-the-binary-must-be-built-from	an unfingerprintable source reads as empty, not as the library digest	never	-
 harness_selftest	340-the-binary-must-be-built-from	an unhashable tree has an empty manifest	never	-
 harness_selftest	340-the-binary-must-be-built-from	an unreadable b.c yields no fingerprint, not a wrong one	never	-
 harness_selftest	340-the-binary-must-be-built-from	an unreadable c.c yields no fingerprint, not a wrong one	never	-
 harness_selftest	340-the-binary-must-be-built-from	an unreadable library is not a failure	never	-
 harness_selftest	340-the-binary-must-be-built-from	and a non-numeric timestamp is unknown rather than compared as text	never	-
+harness_selftest	340-the-binary-must-be-built-from	and a short first line does not splice the second into it	never	-
 harness_selftest	340-the-binary-must-be-built-from	and a stale source with a replaced binary is still refused for the source	never	-
 harness_selftest	340-the-binary-must-be-built-from	and an uncomputable current fingerprint is unknown, not stale	never	-
 harness_selftest	340-the-binary-must-be-built-from	and an unreadable installed library is unknown, not replaced	never	-
@@ -404,6 +406,7 @@ harness_selftest	340-the-binary-must-be-built-from	premise: the tree fingerprint
 harness_selftest	340-the-binary-must-be-built-from	premise: the unprivileged read agrees while everything is readable	never	-
 harness_selftest	340-the-binary-must-be-built-from	premise: the writer wrote a stamp at all	never	-
 harness_selftest	340-the-binary-must-be-built-from	renaming a source file moves the fingerprint too	never	-
+harness_selftest	340-the-binary-must-be-built-from	so its verdict is unknown rather than a spurious stale	never	-
 harness_selftest	340-the-binary-must-be-built-from	so the tree still fingerprints from its root files alone	never	-
 harness_selftest	340-the-binary-must-be-built-from	so the verdict is fresh, not unknown	never	-
 harness_selftest	340-the-binary-must-be-built-from	so the verdict is unknown -- UNVERIFIED -- and never stale	never	-

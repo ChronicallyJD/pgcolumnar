@@ -1364,6 +1364,15 @@ true until the next version shipped.
   runner and the development loop. Without that the matrix, which builds once per
   major and then sets PGC_SKIP_BUILD, would have reported every suite as unverified.
 
+  The reader for the source field now reads its first line only. Stripping hex from
+  the whole file was right while a stamp was one line, and wrong as soon as there were
+  two: a source that cannot be fingerprinted writes an empty first line, and the
+  whole-file read returned the library digest as the source, turning a documented
+  unverified into a refusal that named a library digest as a source fingerprint. That
+  was introduced by the second line rather than found lying in wait, so it is fixed
+  here. Reported by Joshua D. Drake, who swept every hex extraction in the harness to
+  establish it was the only one.
+
   The refusal on a changed source had never been exercised by anyone before this
   change, only read. It is now driven end to end, along with the three other states.
 
