@@ -348,6 +348,10 @@ instrumented PostgreSQL, and the coverage report. It also runs the
 extension-upgrade guard. That guard builds the previous release on PostgreSQL
 18, loads data into it, and upgrades it in place. The sanitizer build stays in a cache, because it takes longer to build
 than to run the suites against it.
+A final job, red-nightly, opens an issue when any of those fail. The next green
+run closes it. A scheduled run has no pull request to be red on, so nothing else
+surfaces a failure here. This gate once ran red for 25 consecutive nights behind
+a green per-PR gate.
 
 The aarch64 run executes the suites rather than only building them. Misaligned
 reads, the class most often expected to differ by architecture, are already

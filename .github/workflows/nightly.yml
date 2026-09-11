@@ -32,6 +32,11 @@ on:
   schedule:
     - cron: "0 6 * * *" # nightly, 06:00 UTC
   workflow_dispatch:
+    inputs:
+      fire_drill:
+        description: "Exercise the red-nightly reporter without breaking anything"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,7 +52,12 @@ jobs:
     name: suites (PG ${{ matrix.pg }}, ${{ matrix.runner == 'ubuntu-24.04-arm' && 'aarch64' || 'x86_64' }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     strategy:
       fail-fast: false
       # The full packaged matrix on x86_64, and the current major on aarch64.
@@ -202,7 +212,12 @@ jobs:
     name: sanitizer gate (ASAN+UBSAN)
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     env:
       PG_VERSION: "18.4"
       SAN_PREFIX: /home/runner/pg_san
@@ -329,7 +344,12 @@ jobs:
     name: coverage report (PG 18)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -488,7 +508,12 @@ jobs:
     name: extension upgrade guard (PG 18)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar'
+    # A FIRE DRILL SKIPS THE HEAVY GATES. The drill exists to prove the reporter
+    # fires, and a proof that costs a full deep gate is one nobody re-runs -- which
+    # is how a notifier goes back to never having been seen to fire. `skipped` is
+    # not a failure to the reporter, so the drill's verdict comes from the input.
+    if: (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+      && github.event.inputs.fire_drill != 'true'
     # Named ONCE. Two steps consume it, and a tag spelled separately in each is
     # the kind of duplication that goes stale in one place and not the other.
     env:
@@ -575,3 +600,84 @@ jobs:
             echo "::error::the guard skipped for want of an old source; in this job that is a failure"
           fi
           exit "$rc"
+
+  # ---- make a red nightly findable without knowing to look (#973) -----------
+  #
+  # The deep gate ran red two nights and nothing surfaced it; before that, 25
+  # consecutive nights. A scheduled run has no pull request to be red on, the job
+  # that failed is named like a reporting step rather than a gate, and GitHub
+  # notifies the ACTOR of a schedule event -- whoever last touched this file, not
+  # whoever broke it.
+  #
+  # `if: always()` and not `if: failure()`, because the GREEN path is half the
+  # mechanism: an alert that must be closed by hand becomes one nobody closes.
+  #
+  # THE VERDICT COMES FROM needs.*.result, WHICH CANNOT BE LATE. The failing job
+  # NAMES come from the run's own API, because `needs` keys say `coverage` where a
+  # reader needs `coverage report (PG 18)` -- and if that call fails the verdict
+  # still stands and the body says no name was reported, rather than reporting a
+  # green.
+  red-nightly:
+    name: report a red nightly
+    runs-on: ubuntu-latest
+    needs: [suites, sanitizer, coverage, upgrade-guard]
+    if: always() && (github.event_name == 'workflow_dispatch' || github.repository == 'commandprompt/pgcolumnar')
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: open, update or close the nightly's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # ONE LIST, NOT TWO. An earlier version named the four results in four
+          # environment variables, which meant `needs:` was guarded by selftest 450
+          # and the verdict was computed from a second list guarded by nothing --
+          # so a contributor adding a gate was compelled to update the guarded list
+          # and told nothing about the one that decided the verdict
+          # (@OffgridwithJD, who added a fifth job and got a fully green tree with
+          # a nightly whose failure this could not see).
+          #
+          # toJSON(needs) carries every entry, so there is nothing to keep in
+          # agreement.
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          DRILL: ${{ github.event.inputs.fire_drill }}
+        run: |
+          set -euo pipefail
+          # THE DRILL SUBSTITUTES THE INPUT, NOT THE ANSWER. An earlier version set
+          # verdict=failure directly, which meant the drill proved delivery and
+          # never touched the decision -- and the decision is the half that can
+          # fail the #973 way. It now feeds a synthetic context through the same
+          # derivation every real night uses.
+          # THE REAL CONTEXT IS PRINTED FIRST, ALWAYS, INCLUDING ON A DRILL.
+          # The whole fix rests on toJSON(needs) carrying every entry, and that was
+          # an assumption about the platform rather than something anyone had seen.
+          # Printing it makes every run -- including the cheap drill -- an
+          # observation of it: a drill shows all four gates as `skipped`, so a gate
+          # missing from this line is visible without waiting for a real red.
+          echo "needs context as given: $NEEDS_JSON"
+          needs_json="$NEEDS_JSON"
+          if [ "${DRILL:-false}" = "true" ]; then
+            needs_json='{"fire-drill":{"result":"failure"}}'
+            echo "fire drill: substituting a failing context through the same derivation"
+            # AND THE ISSUE MUST SAY IT IS A DRILL. Drill 3 did not: rewriting this
+            # step dropped the marker, the job list came back empty, and the body
+            # read exactly like a genuine red. An alert that cries wolf teaches a
+            # reader to discount it, which is the state #973 exists to leave.
+            drill_name="fire drill for #973: no gate actually failed"
+          fi
+          echo "verdict computed from: $needs_json"
+
+          names=()
+          while IFS= read -r n; do [ -n "$n" ] && names+=("$n"); done < <(
+            # SELECT WHAT FAILED, NOT WHAT DID NOT SUCCEED. The first version
+            # filtered negatively and the first fire drill caught it: this job is
+            # still RUNNING when it asks, so it did not match "success" and listed
+            # ITSELF as a failing job. A positive list cannot admit a state nobody
+            # enumerated -- and where it OMITS one (neutral, action_required,
+            # stale), the reporter says no job name was reported rather than
+            # printing an empty list.
+            gh run view "$GITHUB_RUN_ID" --json jobs --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name' 2>/dev/null || true)
+
+          [ -n "${drill_name:-}" ] && names+=("$drill_name")
+          .github/scripts/nightly-report.sh --from-needs "$needs_json" ${names+"${names[@]}"}
