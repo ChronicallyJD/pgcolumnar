@@ -1,0 +1,37 @@
+# The ledger's debt, in a tracked file so a change to it is a diff a reviewer
+# sees. An environment variable would not be: PGC_SKIP_TIMING is the precedent,
+# set in two workflow files, suppressing whole suites for months with no diff
+# ever showing it.
+#
+# THE TWO NUMBERS ARE DIFFERENT KINDS OF THING. The first version of this file
+# treated both as ceilings and deadlocked, so the distinction is written down.
+#
+# suites_not_covered -- A CEILING, and monotone.
+#   Registered suites with no rows in the ledger at all. Their checks are
+#   invisible to the gate: it cannot refuse a new check in a suite it has never
+#   seen. It falls as suites are seeded, and it MAY ONLY FALL -- the gate compares
+#   this value against the previously committed one and refuses an increase, so
+#   widening the debt is an edit a reviewer sees AND a gate refuses.
+#
+#   Adding a check to a suite that is already covered does not move it, which is
+#   what makes it safe to bound.
+suites_not_covered 250
+#
+# checks_never_observed_red -- A CENSUS. NOT a ceiling, and it must not become
+#   one.
+#   Every new check enters the ledger as `never`, so bounding this number means
+#   every added check breaks the gate, and the only way to land one is to raise a
+#   number the design says may only fall. That is a deadlock rather than a budget,
+#   and the first version of this file shipped it: 614 rows, 614 never, ceiling
+#   614.
+#
+#   It is reported by the gate on every run and falls as checks are attacked. What
+#   the gate REFUSES is a check the ledger has never seen, which regenerating the
+#   ledger fixes -- a reviewable one-line diff, and the intended action rather
+#   than a forbidden one.
+#
+#   The number here is ASSERTED to match the committed ledger, in both harnesses.
+#   Without that it is a hand-maintained count that drifts, which is the failure
+#   this repository has spent a day proving. It is not a ceiling; it is a
+#   measurement that must be true.
+checks_never_observed_red 826

@@ -265,7 +265,7 @@ printf 'static int x=1;\n' > "$_fs_rp/src/a.c"
 printf 'static int x=2;\n' > "$_fs_rp/src/b.c"
 _fs_before="$(pgc_source_fingerprint "$_fs_rp")"
 
-check "premise: the fixture fingerprints at all" \
+check "premise: the partition fixture fingerprints at all" \
 	"$([ -n "$_fs_before" ] && echo yes || echo no)" "yes"
 
 # The same bytes, a different partition: a.c gains b.c's line and b.c is emptied.
@@ -891,7 +891,7 @@ if [ "$_lc_count" -ge 2 ]; then
 	for _lc_l in $_lc_have; do
 		_lc_vals="$_lc_vals $(LC_ALL="$_lc_l" LANG="$_lc_l" pgc_source_fingerprint "$_lc/tree")"
 	done
-	check "premise: the fixture fingerprints at all" \
+	check "premise: every locale produced a fingerprint" \
 		"$([ -n "$(printf '%s' $_lc_vals)" ] && echo yes || echo empty)" "yes"
 	check "one tree, one fingerprint, whatever the locale" \
 		"$(printf '%s\n' $_lc_vals | sort -u | grep -c .)" "1"

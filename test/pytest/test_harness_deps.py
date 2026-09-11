@@ -81,6 +81,13 @@ NO_CLUSTER = [
     # declaration has to say so. The third time this arm has caught a merge-order
     # consequence rather than a mistake.
     "test_failed_query_sentinel.py",
+    # This branch's file, named by the same arm the moment #921's classifier
+    # arrived on the base. It drives test/pgc_ledger.py, which is a python tool
+    # rather than the shell harness, so it needs neither a cluster nor psycopg:
+    # measured at 9 passed in a venv with no driver, and driver_dependent()
+    # agrees. The fourth time this arm has caught a merge-order consequence
+    # rather than a mistake, which is the argument for it.
+    "test_mutation_ledger.py",
 ]
 
 

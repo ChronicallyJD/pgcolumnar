@@ -1361,6 +1361,71 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		verfail=1
 	fi
 
+	# THE LEDGER GATE (#918). Every suite's log is here and the build directory is
+	# about to be removed, so this is the only place a matrix run can feed it.
+	#
+	# The gate runs against the COMMITTED ledger: a check it has never seen is
+	# named and refused, which is the allowlist the issue asks for. Regenerating
+	# the ledger is the intended fix and a reviewable diff, so this cannot
+	# deadlock the way a ceiling on `never` rows did.
+	#
+	# CI verifies; humans commit. A ledger that CI rewrote by itself would be a
+	# file nobody reads changing under everybody.
+	#
+	# Only logs that CARRY records are passed. The twelve suites outside lib.sh's
+	# accounting produce none, and the tool fails closed on an empty input --
+	# correctly, since a caller asking it to reconcile nothing is a caller with a
+	# bug.
+	_led_logs=""
+	for s in "${SUITES[@]}"; do
+		[ -s "$builddir/${s}.log" ] || continue
+		[ "$(grep -c '^RESULT	' "$builddir/${s}.log" || true)" -ne 0 ] \
+			&& _led_logs="$_led_logs $builddir/${s}.log"
+	done
+	if [ -z "$_led_logs" ]; then
+		echo "  no suite emitted a check record on PG$major, so the ledger has nothing to gate"
+		verfail=1
+	elif [ ! -f "$builddir/test/check_ledger.tsv" ]; then
+		echo "  the ledger is missing from the tree under test, which is not a pass"
+		verfail=1
+	else
+		# WHICH REF CARRIES THE PRIOR CEILING is resolved by the tool, from
+		# GITHUB_BASE_REF in CI or the local main's configured upstream outside
+		# it, and it FAILS CLOSED when neither gives a trustworthy answer.
+		#
+		# It used to be chosen here, preferring origin/main with a printed
+		# fallback to HEAD. Both halves were wrong. `origin` is per-clone -- in a
+		# contributor's setup it is their fork, measured 446 commits stale -- and
+		# comparing against an older main makes the check WEAKER rather than
+		# falsely red, because the ceiling may only fall. And the fallback to HEAD
+		# compares a committed file against itself, so it caught nothing for any
+		# change under review while printing that it had compared. A gate that
+		# quietly enforces less than it claims is what this whole change refuses.
+		# shellcheck disable=SC2086
+		python3 "$builddir/test/pgc_ledger.py" gate \
+			--ledger "$builddir/test/check_ledger.tsv" \
+			--budget "$builddir/test/check_ledger_budget.txt" \
+			--registered "$_acc_registered" \
+			--against auto \
+			$_led_logs
+		_led_rc=$?
+		# BRANCH ON THE STATUS THE TOOL WENT TO THE TROUBLE OF DISTINGUISHING.
+		# rc=1 is a real refusal and the fix is to regenerate the ledger; rc=2 is
+		# the gate unable to do its job at all, where regenerating helps nothing.
+		# Collapsing them printed "has a check the ledger has never seen" three
+		# lines below the gate's own "new this run=0", which contradicts it and
+		# sends the reader at the wrong repair. Reported by OffgridwithJD.
+		case "$_led_rc" in
+			0)	;;
+			1)	echo "  PG$major has a check the ledger has never seen, which is not a pass"
+				verfail=1 ;;
+			*)	echo "  PG$major could not run the ledger gate at all, which is not a pass:"
+				echo "  the input or the prior ceiling was unusable, and regenerating the"
+				echo "  ledger will not help. The failure above says which."
+				verfail=1 ;;
+		esac
+	fi
+
 	# How many of the suites counted as having RUN actually accounted for their
 	# checks (#916). Ten registered suites exit 0 having never called pgc_summary;
 	# counting them among the suites that ran is the overcount #447 added this
@@ -1384,6 +1449,24 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 		SUMMARY+=("FAIL   PG$major  ($suites_ran ran, $suites_skipped skipped, $suites_incomplete incomplete)  ${results}")
 		overall=1
 	fi
+	# KEEP THE LOGS, THEN DELETE THE BUILD DIRECTORY. The gate runs above and the
+	# rm runs here, and CI's "Collect logs on failure" step globs
+	# /tmp/pgcolumnar-matrix-*/*.log AFTER this loop has finished -- so it searched
+	# a directory this line had already removed and collected nothing. Run
+	# 34503924812 is the measurement. That mattered beyond diagnosis: the ledger is
+	# fed by merging real logs, and a CI red is exactly the run whose logs record a
+	# check going red for the first time. Deleting them meant CI could never feed
+	# the thing it gates. Reported by @linuxhikerpm.
+	#
+	# Copied rather than left in place, because the build directory is large and
+	# the logs are not, and because a retained path that does not move is what a
+	# workflow step can name.
+	_logkeep="${PGC_LOG_KEEP:-/tmp/pgcolumnar-logs}"
+	mkdir -p "$_logkeep"
+	for _l in "$builddir"/*.log; do
+		[ -e "$_l" ] || continue
+		cp -p "$_l" "$_logkeep/pg${major}-${_l##*/}"
+	done
 	rm -rf "$builddir"
 done
 

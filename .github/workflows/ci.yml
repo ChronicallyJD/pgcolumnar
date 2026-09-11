@@ -387,6 +387,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # THE LEDGER GATE NEEDS THE BASE BRANCH TO EXIST (#918). It compares the
+      # tracked ceiling in `test/check_ledger_budget.txt` against the one already
+      # on the PR's target, and it FAILS CLOSED when no trustworthy prior can be
+      # read rather than quietly enforcing less.
+      #
+      # actions/checkout fetches one ref at depth 1, so without this the base is
+      # absent and the gate stops the run -- correctly, but for a reason that is
+      # this workflow's to fix rather than the author's. Depth 1 is enough: only
+      # the file at that commit is read.
+      - name: fetch the PR base, for the ledger ceiling comparison
+        if: github.base_ref != ''
+        run: |
+          git fetch --depth=1 origin \
+            "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+
       # The repository and the package lists first, on their own, because the
       # cache key below is derived from the versions apt resolves and cannot be
       # computed before the lists exist.
@@ -539,7 +554,10 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
-          for f in /tmp/pgcolumnar-matrix-*/*.log; do
+          # /tmp/pgcolumnar-logs, not the build directory: the runner removes
+          # each builddir at the end of its major, so this step used to search a
+          # path that no longer existed and print nothing.
+          for f in /tmp/pgcolumnar-logs/*.log /tmp/pgcolumnar-matrix-*/*.log; do
             [ -e "$f" ] || continue
             echo "===== $f ====="
             tail -60 "$f"

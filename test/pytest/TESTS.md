@@ -68,6 +68,7 @@ behaviour, the source of that number is named.
 - [20. test_raises_sqlstate.py: which error, and which statement](#20-test_raises_sqlstatepy-which-error-and-which-statement)
 - [21. test_failed_query_sentinel.py: a failed query is not a comparison](#21-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
 - [22. test_writes_wrote_rows.py: a write that wrote nothing](#22-test_writes_wrote_rowspy-a-write-that-wrote-nothing)
+- [23. test_mutation_ledger.py: which checks have ever been red](#23-test_mutation_ledgerpy-which-checks-have-ever-been-red)
 
 ## 1. How to read a test in here
 
@@ -1866,3 +1867,111 @@ each pattern to one `E` line, and pytest wraps a long traceback line. Matching
 like "the guard did not fire". The refusal now leads with the mode's own
 kebab-case id, which is one token and cannot be split, and each arm matches one
 token per call.
+
+## 23. test_mutation_ledger.py: which checks have ever been red
+
+Nothing recorded whether a check had ever been red. That is the gap that let **39 checks
+across 35 suites** ship unable to fail, three of them inside the suite whose whole
+purpose is to stop exactly that.
+
+It records that a named check **was observed red in a recorded run**. Not that it is
+proven able to fail: that needs a named mutation applied deliberately, and conflating
+the two would put a claim in the ledger nothing measured.
+
+### The first design deadlocked, and the fix is the distinction
+
+Bounding `checks_never_observed_red` means **every added check breaks the gate**, because
+a new check enters as `never` — so the only way to land one was to raise a number the
+design said may only fall. It shipped at 614 rows, 614 `never`, ceiling 614.
+
+| number | kind | why |
+| --- | --- | --- |
+| `suites_not_covered` | **ceiling**, monotone | adding a check to a covered suite does not move it |
+| `checks_never_observed_red` | **census**, asserted | every new check enters as `never`, so bounding it deadlocks |
+
+What the gate refuses is a check the committed ledger has never seen, **in a suite the
+ledger covers**. Regenerating the ledger is the intended fix and a reviewable diff.
+
+The format is five tab-separated columns keyed on the first three:
+`suite`, `part`, `check name`, `last observed red`, `mutations` — the last a `-` or a
+`;`-separated **set**, accumulated rather than overwritten.
+
+`run_all_versions.sh` invokes the gate before it removes the build directory, which is
+the only place a matrix run can reach every suite's log.
+
+### `test_bad_input_is_an_integrity_failure_not_a_clean_run`
+
+A nonexistent log, an empty one and a record missing its verdict all returned **rc=0**.
+An integrity failure that reads as a clean run is worse than no gate, because it
+certifies. They now return 2, distinguishable from a real refusal at 1, and
+`--registered` is required rather than silently skipped.
+
+### `test_a_green_run_records_debt_and_never_a_red_observation`
+
+A green run has observed nothing go red, so merging one must never record a red
+observation — otherwise an ordinary CI run retires the debt the ledger exists to count.
+
+### `test_the_mutation_column_accumulates_rather_than_overwriting`
+
+Last-write-wins records the most recent attack rather than the catalogue the column
+exists to become. One `--mutation` copied across several logs attributes a deliberate
+change to failures it had nothing to do with, and is refused.
+
+### `test_a_log_that_does_not_parse_is_not_evidence`
+
+`read_records` accepted `len(f) >= 5`, so a record missing its reason, a verdict
+outside `pgc_record`'s vocabulary, an empty check name, one record against
+`checks run: 2`, and a log with no count at all all merged at rc=0. The ledger
+absorbed as evidence a log that does not parse, which is how an observation gets
+attributed to a check that never ran. Five refusals and a control, because five
+arms all reporting rc=2 prove nothing if the tool has started refusing everything.
+
+### `test_last_red_may_only_move_forward`
+
+The date was a plain assignment, so the answer depended on merge order: an older
+log rewrote a recent observation, and an undated merge replaced a real date with
+`unknown`. A free-form `--date` was stored verbatim, so a typo became an
+observation date the ledger treated as authoritative.
+
+### `test_a_mutation_names_one_check_not_every_casualty`
+
+One deliberate change can redden the target and whatever depended on it.
+Attributing `--mutation` to every failure records collateral damage as evidence
+that the mutation kills that check. A run with more than one failing check is
+refused with the count, and a single failure still carries the mutation on the
+check that reddened.
+
+### `test_two_runs_of_a_check_are_not_a_duplicate_of_it`
+
+Merging logs first cannot tell *the same check in two runs* from *the same name twice in
+one run*, and reported the first as the second.
+
+### `test_renames_are_grouped_by_part_and_scanned_against_one_run`
+
+A global positional pairing misses a real rename whenever unrelated movement in another
+part shifts the ordering. Given a before-log and an after-log together the vanished name
+is present in the union, so the scan **refuses** rather than silently finding nothing.
+
+### `test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers`
+
+The suite restriction is the *meaning* of `suites_not_covered`, not a softening: without
+it the gate refuses every check of all 250 uncovered suites and reddens the whole matrix
+on its first run. It tightens on its own as suites are seeded, and the deadlock that
+shipped is pinned as its own arm — regenerating the ledger lets a new check through.
+
+### `test_the_ceiling_may_only_fall_and_that_is_enforced`
+
+The tracked file says the ceiling may only fall. Without a mechanism that is prose, and
+raising the number passed. The gate compares against the previously committed value.
+
+### `test_the_runner_invokes_the_gate_before_it_removes_the_logs`
+
+A gate nothing runs is a comment. Nothing in the repository called this tool: zero
+references in `.github/`, zero in the runner.
+
+### `test_the_committed_ledger_and_budget_agree`
+
+If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so the
+gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
+which falls as suites are seeded.
+
