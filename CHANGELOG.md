@@ -425,6 +425,45 @@ true until the next version shipped.
 
 ### Fixed
 
+- A conftest can no longer switch a vacuity rule off by rebinding a name the
+  layer reads (#924).
+
+  pytest imports `conftest.py` from the directory it is policing, into the
+  policing interpreter, before collection. Every module-level name in
+  `pgc_vacuity.py` is therefore writable by the code it judges.
+
+  #958 closed the datum one exploit used. The three scans that read such data
+  are module-level names one frame further out, and each was a two-line conftest
+  away from being a no-op. Measured with the pinned runner:
+
+  ```
+  GUARD               no conftest    with the scan rebound to a no-op
+  order collapse      REFUSED rc=4   PASSED rc=0
+  broad except        REFUSED rc=4   PASSED rc=0
+  raises not pinned   REFUSED rc=4   PASSED rc=0
+  ```
+
+  Plugging a fourth name would reopen this again: the transitive closure from
+  the eight hooks is 31 of the module's 47 names, `ast` among them. So the layer
+  snapshots its own bindings at import, holds the snapshot in a closure, and
+  refuses a run in which any of them changed. Names added later are covered
+  without being listed anywhere.
+
+  No allowlist is needed: the module contains no `global` statement, so every
+  module-level binding is constant after import.
+
+  The bindings are restored before the refusal is raised. `pytester` runs its
+  inner session in-process on the same module object, so without that an inner
+  conftest's rebind stays made for every test that follows.
+
+  This is a cost guard, not a lock. Reaching into the hook's `__defaults__` still
+  reaches the closure. The criterion is that silencing a rule must cost more than
+  stating a reason, which `expect.cannot_run(REASON, detail)` does.
+
+  The shell harness needs no equivalent, and not because bash is simpler: its
+  policing runs in a different process from the code it polices. `selftest/260`
+  reads `lib.sh` with grep and awk and never sources the file it judges.
+
 - The sentinel sweep no longer excludes an assertion by accident of naming (#938).
 
   `_comparisons()` selected on the first two parameter names, so `wrote(cur, want,

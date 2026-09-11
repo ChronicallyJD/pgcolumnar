@@ -540,3 +540,196 @@ def test_no_test_in_this_corpus_hand_rolls_an_inequality(expect):
     for f in files:
         offences += _hand_rolled_inequalities(f.read_text(encoding="utf-8"), f.name)
     expect.text(repr(offences), "[]", "no test hand-rolls an inequality")
+
+
+# ---- the layer's own names are reachable from the tree it polices (#924) ----
+#
+# pytest imports `conftest.py` FROM THE POLICED DIRECTORY into the policing
+# interpreter, before collection, with no opt-out. So every module-level name in
+# pgc_vacuity is writable by the code it judges. That is not a bug in pytest; it
+# is what conftest is for. It is a defect here because this layer's whole job is
+# to refuse, and a refusal that can be deleted in two lines is a suggestion.
+#
+# #958 closed the datum one exploit used (`_ORDER_KILLERS`) by binding it in a
+# default argument. The three scans that READ such data are module-level names
+# themselves, one frame further out, and each is a two-line conftest away from
+# being a no-op. Measured on main 226f805 with the pinned runner:
+#
+#     GUARD               no conftest    with the rebind
+#     order collapse      REFUSED rc=4   PASSED rc=0
+#     broad except        REFUSED rc=4   PASSED rc=0
+#     raises not pinned   REFUSED rc=4   PASSED rc=0
+#
+# The fix is not another name moved out of reach. It is the layer noticing that
+# one of its own bindings changed, which covers the names added after this was
+# written as well as the 47 present when it was.
+
+
+def _rebind(name):
+    """A conftest that switches one scan off, and nothing else. Two lines."""
+    return (
+        "import pgc_vacuity\n"
+        f"pgc_vacuity.{name} = lambda path: []\n"
+    )
+
+
+def test_a_conftest_cannot_switch_off_the_order_collapse_scan(pytester, expect):
+    """#924, the route still open after #958."""
+    pytester.makepyfile(
+        """
+        def test_order_collapsed(expect):
+            got = ["b", "a"]
+            g = sorted(got)
+            expect.ordered_rows(g, ["a", "b"], "rows in order")
+        """
+    )
+    plain = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(plain, "premise: the collapse is refused when nobody rebinds")
+    plain.stderr.fnmatch_lines(["*order-killed*"])
+
+    pytester.makeconftest(_rebind("_sorted_ordered_sites"))
+    hatched = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(hatched, "and it is still refused after the scan is rebound")
+    hatched.stderr.fnmatch_lines(["*_sorted_ordered_sites*"])
+
+
+def test_a_conftest_cannot_switch_off_the_broad_except_scan(pytester, expect):
+    """The same hatch, a different scan. Named separately because a fix that
+    closed only the scan #924 happens to name would leave this one open, which
+    is how #924 came back after #958."""
+    pytester.makepyfile(
+        """
+        def test_broad(expect):
+            try:
+                x = 1
+            except Exception:
+                pass
+            expect.num(x, 1, "x is one")
+        """
+    )
+    plain = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(plain, "premise: the broad except is refused")
+    plain.stderr.fnmatch_lines(["*catches Exception broadly*"])
+
+    pytester.makeconftest(_rebind("_broad_except_sites"))
+    hatched = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(hatched, "and it is still refused after the scan is rebound")
+    hatched.stderr.fnmatch_lines(["*_broad_except_sites*"])
+
+
+def test_a_conftest_cannot_switch_off_the_raises_scan(pytester, expect):
+    """The third. The body holds a compound statement rather than a broad
+    exception class, because that arm needs no driver installed and this file
+    runs in the database-free job.
+
+    My first version of this premise used `pytest.raises(ValueError)` around one
+    statement, which the rule does not refuse -- so the PREMISE printed `1 passed`
+    and the arm could not have shown anything being switched off.
+    """
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_raises_compound(expect):
+            with pytest.raises(ValueError):
+                for i in [1]:
+                    raise ValueError("boom")
+            expect.num(1, 1, "ran")
+        """
+    )
+    plain = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(plain, "premise: an unpinned compound raises block is refused")
+    plain.stderr.fnmatch_lines(["*not pinned*"])
+
+    pytester.makeconftest(_rebind("_raises_sites"))
+    hatched = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(hatched, "and it is still refused after the scan is rebound")
+    hatched.stderr.fnmatch_lines(["*_raises_sites*"])
+
+
+def test_the_refusal_names_the_binding_that_changed(pytester, expect):
+    """A refusal that does not say what was rebound sends the reader to the
+    wrong file. The offending test here is HONEST -- the only thing wrong with
+    the run is the conftest -- so nothing but the tamper check can refuse it."""
+    pytester.makepyfile(
+        """
+        def test_honest(expect):
+            expect.num(1, 1, "one is one")
+        """
+    )
+    plain = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(plain, "premise: an honest test passes", passed=1, failed=0)
+
+    pytester.makeconftest(_rebind("_broad_except_sites"))
+    hatched = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(hatched, "a rebound layer name refuses a run of honest tests")
+    hatched.stderr.fnmatch_lines(["*_broad_except_sites*"])
+
+
+def test_a_new_attribute_on_the_layer_is_not_a_rebind(pytester, expect):
+    """The control, and it is LOAD-BEARING rather than hygiene (@OffgridwithJD).
+
+    A guard that fired on anything touching the module would be the
+    false-positive engine this layer's own budget forbids -- but it would also
+    turn four EXISTING tests red, because each writes a name that has never been
+    a module attribute:
+
+        _ORDER_KILLERS    test_ordered.py:148, :169     (removed by #958)
+        _BROAD_RAISES     test_raises_sqlstate.py:584
+        broad_families    test_raises_sqlstate.py:585
+        BROAD_RAISES      test_raises_sqlstate.py:586
+
+    A snapshot comparison cannot flag any of them, because there is no prior
+    binding to differ from. So this arm is what keeps an ADD from being tightened
+    into tampering by someone who reads the check as incomplete. Verified: only
+    `QUERY_ERROR` (test_failed_query_sentinel.py:321, :352) rebinds a name that
+    exists, and it restores it in a `finally` without driving an inner collection.
+    """
+    pytester.makepyfile(
+        """
+        def test_honest(expect):
+            expect.num(1, 1, "one is one")
+        """
+    )
+    pytester.makeconftest(
+        "import pgc_vacuity\n"
+        "pgc_vacuity._a_name_the_layer_never_had = 1\n"
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a NEW attribute is not a changed binding",
+                    passed=1, failed=0)
+
+
+def test_the_rebind_does_not_leak_into_this_session(pytester, expect):
+    """pytester runs the inner session IN-PROCESS, on the same module object, so
+    a conftest that rebinds a scan leaves it rebound for every test that follows
+    -- including the ones in this file. The layer already paid for that once
+    (see `_RunShape`: 'AN INSTANCE PER CONFIG, NOT MODULE GLOBALS').
+
+    So the refusal restores the binding before raising, and this asserts it by
+    USING the scan afterwards rather than by comparing identities: a no-op lambda
+    returns [] for everything, and the real scan finds the planted offence.
+    """
+    pytester.makepyfile(
+        """
+        def test_honest(expect):
+            expect.num(1, 1, "one is one")
+        """
+    )
+    pytester.makeconftest(_rebind("_broad_except_sites"))
+    expect.run_failed(pytester.runpytest("-p", "pgc_vacuity"),
+                      "the inner run is refused")
+
+    import pgc_vacuity
+    planted = pytester.makepyfile(
+        planted="""
+        def test_planted(expect):
+            try:
+                x = 1
+            except Exception:
+                pass
+            expect.num(x, 1, "x is one")
+        """
+    )
+    expect.num(len(pgc_vacuity._broad_except_sites(str(planted))), 1,
+               "the real scan is back and still finds the offence")

@@ -261,6 +261,32 @@ the general case was hand-rolled.
 | `test_the_inequality_scan_finds_a_planted_offence` | the AST scan fires on both spellings |
 | `test_the_inequality_scan_does_not_flag_honest_code` | five shapes it must not flag |
 | `test_no_test_in_this_corpus_hand_rolls_an_inequality` | the population is zero, across 17 files |
+| `test_a_conftest_cannot_switch_off_the_order_collapse_scan` | #924, the route still open after #958 |
+| `test_a_conftest_cannot_switch_off_the_broad_except_scan` | the same hatch, a second scan |
+| `test_a_conftest_cannot_switch_off_the_raises_scan` | and a third |
+| `test_the_refusal_names_the_binding_that_changed` | an honest run, refused, naming the conftest's name |
+| `test_a_new_attribute_on_the_layer_is_not_a_rebind` | the control: a check that fires on anything is not a check |
+| `test_the_rebind_does_not_leak_into_this_session` | the binding is restored, so `pytester` does not poison the outer run |
+
+**A conftest is loaded from the directory being policed, into the policing
+interpreter, before collection.** So every module-level name in `pgc_vacuity` is
+writable by the code it judges. #958 closed the datum one exploit used; the three
+scans that read such data are module-level names one frame further out, and each was
+a two-line conftest away from being a no-op:
+
+```
+GUARD               no conftest    with `pgc_vacuity.<scan> = lambda p: []`
+order collapse      REFUSED rc=4   PASSED rc=0
+broad except        REFUSED rc=4   PASSED rc=0
+raises not pinned   REFUSED rc=4   PASSED rc=0
+```
+
+The layer now snapshots its own bindings at import and refuses a run in which any of
+them changed, which covers names added after it was written. It is a cost guard, not
+a lock: the criterion #924 set is that silencing a rule must cost more than stating a
+reason. **The shell harness needs no equivalent** — `selftest/260` greps `lib.sh` from
+a separate process and never sources the file it judges.
+
 
 **Two failed queries are not two observable arms.** `query_error()` produces a value
 unique per occurrence precisely so two failures cannot compare **equal** and pass an
