@@ -760,3 +760,47 @@ harness_selftest	440-a-count-grep-never-produced	premise: nor is one inside a ge
 harness_selftest	440-a-count-grep-never-produced	premise: the sweep has a corpus to read	never	-
 harness_selftest	440-a-count-grep-never-produced	premise: while a numeric comparison is not an offence	never	-
 harness_selftest	440-a-count-grep-never-produced	premise: while a valid pattern prints a number	never	-
+native_join_runtime_filter	native_join_runtime_filter	3-table answer equals filter-off	never	-
+native_join_runtime_filter	native_join_runtime_filter	3-table join order matches filter-off	never	-
+native_join_runtime_filter	native_join_runtime_filter	3-table plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	ANTI refusal	never	-
+native_join_runtime_filter	native_join_runtime_filter	CROSS refusal	never	-
+native_join_runtime_filter	native_join_runtime_filter	LEFT refusal	never	-
+native_join_runtime_filter	native_join_runtime_filter	SEMI refusal	never	-
+native_join_runtime_filter	native_join_runtime_filter	baseline core Hash Join	never	-
+native_join_runtime_filter	native_join_runtime_filter	baseline reads all groups	never	-
+native_join_runtime_filter	native_join_runtime_filter	build rows omit NULL	never	-
+native_join_runtime_filter	native_join_runtime_filter	clustered groups removed	never	-
+native_join_runtime_filter	native_join_runtime_filter	clustered reads fewer groups	never	-
+native_join_runtime_filter	native_join_runtime_filter	collation-mismatch answer equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	collation-mismatch bloom rejects most non-matches	never	-
+native_join_runtime_filter	native_join_runtime_filter	collation-mismatch interval stays off	never	-
+native_join_runtime_filter	native_join_runtime_filter	collation-mismatch plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	early limit equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	early limit has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	empty-build answer equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	empty-build plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	fact-qual conjunction equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	fact-qual plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	filter ready before scan	never	-
+native_join_runtime_filter	native_join_runtime_filter	int4/int8 answer equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	int4/int8 bloom rejects most non-matches	never	-
+native_join_runtime_filter	native_join_runtime_filter	int4/int8 interval stays off	never	-
+native_join_runtime_filter	native_join_runtime_filter	int4/int8 plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	plan has build tap	never	-
+native_join_runtime_filter	native_join_runtime_filter	plan has runtime coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	plan retains core Hash Join	never	-
+native_join_runtime_filter	native_join_runtime_filter	projection join equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	projection outer is not wrapped	never	-
+native_join_runtime_filter	native_join_runtime_filter	projection scan is chosen	never	-
+native_join_runtime_filter	native_join_runtime_filter	rescan answers equal heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	runtime answer equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	runtime answer equals off	never	-
+native_join_runtime_filter	native_join_runtime_filter	saturated answer equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	saturated bloom is disabled	never	-
+native_join_runtime_filter	native_join_runtime_filter	saturated plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	scattered answer equals heap	never	-
+native_join_runtime_filter	native_join_runtime_filter	scattered bloom rejects most non-matches	never	-
+native_join_runtime_filter	native_join_runtime_filter	scattered interval cannot drop groups	never	-
+native_join_runtime_filter	native_join_runtime_filter	scattered plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	scattered still reads every group	never	-
