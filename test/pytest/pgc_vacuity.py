@@ -125,6 +125,36 @@ _WRITES = {}
 _WRITE_TAGS = ("INSERT", "UPDATE", "DELETE", "MERGE", "COPY")
 
 
+class _Record:
+    """One counted assertion's outcome. #937.
+
+    THE COUNT IS THIS LIST'S LENGTH, which is the whole design. The shell harness
+    keeps `PGC_CHECKS` and a record stream honest by reconciling them, because in
+    bash they must be two things. Here they need not be, so the count is a derived
+    property and `_records` is the only state -- nothing can increment a count
+    without a record existing, by construction rather than by discipline.
+
+    AN OBJECT, NOT A FORMATTED LINE, and that is load-bearing rather than
+    idiomatic. The shell's record is tab separated, so `pgc_record` had to strip
+    tabs AND newlines out of a check name: measured there, a tab gave a record of
+    four fields and a newline gave two lines. A name is carried here as an
+    attribute, so there is no separator to smuggle -- and test_check_records.py
+    asserts that with a name holding both, because the moment these become a line
+    the whole class of defect returns and nothing would say so.
+
+    The verdict is filled in by the phase that resolves it from the outcome; a
+    record created here is an assertion that ran, which is the fact the call site
+    knows.
+    """
+
+    __slots__ = ("name", "verdict", "reason")
+
+    def __init__(self, name, verdict="PASS", reason=""):
+        self.name = name
+        self.verdict = verdict
+        self.reason = reason
+
+
 class _Write:
     """One write statement's outcome.
 
@@ -234,8 +264,30 @@ class Expect:
 
     def __init__(self, nodeid):
         self.nodeid = nodeid
-        self.count = 0
+        self._records = []
         self.unrunnable = None
+
+    @property
+    def records(self):
+        """The assertions this test has concluded, in the order it concluded them.
+
+        A TUPLE, so a caller cannot append to the stream without going through the
+        recorder. `pytest_runtest_call` reaches the list itself to resolve the
+        verdict of the assertion that raised; everything else reads this.
+        """
+        return tuple(self._records)
+
+    @property
+    def count(self):
+        """How many assertions were counted. NOT a second variable.
+
+        There is no setter, deliberately. An arm in test_check_records.py asserts
+        that assigning to it raises, because a test checking only that the count
+        AGREES with the records would pass on an implementation that keeps two
+        numbers and happens to update both -- which is exactly the drift the shell
+        side needs a reconciliation to catch.
+        """
+        return len(self._records)
 
     # -- the recorder -------------------------------------------------------
     def _refuse_failed_query(self, name, got, want):
@@ -257,8 +309,17 @@ class Expect:
                     f"failure you expect rather than comparing two of them."
                 )
 
-    def _counted(self):
-        self.count += 1
+    def _record(self, name, verdict="PASS", reason=""):
+        """Count an assertion by recording it. One operation, no other path.
+
+        Called BEFORE the comparison, at every site, because that is where the
+        call site knows the assertion ran. The verdict is not passed in: passing it
+        would need the outcome, which would split this back into two steps. It is
+        resolved from the exception in `pytest_runtest_call` instead -- assertions
+        in a body are sequential and a raise ends the test, so a failed test's
+        failing assertion is the LAST record and every earlier one passed.
+        """
+        self._records.append(_Record(name, verdict, reason))
 
     # -- numbers -----------------------------------------------------------
     def num(self, got, want, name):
@@ -273,7 +334,7 @@ class Expect:
                 f"{type(got).__name__}={got!r} and {type(want).__name__}={want!r}. "
                 f"A text comparison here is the defect this harness removes."
             )
-        self._counted()
+        self._record(name)
         if got != want:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
@@ -328,7 +389,7 @@ class Expect:
                 f"is the same, so the reverse ordering is identical and the claim "
                 f"asserts nothing beyond what rows() already asserts."
             )
-        self._counted()
+        self._record(name)
         if g != w:
             for i, (a, b) in enumerate(zip(g, w)):
                 if a != b:
@@ -358,7 +419,7 @@ class Expect:
         f, r = list(forward), list(reverse)
         if not f and not r:
             raise VacuityError(f"{name}: both directions are empty.")
-        self._counted()
+        self._record(name)
         if f == r:
             raise AssertionError(
                 f"{name}: the forward and reverse readings are identical, so nothing "
@@ -400,7 +461,7 @@ class Expect:
                     f"this assertion would report the mutation as observable. Assert "
                     f"the failure you expect instead of differencing two of them."
                 )
-        self._counted()
+        self._record(name)
         if got == want:
             raise AssertionError(
                 f"{name}: arms-do-not-differ: {got!r} on both arms. An A/B whose arms "
@@ -495,7 +556,7 @@ class Expect:
                 f"failed. If an empty result is the point, pass "
                 f"allow_empty='why it is empty'."
             )
-        self._counted()
+        self._record(name)
         if list(got) != list(want):
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
@@ -512,7 +573,7 @@ class Expect:
         self._refuse_failed_query(name, got, want)
         if _empty(got) and _empty(want):
             raise VacuityError(f"{name}: both hashes are empty.")
-        self._counted()
+        self._record(name)
         if got != want:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
@@ -524,7 +585,7 @@ class Expect:
             raise VacuityError(
                 f"{name}: the expected text is empty, so anything empty satisfies it."
             )
-        self._counted()
+        self._record(name)
         if got != want:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
@@ -580,7 +641,7 @@ class Expect:
                 f"`exc.value` inside a `with pytest.raises(...) as exc` block, not "
                 f"`exc`."
             )
-        self._counted()
+        self._record(name)
         got = exc.sqlstate
         if got is None:
             raise AssertionError(
@@ -627,7 +688,7 @@ class Expect:
                 continue
             if provider is not None and pv != provider:
                 continue
-            self._counted()
+            self._record(name)
             return node
 
         raise AssertionError(
@@ -654,7 +715,7 @@ class Expect:
                 f"{name}: a floor of {floor!r} is satisfied by any count, so this "
                 f"asserts nothing."
             )
-        self._counted()
+        self._record(name)
         if not got >= floor:
             raise AssertionError(f"{name}: got {got!r}, wanted at least {floor!r}")
 
@@ -678,7 +739,7 @@ class Expect:
                 f"{name}: refusal() with no pattern asserts only that something "
                 f"failed, which is the defect it exists to remove."
             )
-        self._counted()
+        self._record(name)
         result.assert_outcomes(failed=1, passed=0)
         # ANCHORED TO pytest's ERROR-LINE PREFIX, and that is the whole point.
         #
@@ -719,12 +780,12 @@ class Expect:
             raise VacuityError(
                 f"{name}: outcomes() with no expectation asserts nothing."
             )
-        self._counted()
+        self._record(name)
         result.assert_outcomes(**want)
 
     def run_failed(self, result, name):
         """Assert an inner run exited non-zero, and count it."""
-        self._counted()
+        self._record(name)
         if result.ret == 0:
             raise AssertionError(
                 f"{name}: the inner run exited 0, so nothing refused it."
@@ -774,7 +835,7 @@ class Expect:
             if key in node:
                 found = True
 
-        self._counted()
+        self._record(name)
         if absent and found:
             raise AssertionError(f"{label}: the key is present and should not be.")
         if not absent and not found:
@@ -802,7 +863,12 @@ class Expect:
                 f"unrunnable reason {reason!r} is not one of {UNRUNNABLE_REASONS}"
             )
         self.unrunnable = (reason, detail)
-        self._counted()
+        # UNRUN, NOT PASS. An assertion that declined to run is an outcome like any
+        # other -- #937 property 4 -- and the shell's verdict vocabulary has the same
+        # four values for the same reason. The record is named by the reason CODE,
+        # which is from a closed list, so the stream stays keyable when the detail is
+        # free text.
+        self._record(name=reason, verdict="UNRUN", reason=detail)
 
 
 @pytest.fixture

@@ -18,6 +18,36 @@ true until the next version shipped.
 
 ### Added
 
+- Every counted assertion in the pytest harness produces a record, and the
+  count is derived from them (#937, first phase).
+
+  The shell harness makes counting and recording the same call, so no path can
+  do either alone, and reconciles the totals afterwards. The pytest half reaches
+  the same property through Python rather than through the shell's format.
+
+  It reaches it more strongly, because Python can remove the possibility instead
+  of policing it. The count is not a second variable kept in step with the
+  records; it is `len(self._records)`, a property with no setter. A count that
+  cannot be written cannot drift from the stream it counts.
+
+  Measured before this: `_counted()` at 15 call sites, the counter incremented
+  by one line and read by one, and zero per-assertion records.
+
+  The record is an object on the recorder, not a formatted line. The shell's
+  record is tab separated, so `pgc_record` has to strip tabs and newlines out of
+  a check name. There is no separator here to smuggle, and a name carrying both
+  is asserted to round-trip byte-identical, so the class of defect cannot return
+  silently if these ever become a line.
+
+  `cannot_run()` records `UNRUN` rather than a pass. An assertion that declined
+  to run is an outcome like any other.
+
+  A refused assertion leaves no record: a `VacuityError` means the assertion
+  never ran, so the stream is outcomes rather than attempts.
+
+  Still to come in #937: the verdict resolved from the outcome, and a session
+  reconciliation that can fail.
+
 - A serial inner Hash Join can push the build-side keys into a direct
   columnar scan (#752).
 
