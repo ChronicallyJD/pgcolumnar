@@ -54,6 +54,69 @@ check "a missing postmaster timestamp is unknown, not predates" \
 check "and a non-numeric timestamp is unknown rather than compared as text" \
 	"$(pgc_running_binary_verdict 1000 "not-a-time")" "unknown"
 
+# ---- the stamp must record the BINARY, not only the source (#959) ------------
+#
+# `pgc_freshness_verdict` compares two SOURCE fingerprints and the caller printed
+# "source X matches the binary under test" -- a claim about the BINARY from evidence
+# about the SOURCE. When another process writes the shared prefix the claim is false,
+# and it is false in the POSITIVE branch, which is the one that asserts something.
+#
+# MEASURED on two trees whose src/ differs by five files: tree B built and installed
+# through the harness, tree A then installed its own library into the same prefix,
+# and B ran #945's suite under PGC_SKIP_BUILD=1:
+#
+#     -- .so: d312a10c0cfb            <- A's build
+#     -- source: a0e6afc3e13e matches the binary under test
+#     FAIL  plan has runtime coordinator: got [0] want [1]      (nine in all)
+#
+# The stamp is keyed per SOURCE TREE -- /root/wv3/.pgc_source_stamp.18.<inst> and
+# /root/wfpB/.pgc_source_stamp.18.<inst> are two files -- so a tree's stamp records
+# only what THAT tree built and is structurally unable to see another tree overwrite
+# the prefix. @jdatcmd reproduced the same sentence above two different libraries
+# with opposite outcomes on PG 17.
+#
+# The verdict and the decision are pure, like the two above, so they are exercised
+# here without a build.
+
+check "a recorded library digest equal to the installed one is fresh" \
+	"$(pgc_binary_identity_verdict aaa111aaa111 aaa111aaa111)" "fresh"
+check "a recorded digest different from the installed one is replaced, not fresh" \
+	"$(pgc_binary_identity_verdict aaa111aaa111 bbb222bbb222)" "replaced"
+check "no recorded digest is unknown, not fresh" \
+	"$(pgc_binary_identity_verdict "" aaa111aaa111)" "unknown"
+check "and an unreadable installed library is unknown, not replaced" \
+	"$(pgc_binary_identity_verdict aaa111aaa111 "")" "unknown"
+
+# THE DECISION, so the caller cannot claim the binary on source evidence alone.
+check "source fresh and binary fresh is the only state that earns the claim" \
+	"$(pgc_freshness_claim fresh fresh)" "verified"
+check "source fresh with an unverifiable binary does not earn it" \
+	"$(pgc_freshness_claim fresh unknown)" "source-only"
+check "source fresh with a replaced binary is refused" \
+	"$(pgc_freshness_claim fresh replaced)" "refuse-binary"
+check "a stale source is refused whatever the binary says" \
+	"$(pgc_freshness_claim stale fresh)" "refuse-source"
+check "and a stale source with a replaced binary is still refused for the source" \
+	"$(pgc_freshness_claim stale replaced)" "refuse-source"
+check "no source record is unverified, not verified" \
+	"$(pgc_freshness_claim unknown fresh)" "unverified"
+
+# THE OLD STAMP FORMAT MUST NOT BE MISREAD. A one-line stamp holds the source
+# fingerprint only. Reading a library digest out of it must give nothing, or every
+# pre-existing stamp would certify the source hash as a binary digest.
+_bs="$PGC_WORKDIR/stamp959"; mkdir -p "$(dirname "$_bs")"
+printf '%s\n' "a0e6afc3e13e" > "$_bs"
+check "a one-line stamp yields its source fingerprint" \
+	"$(pgc_read_source_stamp "$_bs")" "a0e6afc3e13e"
+check "and yields NO library digest, rather than reusing the source hash" \
+	"$(pgc_read_installed_stamp "$_bs")" ""
+pgc_write_source_stamp "$_bs" "a0e6afc3e13e" "d312a10c0cfb"
+check "a two-line stamp still yields the source fingerprint first" \
+	"$(pgc_read_source_stamp "$_bs")" "a0e6afc3e13e"
+check "and yields the library digest second" \
+	"$(pgc_read_installed_stamp "$_bs")" "d312a10c0cfb"
+unset _bs
+
 # The fingerprint has to MOVE when a build input moves and STAY when nothing does.
 # A fingerprint that never changes reports fresh forever, which is the failure this
 # whole file exists to prevent, one level down.

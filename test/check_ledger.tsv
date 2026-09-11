@@ -335,14 +335,19 @@ harness_selftest	340-the-binary-must-be-built-from	a library older than the runn
 harness_selftest	340-the-binary-must-be-built-from	a missing binary timestamp is unknown, not predates	never	-
 harness_selftest	340-the-binary-must-be-built-from	a missing postmaster timestamp is unknown, not predates	never	-
 harness_selftest	340-the-binary-must-be-built-from	a new source file under objstore moves the fingerprint	never	-
+harness_selftest	340-the-binary-must-be-built-from	a one-line stamp yields its source fingerprint	never	-
+harness_selftest	340-the-binary-must-be-built-from	a recorded digest different from the installed one is replaced, not fresh	never	-
+harness_selftest	340-the-binary-must-be-built-from	a recorded library digest equal to the installed one is fresh	never	-
 harness_selftest	340-the-binary-must-be-built-from	a relative path hashes the same tree the same way	never	-
 harness_selftest	340-the-binary-must-be-built-from	a server older than the binary predates it	never	-
 harness_selftest	340-the-binary-must-be-built-from	a server started after the binary is fresh	never	-
 harness_selftest	340-the-binary-must-be-built-from	a server started at the same second is fresh	never	-
+harness_selftest	340-the-binary-must-be-built-from	a stale source is refused whatever the binary says	never	-
 harness_selftest	340-the-binary-must-be-built-from	a symlink to the tree hashes it the same way	never	-
 harness_selftest	340-the-binary-must-be-built-from	a symlinked src contributes nothing, as find -P contributes nothing	never	-
 harness_selftest	340-the-binary-must-be-built-from	a trailing slash hashes the same tree the same way	never	-
 harness_selftest	340-the-binary-must-be-built-from	a tree with no hashable file yields no fingerprint	never	-
+harness_selftest	340-the-binary-must-be-built-from	a two-line stamp still yields the source fingerprint first	never	-
 harness_selftest	340-the-binary-must-be-built-from	adding a source file moves it	never	-
 harness_selftest	340-the-binary-must-be-built-from	an added file appears in the manifest by name	never	-
 harness_selftest	340-the-binary-must-be-built-from	an added file shows up in the report	never	-
@@ -352,7 +357,9 @@ harness_selftest	340-the-binary-must-be-built-from	an unreadable b.c yields no f
 harness_selftest	340-the-binary-must-be-built-from	an unreadable c.c yields no fingerprint, not a wrong one	never	-
 harness_selftest	340-the-binary-must-be-built-from	an unreadable library is not a failure	never	-
 harness_selftest	340-the-binary-must-be-built-from	and a non-numeric timestamp is unknown rather than compared as text	never	-
+harness_selftest	340-the-binary-must-be-built-from	and a stale source with a replaced binary is still refused for the source	never	-
 harness_selftest	340-the-binary-must-be-built-from	and an uncomputable current fingerprint is unknown, not stale	never	-
+harness_selftest	340-the-binary-must-be-built-from	and an unreadable installed library is unknown, not replaced	never	-
 harness_selftest	340-the-binary-must-be-built-from	and comparing two manifests names it rather than saying 'changed'	never	-
 harness_selftest	340-the-binary-must-be-built-from	and it says so rather than staying silent	never	-
 harness_selftest	340-the-binary-must-be-built-from	and removing it restores the fingerprint	never	-
@@ -362,6 +369,8 @@ harness_selftest	340-the-binary-must-be-built-from	and the major is still readab
 harness_selftest	340-the-binary-must-be-built-from	and the reader reads back the fingerprint the writer recorded	never	-
 harness_selftest	340-the-binary-must-be-built-from	and the refusal says the server must be restarted	never	-
 harness_selftest	340-the-binary-must-be-built-from	and two pg_configs for one prefix share a stamp, keyed on pkglibdir	never	-
+harness_selftest	340-the-binary-must-be-built-from	and yields NO library digest, rather than reusing the source hash	never	-
+harness_selftest	340-the-binary-must-be-built-from	and yields the library digest second	never	-
 harness_selftest	340-the-binary-must-be-built-from	but it says which question went unanswered	never	-
 harness_selftest	340-the-binary-must-be-built-from	control: a caller passing a pg_config is not flagged	never	-
 harness_selftest	340-the-binary-must-be-built-from	control: a readable run still reads fresh	never	-
@@ -378,6 +387,8 @@ harness_selftest	340-the-binary-must-be-built-from	every directory the Makefile 
 harness_selftest	340-the-binary-must-be-built-from	moving bytes between files moves the fingerprint	never	-
 harness_selftest	340-the-binary-must-be-built-from	no caller passes a major where a pg_config belongs	never	-
 harness_selftest	340-the-binary-must-be-built-from	no record at all is unknown, not fresh	never	-
+harness_selftest	340-the-binary-must-be-built-from	no recorded digest is unknown, not fresh	never	-
+harness_selftest	340-the-binary-must-be-built-from	no source record is unverified, not verified	never	-
 harness_selftest	340-the-binary-must-be-built-from	one tree, one fingerprint, whatever the locale	never	-
 harness_selftest	340-the-binary-must-be-built-from	premise: and the stamp really was not written, so the arm is not vacuous	never	-
 harness_selftest	340-the-binary-must-be-built-from	premise: at least two locales are installed to compare	never	-
@@ -396,6 +407,9 @@ harness_selftest	340-the-binary-must-be-built-from	renaming a source file moves 
 harness_selftest	340-the-binary-must-be-built-from	so the tree still fingerprints from its root files alone	never	-
 harness_selftest	340-the-binary-must-be-built-from	so the verdict is fresh, not unknown	never	-
 harness_selftest	340-the-binary-must-be-built-from	so the verdict is unknown -- UNVERIFIED -- and never stale	never	-
+harness_selftest	340-the-binary-must-be-built-from	source fresh and binary fresh is the only state that earns the claim	never	-
+harness_selftest	340-the-binary-must-be-built-from	source fresh with a replaced binary is refused	never	-
+harness_selftest	340-the-binary-must-be-built-from	source fresh with an unverifiable binary does not earn it	never	-
 harness_selftest	340-the-binary-must-be-built-from	the fingerprint is the hash of the manifest	never	-
 harness_selftest	340-the-binary-must-be-built-from	the fixed fingerprint equals what the previous implementation produced	never	-
 harness_selftest	340-the-binary-must-be-built-from	the manifest is tree-relative, never absolute	never	-

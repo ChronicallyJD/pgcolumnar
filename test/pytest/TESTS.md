@@ -634,8 +634,13 @@ nothing pinned a locale, so one tree hashed two ways —
 `LC_ALL=C` gave `6d122a7158d5` and `LC_ALL=en_US.UTF-8` gave `0b59bd75fa4f`.
 
 The verdict is the property that matters, and the reason it is worth an arm at all
-is the asymmetry. `stale` is the FATAL; `unknown` prints `freshness UNVERIFIED` and
-runs the suites. The asymmetry is the whole argument for the change: a false
+is the asymmetry. `stale` is a FATAL; `unknown` prints `freshness UNVERIFIED` and
+runs the suites. Since #959 there are two more: a **replaced library** is also a
+FATAL — the source can be unchanged while another tree has overwritten the shared
+prefix, which is how `matches the binary under test` came to be printed above
+somebody else's binary — and a stamp written before #959, which records no library
+digest, reports the source claim it earned and says the library is UNVERIFIED rather
+than implying it was checked. The asymmetry is the whole argument for the change: a false
 UNVERIFIED costs a line of output, a false FATAL costs a matrix **and** teaches
 people to re-run past a freshness check, which is the failure this controller
 exists to prevent.

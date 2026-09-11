@@ -1332,6 +1332,41 @@ true until the next version shipped.
   refused, since absence is not a contradiction; what holds the committed budget to
   naming both numbers is a separate arm in each harness.
 
+- The harness no longer reports that the installed library matches when it has not
+  looked at the library (#959).
+
+  `lib.sh` compared a recorded source fingerprint against the current one and then
+  printed "source <hash> matches the binary under test". That is a claim about the
+  binary drawn from evidence about the source, and it is false whenever another
+  process has written the shared prefix: a second worktree, a timing run, a manual
+  install. The stamp could not see it, because the stamp is keyed per source tree,
+  so two trees installing into one prefix keep two stamps and each records only what
+  its own tree built.
+
+  Measured on two trees whose sources differ by five files. One built and installed
+  through the harness, the other installed its own library into the same prefix, and
+  the first then ran a suite with PGC_SKIP_BUILD=1: the run printed the library's
+  fingerprint, asserted that the source matched the binary, and failed nine checks
+  of a feature the installed library did not contain.
+
+  The stamp now records the installed library's digest beside the source
+  fingerprint, and the claim requires both to match what is on disk. A library that
+  changed under the stamp is refused the way a changed source already was, naming
+  both digests and the prefix another build wrote. A stamp written before this change
+  records no digest, so it reports the source claim it earned and says the library is
+  unverified rather than implying it was checked.
+
+  The digest cannot be predicted from the source, because the build path is compiled
+  in: one commit built in two directories produces two different libraries. So what
+  is recorded is the digest installed at the moment the stamp was written.
+
+  All three places that write a stamp record it: the build function, the matrix
+  runner and the development loop. Without that the matrix, which builds once per
+  major and then sets PGC_SKIP_BUILD, would have reported every suite as unverified.
+
+  The refusal on a changed source had never been exercised by anyone before this
+  change, only read. It is now driven end to end, along with the three other states.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
