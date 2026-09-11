@@ -163,6 +163,7 @@ SUITES=(
 	native_index_fetch_stripe_cost
 	native_index_projection
 	native_ios
+	native_join_runtime_filter
 	native_late_materialization
 	native_lazy_slot
 	native_metadata_flush

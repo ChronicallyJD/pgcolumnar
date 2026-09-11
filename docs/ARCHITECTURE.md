@@ -202,6 +202,13 @@ the module adds the vectorized aggregate path for a supported
 `SELECT agg(col) FROM t [WHERE ...]`. EXPLAIN reporting (projected columns, and
 under ANALYZE the row groups and vectors read versus skipped) lives here.
 
+
+### columnar_runtime_filter.c
+Serial join runtime filter. A `set_join_pathlist_hook` wraps a serial inner
+Hash Join whose outer path is a direct columnar scan. Core Hash Join keeps the
+answers. The coordinator drains the build side first. It then attaches a
+conservative key range and a Bloom filter to that scan.
+
 ### columnar_vector.c
 The vectorized aggregate path and its shared filter. A column-at-a-time filter
 (`ColumnarVecSelect`) turns a plan's simple strict `column op const` clauses into

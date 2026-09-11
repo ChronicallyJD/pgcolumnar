@@ -679,6 +679,18 @@ path rejects. `pgcolumnar.groupagg_max_groups` caps the group count, default
 that exceeds it errors rather than switching plans. Raise the cap or turn the
 path off.
 
+
+## Join runtime filter
+
+The runtime filter wraps a serial inner Hash Join only.
+The outer path must be a direct columnar scan.
+LEFT, SEMI, ANTI, and CROSS joins are unchanged.
+A parallel Hash Join is unchanged.
+A covering projection as the outer path is unchanged.
+A mixed-type or mixed-collation join still hashes both sides.
+It does not attach a key-range skip in those cases.
+A build side past the on-disk bloom saturation cap disables Bloom rather than emitting a saturated filter.
+
 ## Skipping and collation
 
 A pushed-down filter drives chunk-group skipping only when one condition is true.

@@ -70,6 +70,7 @@ behaviour, the source of that number is named.
 - [22. test_writes_wrote_rows.py: a write that wrote nothing](#22-test_writes_wrote_rowspy-a-write-that-wrote-nothing)
 - [23. test_mutation_ledger.py: which checks have ever been red](#23-test_mutation_ledgerpy-which-checks-have-ever-been-red)
 - [24. test_loop_coverage_premise.py: a loop that never ran asserted nothing](#24-test_loop_coverage_premisepy-a-loop-that-never-ran-asserted-nothing)
+- [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
 
 ## 1. How to read a test in here
 
@@ -2158,8 +2159,6 @@ references in `.github/`, zero in the runner.
 If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so the
 gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
 which falls as suites are seeded.
-
-
 ## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
 
 **Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5
@@ -2211,3 +2210,61 @@ The two differ, and the reason is dataflow. `test_harness_deps.py`'s loop iterat
 a preceding loop. A rule that demanded the names match would reject correct code, which
 is how a guard gets switched off. **So the residual is a loop whose premise bounds the
 wrong collection**, which a reviewer catches and a sweep does not. 3.5 names it.
+
+
+## 25. test_join_runtime_filter.py: serial join runtime filter
+
+Pytest twin of `test/native_join_runtime_filter.sh`. The two files are independent:
+each builds its own fixtures and expected values. They share only the public
+EXPLAIN names and the SQL answers.
+
+### `test_serial_join_runtime_filter`
+
+Clustered integer keys. The coordinator wraps core Hash Join, the build tap
+omits NULL, and nineteen of twenty groups are removed. LEFT, SEMI, ANTI, and
+CROSS plans are refused. Answers match both filter-off and a heap twin.
+
+### `test_scattered_join_runtime_bloom`
+
+Scattered keys keep every group. Bloom must reject most non-matches on
+`Runtime Filter Rows Rejected`. The hull cannot be the thing that avoids work.
+
+### `test_cross_type_int4_int8_bloom`
+
+int4 fact vs int8 dimension. Both sides hash. Interval stays off.
+
+### `test_collation_mismatch_bloom_only`
+
+Operator collation is not the fact attribute collation. Interval stays off.
+Bloom may still reject.
+
+### `test_runtime_filter_rebuilds_on_lateral_rescan`
+
+A correlated LATERAL rebuilds the filter for each outer parameter.
+
+### `test_saturated_build_disables_bloom`
+
+A build side past the on-disk bloom cap disables Bloom rather than saturating.
+
+### `test_three_table_join_order_unchanged`
+
+Wrapping the columnar-outer hash join must not reorder the other inputs.
+
+### `test_empty_build_runtime_filter`
+
+An empty dimension still uses the coordinator and returns no join rows.
+
+### `test_projection_outer_is_not_wrapped`
+
+A covering projection scan stays an unwrapped Hash Join outer.
+
+### `test_early_limit_matches_heap`
+
+`ORDER BY ... LIMIT` still matches a heap control. The coordinator used to
+crash on this shape when it drained the tap through `ExecProcNode`.
+
+### `test_fact_qual_with_late_mat_off_matches_heap`
+
+A non-key fact-table qual with late materialization off. The attach used to
+force the two-pass path with only the join key decoded, so the qual dropped
+every row. Heap is the oracle. Independent of the shell conjunction arm.
