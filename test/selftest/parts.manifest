@@ -42,3 +42,4 @@
 430-the-self-test-must-not-report.sh
 440-a-count-grep-never-produced.sh
 450-a-red-nightly-must-be-findable.sh
+460-the-controller-must-record-the-binary.sh

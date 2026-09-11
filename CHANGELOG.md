@@ -1664,6 +1664,58 @@ true until the next version shipped.
   rate of the fixture that has no branches. It is anchored, and a control with a
   genuinely zero-covered file proves the anchor did not defeat the assertion.
 
+- The matrix controller is asserted to record the installed library, because the
+  failure if it stops is a green matrix-wide downgrade (#961).
+
+  `run_all_versions.sh` builds once per major and runs every child suite with
+  `PGC_SKIP_BUILD=1`, so each child checks the controller's stamp to learn whether
+  the binary it measures came from this tree. If the controller's stamp write loses
+  its third argument, every child reaches `source-only` and **passes** -- because
+  `source-only` is also the state of every stamp written before #959, so it cannot be
+  a failure. The whole matrix degrades to UNVERIFIED with a green rollup on both
+  majors, and nothing says so.
+
+  `@jdatcmd` asked for this arm while approving #960, on the ground that an arm
+  catching a green failure is worth more than most arms.
+
+  **The defect is a dropped argument at a call site**, so an arm that calls
+  `pgc_write_source_stamp` itself would prove nothing: the function would be correct
+  and the caller wrong. The new part extracts the controller's stamp block and runs
+  it, so what executes is the real call site's own text.
+
+  It costs no build. The block reads the installed library and fingerprints a tree;
+  it does not compile. So it runs against a copy of the tree with `builddir` and
+  `pgc` set the way the controller sets them -- 24 MB at 31 ms a copy, against
+  minutes for a per-major build.
+
+  Measured by mutating `run_all_versions.sh` itself, dropping the third argument in a
+  way that still parses:
+
+      the controller's stamp carries BOTH fields          got [1] want [2]
+      a child reaches verified, not source-only           got [source-only] want [verified]
+      every caller records the installed library's digest got [2] want [3]
+
+  Three arms, on an edit a careless hand would make. The part also carries its own
+  control: it removes the argument from the extracted block and asserts the same
+  driver reaches `source-only`, so the two arms above cannot pass for a reason that
+  is about the driver rather than the controller.
+
+  The static sweep covers the other two call sites, `pgc_setup` and `devloop.sh`,
+  where driving either would cost a build. It joins line continuations first, because
+  all three calls are written across four lines and a per-line grep finds the
+  function name on a line carrying no arguments at all.
+
+  What it cannot see, which is worth stating: that the controller REACHES that line.
+  The `make install` guard above it could start failing closed and this part would
+  not notice. It asserts what the line does, not that control flow arrives there.
+
+  One of the arms reported `got []` when first written, because it read `$PG_CONFIG`
+  and no selftest part sets that -- the harness passes `PGC_SELFTEST_PG_CONFIG`.
+  Under `set -u` that aborted the command substitution the driver runs in. The input
+  is now asserted before use and the driver answers `driver-could-not-run` rather
+  than nothing, because an empty result reports the same emptiness for "the
+  controller is broken" and "this part misspelled a variable".
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added

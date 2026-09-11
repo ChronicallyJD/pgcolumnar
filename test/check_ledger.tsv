@@ -843,6 +843,17 @@ harness_selftest	450-a-red-nightly-must-be-findable	the reporter runs on every o
 harness_selftest	450-a-red-nightly-must-be-findable	the reporter waits on EVERY other nightly job (#973)	never	-
 harness_selftest	450-a-red-nightly-must-be-findable	the title carries no run number, so every red lands on one issue	never	-
 harness_selftest	450-a-red-nightly-must-be-findable	the verdict comes from the whole needs context, not a second list	never	-
+harness_selftest	460-the-controller-must-record-the-binary	control: and the stamp carries one field rather than two	never	-
+harness_selftest	460-the-controller-must-record-the-binary	control: without that argument the same driver degrades to source-only (#961)	never	-
+harness_selftest	460-the-controller-must-record-the-binary	every caller records the installed library's digest (#961)	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: all three stamp call sites were found with their arguments joined	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: and it holds exactly one stamp write	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: the controller's stamp block was extracted exactly once	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: the matrix controller is present and parses	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: the mutation removed the installed-digest argument	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: this part was given an executable pg_config to read the prefix from	never	-
+harness_selftest	460-the-controller-must-record-the-binary	so a child suite under PGC_SKIP_BUILD reaches verified, not source-only (#961)	never	-
+harness_selftest	460-the-controller-must-record-the-binary	the controller's stamp carries BOTH fields (#961)	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table answer equals filter-off	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table join order matches filter-off	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table plan has coordinator	never	-
