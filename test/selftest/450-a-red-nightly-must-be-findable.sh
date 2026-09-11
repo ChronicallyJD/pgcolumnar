@@ -136,10 +136,23 @@ check "and that marker reaches the job list the reporter prints" \
 # the issue open. A lag the other way misses a freshly-opened issue and opens a
 # duplicate -- the same failure by another route. The plain list reads the REST
 # collection, which is strongly consistent, and gh paginates past 100 itself.
+# COUNTED OVER CODE, NOT OVER THE FILE. `--search` appears FOUR times in this
+# script and zero times as a call -- the comments record why the obvious fix is
+# wrong, which is the most valuable kind of comment and also the kind that
+# satisfies a grep wanting the call (@OffgridwithJD, in the same file that taught
+# us both that). Counting `in:title` over the whole file happens to give 0 only
+# because the prose says `--search` and never says `in:title`. That is luck.
+_rn_code="$(mktemp)"
+grep -v '^[[:space:]]*#' "$_rn_sh" > "$_rn_code"
+# AND THE STRIP MUST NOT HAVE STRIPPED THE CODE. A grep over an emptied file
+# reports the same 0 as a grep that matched nothing.
+check "premise: removing comments left the lookup itself in place" \
+	"$(grep -c 'gh issue list --state open' "$_rn_code")" "1"
 check "the issue lookup reads past the first hundred open issues" \
-	"$(grep -c 'gh issue list --state open --limit 1000' "$_rn_sh")" "1"
-check "and does not use the eventually-consistent search index" \
-	"$(grep -c 'in:title' "$_rn_sh")" "0"
+	"$(grep -c 'gh issue list --state open --limit 1000' "$_rn_code")" "1"
+check "and no search-index query survives in the code" \
+	"$(grep -cE -- '--search|in:title' "$_rn_code")" "0"
+rm -f "$_rn_code"
 
 # It must run on failure AND on success, or the close path never happens.
 check "the reporter runs on every outcome, not only on failure" \
@@ -186,5 +199,5 @@ _rn_bare="$(PGC_NIGHTLY_REPORT_DRYRUN=1 bash "$_rn_sh" failure 2>&1)"
 check "a failure naming no job says so rather than printing an empty list" \
 	"$(printf '%s' "$_rn_bare" | grep -c 'No job name was reported')" "1"
 
-unset _rn_wf _rn_sh _rn_jobs _rn_n _rn_needs _rn_fail _rn_ok _rn_rc _rn_bare _rn_erc _rn_probe _rn_noise
+unset _rn_wf _rn_sh _rn_jobs _rn_n _rn_needs _rn_fail _rn_ok _rn_rc _rn_bare _rn_erc _rn_probe _rn_noise _rn_code
 unset -f _rn_v
