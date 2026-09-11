@@ -52,13 +52,13 @@ echo "PG_CONFIG=$PG_CONFIG"
 if [ -z "${PGC_SKIP_BUILD:-}" ]; then
 	echo "-- building"
 	make -C "$SRCDIR" PG_CONFIG="$PG_CONFIG" >/dev/null || {
-		echo "FAIL  build failed, so nothing below measures the guard"
-		PGC_CHECKS=$((PGC_CHECKS + 1)); PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1; pgc_summary
+		pgc_fail "build failed, so nothing below measures the guard"
+		pgc_summary
 	}
 	echo "-- installing"
 	make -C "$SRCDIR" install PG_CONFIG="$PG_CONFIG" >/dev/null || {
-		echo "FAIL  install failed, so nothing below measures the guard"
-		PGC_CHECKS=$((PGC_CHECKS + 1)); PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1; pgc_summary
+		pgc_fail "install failed, so nothing below measures the guard"
+		pgc_summary
 	}
 fi
 
@@ -89,7 +89,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if ! mod_is_valid "$MOD"; then
-	echo "SKIP  no valid module installed at $MOD, so there is no state to arrange"
+	check_skip "stash recovery" "SKIP  no valid module installed at $MOD, so there is no state to arrange" "no valid module installed at $MOD"
 	pgc_summary
 fi
 SAFE="$(mktemp /tmp/pgc-objstore-safe.XXXXXX)"

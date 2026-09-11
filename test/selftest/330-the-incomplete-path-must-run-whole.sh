@@ -92,26 +92,40 @@ check "control fixture: a suite whose checks all ran exits 0" \
 _e2e_txt_classify="$(sed -n '/^pgc_classify_suite_rc()/,/^}/p' "$_e2e_rv")"
 _e2e_txt_fails="$(sed -n '/^pgc_verdict_fails_major()/,/^}/p' "$_e2e_rv")"
 _e2e_txt_tally="$(sed -n '/^pgc_tally_suite()/,/^}/p' "$_e2e_rv")"
+# TWO MORE, because the collect loop grew two callers and this part did not follow.
+#
+# #917 added a records-versus-count reconciliation inside the loop, guarded by
+# pgc_log_shows_accounting. Neither was evalled here, and the guard is a COMMAND
+# SUBSTITUTION: an undefined function yields "", the branch never runs, and the
+# first absence hides the second. A real run printed `command not found` three
+# times and still reported PASSED, 608 checks, 0 failures.
+#
+# So the part claiming to run "the runner's OWN collect loop" was running a loop
+# whose reconciliation could not execute. Reported by OffgridwithJD.
+_e2e_txt_anyacct="$(sed -n '/^pgc_log_shows_accounting()/,/^}/p' "$_e2e_rv")"
+_e2e_txt_records="$(sed -n '/^pgc_reconcile_records()/,/^}/p' "$_e2e_rv")"
 
-check "premise: all three runner functions were extracted, not empty ranges" \
-	"$([ -n "$_e2e_txt_classify" ] && echo y || echo n)$([ -n "$_e2e_txt_fails" ] && echo y || echo n)$([ -n "$_e2e_txt_tally" ] && echo y || echo n)" \
-	"yyy"
+check "premise: all five runner functions were extracted, not empty ranges" \
+	"$([ -n "$_e2e_txt_classify" ] && echo y || echo n)$([ -n "$_e2e_txt_fails" ] && echo y || echo n)$([ -n "$_e2e_txt_tally" ] && echo y || echo n)$([ -n "$_e2e_txt_anyacct" ] && echo y || echo n)$([ -n "$_e2e_txt_records" ] && echo y || echo n)" \
+	"yyyyy"
 
 # A truncated extraction evals to a syntax error, not to nothing, so the closing
 # brace is asserted rather than assumed: the sed range stops at the first line
 # beginning with `}`, and a body containing one would yield a fragment.
 check "premise: and each extraction ends at its own closing brace" \
-	"$(printf '%s\n%s\n%s\n' "$_e2e_txt_classify" "$_e2e_txt_fails" "$_e2e_txt_tally" | grep -c '^}$')" \
-	"3"
+	"$(printf '%s\n%s\n%s\n%s\n%s\n' "$_e2e_txt_classify" "$_e2e_txt_fails" "$_e2e_txt_tally" \
+		"$_e2e_txt_anyacct" "$_e2e_txt_records" | grep -c '^}$')" \
+	"5"
 
 eval "$_e2e_txt_classify"
 eval "$_e2e_txt_fails"
 eval "$_e2e_txt_tally"
+eval "$_e2e_txt_anyacct"
+eval "$_e2e_txt_records"
 
-check "premise: and all three are callable" \
-	"$(type -t pgc_classify_suite_rc)/$(type -t pgc_verdict_fails_major)/$(type -t pgc_tally_suite)" \
-	"function/function/function"
-
+check "premise: and all five are callable" \
+	"$(type -t pgc_classify_suite_rc)/$(type -t pgc_verdict_fails_major)/$(type -t pgc_tally_suite)/$(type -t pgc_log_shows_accounting)/$(type -t pgc_reconcile_records)" \
+	"function/function/function/function/function"
 check "the runner classifies the file that suite actually produced" \
 	"$(pgc_classify_suite_rc "$(cat "$_e2e_dir/e2e_incomplete.rc")" "$_e2e_dir/e2e_incomplete.log")" \
 	"INCOMPLETE"
@@ -164,6 +178,22 @@ check "and reprints the suite's own UNRUN line beneath it" \
 # else.
 
 _e2e_txt_loop="$(awk '/^\tsuites_incomplete=/{f=1} f{print} f&&/^\tdone$/{exit}' "$_e2e_rv")"
+
+# AND NOTHING THE LOOP CALLS MAY BE MISSING. The premise above names five because
+# five is what the loop calls today; a sixth caller added later would reproduce
+# exactly the failure this fixes, silently. So the loop's own text is swept for
+# the functions it invokes, and every one must be defined here.
+_e2e_loop_calls="$(printf '%s\n' "$_e2e_txt_loop" | grep -oE '(^|[^_[:alnum:]])pgc_[a-z_]+' \
+	| grep -oE 'pgc_[a-z_]+' | sort -u)"
+_e2e_undef=0
+while IFS= read -r _e2e_fn; do
+	[ -n "$_e2e_fn" ] || continue
+	[ "$(type -t "$_e2e_fn" 2>/dev/null)" = function ] || {
+		_e2e_undef=$((_e2e_undef + 1)); echo "    the collect loop calls $_e2e_fn, which this part never evalled"; }
+done <<<"$_e2e_loop_calls"
+check "premise: the sweep found the loop's callers to check" \
+	"$([ "$(printf '%s' "$_e2e_loop_calls" | grep -c .)" -ge 3 ] && echo yes || echo no)" "yes"
+check "every function the collect loop calls is defined here" "$_e2e_undef" "0"
 
 check "premise: the runner's collect loop was extracted, not an empty range" \
 	"$([ -n "$_e2e_txt_loop" ] && echo yes || echo no)" "yes"

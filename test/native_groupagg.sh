@@ -263,7 +263,7 @@ if [ "$(q "SELECT 1 FROM pg_collation WHERE collname = 'ci'")" = "1" ]; then
 		"$(q "SELECT count(*) FROM (SELECT k FROM t_ci GROUP BY k) s")" \
 		"$(q "SELECT count(DISTINCT lower(k)) FROM t_ci")"
 else
-	echo "SKIP  non-deterministic collation (ICU unavailable)"
+	check_skip "the non-deterministic collation case" "SKIP  non-deterministic collation (ICU unavailable)" "ICU unavailable"
 fi
 
 # an output expression built on a group key (not a bare key) -> falls back

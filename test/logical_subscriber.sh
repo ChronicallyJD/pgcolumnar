@@ -50,7 +50,7 @@ pick_port() {
 }
 SUB_PORT="$(pick_port)"
 if [ "$SUB_PORT" = 0 ]; then
-	echo "SKIP  no free port for the subscriber cluster"
+	check_skip "the logical subscriber round trip" "SKIP  no free port for the subscriber cluster" "no free port for the subscriber cluster"
 	pgc_summary; exit 0
 fi
 

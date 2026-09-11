@@ -208,7 +208,7 @@ if phys != {"i32": "INT32", "i64": "INT64"}:
     sys.exit("unexpected physical types: %s" % phys)
 PYINT
 	if [ $? -ne 0 ]; then
-		echo "SKIP  this pyarrow does not store decimals as integers as expected"
+		check_skip "the integer-backed decimal case" "SKIP  this pyarrow does not store decimals as integers as expected" "this pyarrow does not store decimals as integers"
 	else
 		check "INT32-backed DECIMAL reads" \
 			"$(q "SELECT string_agg(d::text, ',' ORDER BY d) FROM pgcolumnar.read_parquet('$W/dec_i32.parquet') AS t(d numeric);")" \
@@ -231,7 +231,7 @@ PYINT
 			"-3500000,0,1250000"
 	fi
 else
-	echo "SKIP  pyarrow not available; foreign-producer FLBA cases skipped"
+	check_skip "the foreign-producer FLBA cases" "SKIP  pyarrow not available; foreign-producer FLBA cases skipped" "pyarrow not available"
 fi
 
 pgc_summary

@@ -172,7 +172,7 @@ if mkfifo "$DIR/pipe.parquet" 2>/dev/null; then
 	check "FIFO named *.parquet is skipped, does not block" "$fifo_out" "3000"
 	rm -f "$DIR/pipe.parquet"
 else
-	echo "SKIP  mkfifo unavailable; FIFO case not exercised"
+	check_skip "the FIFO case" "SKIP  mkfifo unavailable; FIFO case not exercised" "mkfifo unavailable"
 fi
 
 # ---- recursive walk --------------------------------------------------------

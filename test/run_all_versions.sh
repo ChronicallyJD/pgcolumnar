@@ -933,11 +933,85 @@ pgc_log_shows_accounting() {	# pgc_log_shows_accounting LOGFILE -> yes|no
 	# of thing that reads as an oversight later.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
-	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log"; then
+	if grep -qE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+$' "$_log"; then
 		echo yes
 	else
 		echo no
 	fi
+}
+
+pgc_reconcile_records() {	# pgc_reconcile_records LOGFILE -> 0 ok, 1 mismatch
+	# A suite's log states `checks run: N` and carries N record lines. They are
+	# the same increment seen twice -- pgc_record does both -- so this cannot
+	# fail by drifting. It CAN fail, which is why it is asserted: a suite killed
+	# mid-way, a truncated log, or a helper that prints an outcome without
+	# recording it all separate the two.
+	#
+	# A log with no `checks run:` line at all never reached its summary. That is a
+	# different fault from a miscount, and it must not read as a clean
+	# reconciliation just because there is nothing to compare against.
+	local _log="$1" _records _stated
+	if [ ! -f "$_log" ]; then
+		echo "    no log to reconcile records against: $_log"
+		return 1
+	fi
+	_records="$(grep -c '^RESULT	' "$_log" || true)"
+
+	# THE COUNT IS NOT THE SCHEMA, and counting alone let six malformed shapes
+	# reconcile cleanly: a record missing two fields, one carrying extra fields,
+	# a verdict outside the vocabulary, an empty check name, and every field
+	# empty. All measured returning 0 before this arm, against a well-formed
+	# control that also returned 0 -- so the function could not tell them apart.
+	# Reported by @linuxhikerpm on #917.
+	#
+	# ONE awk PASS, not a loop with a fork per record: a full matrix run carries
+	# thousands of these, and the emitter next door already paid for that lesson
+	# at 331x. The verdict list is the emitter's own, so the two cannot drift
+	# without this going red.
+	local _bad
+	_bad="$(awk -F'\t' '
+		/^RESULT	/ {
+			n++
+			if (NF != 6)                       { why[n] = "has " NF-1 " fields, want 5"; bad++; next }
+			if ($2 == "" || $3 == "" || $4 == "") { why[n] = "has an empty suite, part or name"; bad++; next }
+			if ($5 != "PASS" && $5 != "FAIL" && $5 != "UNRUN" && $5 != "SKIP") {
+				why[n] = "has verdict \"" $5 "\", which pgc_record cannot emit"; bad++; next
+			}
+		}
+		END {
+			if (bad) { for (i = 1; i <= n; i++) if (i in why) print "      record " i " " why[i] }
+			exit 0
+		}' "$_log")"
+	if [ -n "$_bad" ]; then
+		echo "    $_records record(s) present but at least one does not parse:"
+		printf '%s\n' "$_bad" | head -5
+		return 1
+	fi
+
+	_stated="$(sed -n 's/^checks run: \([0-9][0-9]*\)$/\1/p' "$_log" | tail -1)"
+	if [ -z "$_stated" ]; then
+		echo "    records=$_records but the log never stated a count, so it did not reach its summary"
+		return 1
+	fi
+	if [ "$_records" != "$_stated" ]; then
+		echo "    records=$_records but the log states checks run: $_stated"
+		# NAME THE CAUSE, not just the arithmetic. The two directions have
+		# different causes and a reader who has not met either has no route from
+		# a pair of numbers to the defect. Raised by OffgridwithJD.
+		if [ "$_records" -gt "$_stated" ]; then
+			echo "      $((_records - _stated)) check(s) reported an outcome the count never saw:"
+			echo "      a check ran in a subshell, so its counter bump died with it while its"
+			echo "      outcome and record still reached the log. The usual shape is a check"
+			# The example is ASSEMBLED, not written out: spelling the shape here
+			# made the sweep in selftest 400 flag this very line.
+			printf '      inside a piped loop -- `cmd %s while read x; do check ...; done`.\n' '|'
+		else
+			echo "      $((_stated - _records)) check(s) were counted without emitting a record:"
+			echo "      something bumped PGC_CHECKS without going through pgc_record."
+		fi
+		return 1
+	fi
+	return 0
 }
 
 pgc_log_shows_any_accounting() {	# pgc_log_shows_any_accounting LOGFILE -> yes|no
@@ -951,9 +1025,20 @@ pgc_log_shows_any_accounting() {	# pgc_log_shows_any_accounting LOGFILE -> yes|n
 	# Both are runtime-observable and derived rather than declared, so a suite
 	# that adopts either mechanism leaves the debt bucket on its own -- which is
 	# the property that keeps the debt file from becoming a permission slip.
+	# A HALF-MERGE WOULD BE CONFUSING RATHER THAN LOUD, and it is worth knowing
+	# which way. The `checks run:` alternative below answers YES to an accounting
+	# line of ANY shape, so it MASKS a change to that line: if the producer ever
+	# moved without this file, the population reconciliation would stay green
+	# while pgc_log_shows_accounting broke and the accounting reconciliation
+	# reddened. Two checks disagreeing about the same log is a worse signal than
+	# either failing.
+	#
+	# It cannot happen inside one tree -- producer and both readers move in the
+	# same commit -- so this is a note about what to look for, not a defect.
+	# Raised by OffgridwithJD while verifying the four-term shape change.
 	local _log="$1"
 	[ -f "$_log" ] || { echo no; return 0; }
-	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable = [0-9]+$' "$_log" || true)" -ne 0 ] \
+	if [ "$(grep -cE '^accounting: [0-9]+ passed \+ [0-9]+ failed \+ [0-9]+ unrunnable \+ [0-9]+ skipped = [0-9]+$' "$_log" || true)" -ne 0 ] \
 		|| [ "$(grep -cE '^checks run: [0-9]+$' "$_log" || true)" -ne 0 ]; then
 		echo yes
 	else
@@ -1192,11 +1277,25 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	# PG16 would report PG15's incomplete suites in its own summary line and
 	# still print PASS, because verfail is per major and this count was not.
 	suites_incomplete=0
+	_rec_bad=0
 	for s in "${SUITES[@]}"; do
 		_rc="$(cat "$builddir/${s}.rc" 2>/dev/null)"
 		_verdict="$(pgc_classify_suite_rc "$_rc" "$builddir/${s}.log")"
 		pgc_tally_suite "$s" "$_verdict" "$builddir/${s}.log"
+		# Only a suite that reached its summary has a count to reconcile against
+		# (#917). One that was never dispatched, or that does not use lib.sh's
+		# accounting at all, has nothing to compare and is not a mismatch.
+		if [ "$(pgc_log_shows_accounting "$builddir/${s}.log")" = yes ]; then
+			if ! pgc_reconcile_records "$builddir/${s}.log"; then
+				echo "    in $s"
+				_rec_bad=$((_rec_bad + 1))
+			fi
+		fi
 	done
+	if [ "$_rec_bad" != 0 ]; then
+		echo "  $_rec_bad suite(s) on PG$major state a check count their records do not match"
+		verfail=1
+	fi
 
 	# How many suites actually asserted something, said out loud (#447).
 	#

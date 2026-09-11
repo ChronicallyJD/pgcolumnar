@@ -111,10 +111,10 @@ def test_the_accounting_line_is_read_on_every_exit_path(tmp_path, expect):
     for PASSED: a suite that failed still reached its summary and still accounted.
     """
     shapes = {
-        "pass": "accounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n",
-        "fail": "accounting: 1 passed + 2 failed + 0 unrunnable = 3\nx.sh: FAILED\n",
-        "skip": "accounting: 0 passed + 0 failed + 0 unrunnable = 0\nx.sh: SKIPPED (ran no checks)\n",
-        "inc": "accounting: 2 passed + 0 failed + 1 unrunnable = 3\nx.sh: INCOMPLETE\n",
+        "pass": "accounting: 3 passed + 0 failed + 0 unrunnable + 0 skipped = 3\nx.sh: PASSED\n",
+        "fail": "accounting: 1 passed + 2 failed + 0 unrunnable + 0 skipped = 3\nx.sh: FAILED\n",
+        "skip": "accounting: 0 passed + 0 failed + 0 unrunnable + 0 skipped = 0\nx.sh: SKIPPED (ran no checks)\n",
+        "inc": "accounting: 2 passed + 0 failed + 1 unrunnable + 0 skipped = 3\nx.sh: INCOMPLETE\n",
     }
     for shape, text in shapes.items():
         log = _write(tmp_path, f"{shape}.log", text)
@@ -135,9 +135,9 @@ def test_the_accounting_line_is_read_on_every_exit_path(tmp_path, expect):
     # arm here green. Reported by OffgridwithJD. The distinguishing input is a
     # well-formed accounting line that does not start its line.
     indented = _write(tmp_path, "indented.log",
-                      "  accounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n")
+                      "  accounting: 3 passed + 0 failed + 0 unrunnable + 0 skipped = 3\nx.sh: PASSED\n")
     expect.num(pathlib.Path(indented).read_text()
-               .count("accounting: 3 passed + 0 failed + 0 unrunnable = 3"), 1,
+               .count("accounting: 3 passed + 0 failed + 0 unrunnable + 0 skipped = 3"), 1,
                "premise: the fixture carries a well-formed line, just indented")
     expect.text(_call("pgc_log_shows_accounting", indented)[0].strip(), "no",
                 "an accounting line that does not start its line is refused")
@@ -368,7 +368,7 @@ def test_the_accounted_reader_takes_either_runtime_mechanism(tmp_path, expect):
     that adopts either leaves the debt bucket on its own.
     """
     lib = _write(tmp_path, "lib.log",
-                 "accounting: 1 passed + 0 failed + 0 unrunnable = 1\nx.sh: PASSED\n")
+                 "accounting: 1 passed + 0 failed + 0 unrunnable + 0 skipped = 1\nx.sh: PASSED\n")
     own = _write(tmp_path, "own.log", "checks run: 9\ndocs_style.sh: PASSED\n")
     neither = _write(tmp_path, "none.log", "some output\nPASSED\n")
     expect.text(_call("pgc_log_shows_any_accounting", lib)[0].strip(), "yes",

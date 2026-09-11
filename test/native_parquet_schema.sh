@@ -133,7 +133,7 @@ PY
 		"$(q "SELECT count(*) FILTER (WHERE field_id IS NULL) || '/' || count(*) FROM pgcolumnar.parquet_schema('$REQ');")" \
 		"2/2"
 else
-	echo "SKIP  pyarrow not available; REQUIRED-column and field-id checks skipped"
+	check_skip "the REQUIRED-column and field-id checks" "SKIP  pyarrow not available; REQUIRED-column and field-id checks skipped" "pyarrow not available"
 fi
 
 pgc_summary

@@ -86,7 +86,7 @@ then
 else
 	rc=$?
 	if [ "$rc" = 3 ]; then
-		echo "SKIP: pyarrow not available for the reference-writer case"
+		check_skip "the reference-writer case" "SKIP: pyarrow not available for the reference-writer case" "pyarrow not available"
 	else
 		echo "FAIL: pyarrow nested file generation errored (rc=$rc)"
 		PGC_FAIL=1

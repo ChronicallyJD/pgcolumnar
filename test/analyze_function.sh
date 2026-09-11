@@ -63,13 +63,12 @@ ROWS=${PGC_ANALYZE_ROWS:-500000}
 # The major is asserted first. An unreadable version must not be mistaken for an
 # old one, or a broken environment would report SKIP and look supported.
 if ! pgc_is_number "${PGC_MAJOR:-}"; then
-	echo "FAIL  could not read the server major, so the gate below cannot be trusted: got [${PGC_MAJOR:-<none>}]"
-	PGC_CHECKS=$((PGC_CHECKS + 1)); PGC_FAILED=$((PGC_FAILED + 1))
-	PGC_FAIL=1
+	pgc_fail "could not read the server major, so the gate below cannot be trusted" \
+		"got [${PGC_MAJOR:-<none>}]"
 	pgc_summary
 fi
 if [ "$PGC_MAJOR" -lt 18 ]; then
-	echo "SKIP  pgcolumnar.analyze() needs pg_restore_attribute_stats (PG18+); this server is $PGC_MAJOR"
+	check_skip "pgcolumnar.analyze()" "SKIP  pgcolumnar.analyze() needs pg_restore_attribute_stats (PG18+); this server is $PGC_MAJOR" "needs pg_restore_attribute_stats, PG18+"
 	pgc_summary
 fi
 

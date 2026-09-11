@@ -209,8 +209,7 @@ this was first counted. The file is the stable unit, so each file below is named
 with the mechanism that makes it a reference -- which is also what has to change
 for it to stop being one.
 
-**The debt this starts with, on 2026-09-10: 3 python files and 7 shell files**,
-with a fourth python file arriving in PR #923.
+**The debt this starts with, on 2026-09-10: 3 python files and 7 shell files.**
 
 Python that reaches into shell:
 
@@ -222,8 +221,6 @@ Python that reaches into shell:
 - `test_suite_accounting.py` -- reads `run_all_versions.sh`'s text, sources the
   real `lib.sh` from a suite it writes, and executes the real runner.
 - `pgc_cluster.py` -- sources the real `test/lib.sh`.
-- `test_check_results_are_machine_readable.py` -- sources `./lib.sh`. Arrives
-  with PR #923; not on `main` yet.
 
 Shell whose subject is python: `lib.sh`, and `selftest/030`, `040`, `350`, `360`,
 `370`, `380`.

@@ -93,8 +93,7 @@ agree_in() {	# agree_in TABLE LABEL "SELECT ... FROM %T ..."
 	# md5 of empty input is a fixed string, so require the columnar arm produced
 	# rows at all before trusting the comparison.
 	if [ -z "$(q "${tmpl//%T/$tbl}" | head -1)" ]; then
-		PGC_CHECKS=$((PGC_CHECKS + 1)); PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1
-		echo "FAIL  $label: the columnar arm returned no rows, so nothing was compared"
+		pgc_fail "$label" "the columnar arm returned no rows, so nothing was compared"
 		return 1
 	fi
 	check_text "$label" "$col" "$heap"
@@ -177,7 +176,7 @@ for pair in "text key:$Q_TEXTKEY" "expression key:$Q_EXPRKEY" \
 	else
 		# The node itself declined the shape; there is no fold line to read and
 		# nothing for this suite to gate. Say so rather than assert a missing line.
-		echo "SKIP  $label: the grouped node is not planned for this shape"
+		check_skip "$label" "SKIP  $label: the grouped node is not planned for this shape" "the grouped node is not planned for this shape"
 	fi
 	agree "$label: answers match the heap mirror" "$tmpl"
 done

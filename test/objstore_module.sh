@@ -70,10 +70,8 @@ for stash in "$MOD.away" "$MOD.probe"; do
 	# every check below would run against a broken installation and report the
 	# confusing half of the truth, so stop here and say which file to look at.
 	if ! stash_is_debris; then
-		echo "FAIL  restored $stash to $MOD, but that is not a module either."
-		echo "      This installation needs 'make install' before the suite can run."
-		PGC_CHECKS=$((PGC_CHECKS + 1)); PGC_FAILED=$((PGC_FAILED + 1))
-		PGC_FAIL=1
+		pgc_fail "restored $stash to $MOD, but that is not a module either" \
+			"this installation needs 'make install' before the suite can run"
 		pgc_summary
 		exit 1
 	fi
@@ -174,7 +172,7 @@ objstore_teardown() { restore_module; pgc_teardown; }
 trap objstore_teardown EXIT INT TERM
 
 if ! mv "$MOD" "$MOD.probe" 2>/dev/null; then
-	echo "SKIP  cannot move $MOD, so the absent and broken paths are untested here"
+	check_skip "the absent and broken module paths" "SKIP  cannot move $MOD, so the absent and broken paths are untested here" "cannot move $MOD"
 	pgc_summary
 	exit 0
 fi

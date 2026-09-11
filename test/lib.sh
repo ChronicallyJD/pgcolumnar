@@ -28,7 +28,17 @@
 # failure and continue.
 
 PGC_FAIL=0
+# The suite's own name, resolved ONCE at load rather than per check: pgc_record
+# runs at every one of 3,762 call sites, and a basename fork at each of them is
+# 3,762 forks a suite does not need.
+PGC_SUITE="$(basename "$0" .sh)"
 PGC_CHECKS=0
+# A FOURTH OUTCOME. A check deliberately not asked -- a wall-clock measurement on
+# a shared runner under PGC_SKIP_TIMING -- is not a pass, not a failure, and not
+# unrunnable. It is counted, so `checks run:` reports the checks a suite
+# ENCOUNTERED rather than the ones it managed to evaluate, and pgc_summary
+# reconciles four counters against that count instead of three.
+PGC_SKIPPED=0
 
 # The status pgc_summary uses for "ran no checks".
 #
@@ -969,17 +979,113 @@ psql_file() {
 # only supported way to add a check from outside this file, and selftest part 320
 # sweeps for direct PGC_CHECKS writes so the next expect_fail is caught when it
 # is written rather than when it reddens something.
-pgc_pass() {	# pgc_pass NAME
+# ---- one place that counts a check, and it is the same place that records it -
+#
+# lib.sh had ELEVEN sites bumping PGC_CHECKS, each with its own outcome line
+# beside it. That is eleven chances to add a twelfth and forget the line, which
+# is exactly what projections.sh's expect_fail did with ten call sites for as
+# long as it existed.
+#
+# Counting and recording are therefore ONE operation. A helper cannot report an
+# outcome without being counted, and cannot be counted without reporting one,
+# because there is no code path that does either alone. `checks run: N` and the
+# N record lines are the same increment seen twice.
+#
+# DISPLAY is passed whole rather than composed here, so every existing human line
+# stays byte-identical: suites, selftests and CI all grep `^PASS` and `^FAIL`,
+# and 3,762 call sites is far past what a careful refactor can be trusted on.
+#
+# The record is tab separated, five columns after the RESULT marker:
+#
+#     RESULT <TAB> suite <TAB> part <TAB> name <TAB> verdict <TAB> reason
+#
+# so a check name containing spaces survives. The reason carries the REASON_CODE
+# #915 introduced, which is what makes this more than a reformat: an unrunnable
+# check is distinguishable from a passing one without parsing prose. The verdict
+# is one of PASS, FAIL, UNRUN or SKIP.
+#
+# There is no mutation column here. That one belongs to the LEDGER (#918), which
+# keys on (suite, part, name) and records which mutation reddened a check; a
+# record is one observation, not a history.
+pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
+	local _v="$1" _name="$2" _display="$3" _reason="${4:-}"
 	PGC_CHECKS=$((PGC_CHECKS + 1))
-	PGC_PASSED=$((PGC_PASSED + 1))
-	echo "PASS  $1"
+	case "$_v" in
+		PASS)  PGC_PASSED=$((PGC_PASSED + 1)) ;;
+		FAIL)  PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1 ;;
+		UNRUN) PGC_UNRUN=$((PGC_UNRUN + 1)) ;;
+		SKIP)  PGC_SKIPPED=$((PGC_SKIPPED + 1)) ;;
+		*)
+			# An unknown verdict is a failure of the harness, not a check to
+			# drop. Dropping it would leave PGC_CHECKS bumped with no outcome
+			# recorded, which is the reconciliation failure pgc_summary refuses.
+			PGC_FAILED=$((PGC_FAILED + 1)); PGC_FAIL=1
+			_display="FAIL  $_name: pgc_record was given the verdict [$_v], which is not PASS, FAIL, UNRUN or SKIP"
+			_v=FAIL
+			;;
+	esac
+	# WHICH PART asked this question, derived from the call stack.
+	#
+	# The suite is not enough. harness_selftest sources 40-odd parts into one
+	# shell, and its premises are phrased to be COPIED -- "premise: the pytest
+	# layer is where THIS PART thinks it is" says "this part" precisely so the
+	# same sentence works in any of them. main carries two copies of that one and
+	# two of another, and the number grows with every part anyone adds.
+	#
+	# So a key of (suite, name) is not a key of checks, it is a key of check
+	# NAMES, and they differ by however many parts share a boilerplate premise.
+	# One of them going red would then mark every sharer as observed red -- a
+	# claim about a check nothing attacked. Found by OffgridwithJD, who noticed
+	# that all six of their own branches added more.
+	#
+	# BASH_SOURCE, not a convention change, so the next part written the same way
+	# is keyed correctly without anyone remembering. Parameter expansion only: no
+	# basename fork, at 3,762 call sites.
+	local _part="" _bs
+	for _bs in "${BASH_SOURCE[@]}"; do
+		case "$_bs" in */lib.sh|lib.sh) continue ;; esac
+		_part="${_bs##*/}"; _part="${_part%.sh}"
+		break
+	done
+
+	printf '%s\n' "$_display"
+	# Tabs in a field would split it, and a NEWLINE splits the whole record just
+	# as completely -- it ends the line, so what follows becomes a second line the
+	# reader cannot key. Nothing in the tree puts either in a check name, and this
+	# makes that true rather than assumed. The tab was stripped here from the
+	# first version; the newline was not, which @linuxhikerpm named on #917: the
+	# reason already written for the tab is the reason for both. Measured before
+	# the fix, a newline in the name gave a record of 4 fields plus two stray
+	# lines; after it, 6 fields and one line.
+	#
+	# PARAMETER EXPANSION, not `printf | tr` in a command substitution. The first
+	# version paid four forks per record -- two subshells and two tr processes --
+	# in the function that runs at every one of 3,762 check sites, and whose own
+	# comment hoists PGC_SUITE out of the body on exactly that ground. Measured on
+	# an idle box, 2,000 calls, identical output on every input including a real
+	# tab: 3.1577 ms per call against 0.0096 ms, 331x, or 11.9 seconds of pure
+	# fork overhead across a full suite against 36 ms. Reported by OffgridwithJD.
+	local _nl_name="${_name//$'\t'/ }" _nl_reason="${_reason//$'\t'/ }"
+	_nl_name="${_nl_name//$'\n'/ }"; _nl_reason="${_nl_reason//$'\n'/ }"
+	_nl_name="${_nl_name//$'\r'/ }"; _nl_reason="${_nl_reason//$'\r'/ }"
+	printf 'RESULT\t%s\t%s\t%s\t%s\t%s\n' \
+		"${PGC_SUITE:-unknown}" \
+		"${_part:-${PGC_SUITE:-unknown}}" \
+		"${_nl_name}" \
+		"$_v" \
+		"${_nl_reason}"
+}
+
+pgc_pass() {	# pgc_pass NAME
+	pgc_record PASS "$1" "PASS  $1"
 }
 
 pgc_fail() {	# pgc_fail NAME DETAIL
-	PGC_CHECKS=$((PGC_CHECKS + 1))
-	PGC_FAILED=$((PGC_FAILED + 1))
-	PGC_FAIL=1
-	if [ -n "${2:-}" ]; then echo "FAIL  $1: $2"; else echo "FAIL  $1"; fi
+	if [ -n "${2:-}" ]; then
+		pgc_record FAIL "$1" "FAIL  $1: $2"
+	else
+		pgc_record FAIL "$1" "FAIL  $1"
+	fi
 }
 
 # A check that could not be evaluated is a third state, not a pass.
@@ -998,30 +1104,23 @@ pgc_fail() {	# pgc_fail NAME DETAIL
 # FAILED, because the failure is the more urgent fact.
 check_unrunnable() {	# check_unrunnable NAME REASON_CODE DETAIL
 	local name="$1" reason="${2:-}" detail="${3:-}"
-	PGC_CHECKS=$((PGC_CHECKS + 1))
 	case " $PGC_UNRUN_REASONS " in
 		*" $reason "*) ;;
 		*)
-			echo "FAIL  $name: unrunnable reason [$reason] is not one of: $PGC_UNRUN_REASONS"
-			PGC_FAIL=1
-			PGC_FAILED=$((PGC_FAILED + 1))
+			pgc_record FAIL "$name" \
+				"FAIL  $name: unrunnable reason [$reason] is not one of: $PGC_UNRUN_REASONS"
 			return
 			;;
 	esac
-	PGC_UNRUN=$((PGC_UNRUN + 1))
-	echo "UNRUN  $name: $reason: $detail"
+	pgc_record UNRUN "$name" "UNRUN  $name: $reason: $detail" "$reason"
 }
 
 check() {
 	local name="$1" got="$2" want="$3"
-	PGC_CHECKS=$((PGC_CHECKS + 1))
 	if [ "$got" = "$want" ]; then
-		PGC_PASSED=$((PGC_PASSED + 1))
-		echo "PASS  $name"
+		pgc_record PASS "$name" "PASS  $name"
 	else
-		echo "FAIL  $name: got [$got] want [$want]"
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
+		pgc_record FAIL "$name" "FAIL  $name: got [$got] want [$want]"
 	fi
 }
 
@@ -1071,11 +1170,8 @@ pgc_is_number() {	# $1 -> 0 when $1 is a number
 check_text() {
 	local name="$1" got="$2" want="$3"
 	if [ -z "$got" ] || [ -z "$want" ]; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: a side is empty, so nothing was compared:" \
-			"got [$got] want [$want]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: a side is empty, so nothing was compared: got [$got] want [$want]"
 		return 1
 	fi
 	check "$name" "$got" "$want"
@@ -1085,11 +1181,8 @@ check_text() {
 check_num() {
 	local name="$1" got="$2" want="$3"
 	if ! pgc_is_number "$got" || ! pgc_is_number "$want"; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: not a measurement, so nothing was compared:" \
-			"got [$got] want [$want]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: not a measurement, so nothing was compared: got [$got] want [$want]"
 		return 1
 	fi
 	check "$name" "$got" "$want"
@@ -1121,30 +1214,20 @@ check_ratio() {	# $1 label, $2 a, $3 b, $4 max
 	local name="$1" a="$2" b="$3" max="$4" ratio
 
 	if ! pgc_is_number "$a" || ! pgc_is_number "$b" || ! pgc_is_number "$max"; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: not a measurement, so no ratio was formed:" \
-			"a=[$a] b=[$b] max=[$max]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: not a measurement, so no ratio was formed: a=[$a] b=[$b] max=[$max]"
 		return 1
 	fi
 	if [ "$(awk -v x="$a" -v y="$b" 'BEGIN { print (x + 0 == 0 || y + 0 == 0) ? "yes" : "no" }')" = yes ]; then
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
-		echo "FAIL  $name: a side of the ratio is zero, so nothing was measured:" \
-			"a=[$a] b=[$b]"
+		pgc_record FAIL "$name" \
+			"FAIL  $name: a side of the ratio is zero, so nothing was measured: a=[$a] b=[$b]"
 		return 1
 	fi
 	ratio="$(awk -v a="$a" -v b="$b" 'BEGIN { printf "%.2f", a / b }')"
-	PGC_CHECKS=$((PGC_CHECKS + 1))
 	if [ "$(awk -v r="$ratio" -v m="$max" 'BEGIN { print (r <= m) ? "yes" : "no" }')" = yes ]; then
-		PGC_PASSED=$((PGC_PASSED + 1))
-		echo "PASS  $name (${ratio}x, bound ${max}x, from a=$a b=$b)"
+		pgc_record PASS "$name" "PASS  $name (${ratio}x, bound ${max}x, from a=$a b=$b)"
 	else
-		echo "FAIL  $name: ${ratio}x exceeds the ${max}x bound (a=$a b=$b)"
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
+		pgc_record FAIL "$name" "FAIL  $name: ${ratio}x exceeds the ${max}x bound (a=$a b=$b)"
 	fi
 }
 
@@ -1157,10 +1240,8 @@ pgc_require_tools() {
 		command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
 	done
 	if [ -n "$missing" ]; then
-		echo "FAIL  the tools this suite measures with are missing:$missing"
-		PGC_CHECKS=$((PGC_CHECKS + 1))
-		PGC_FAIL=1
-		PGC_FAILED=$((PGC_FAILED + 1))
+		pgc_record FAIL "the tools this suite measures with are missing" \
+			"FAIL  the tools this suite measures with are missing:$missing"
 		return 1
 	fi
 	return 0
@@ -1181,11 +1262,36 @@ pgc_require_tools() {
 # So the ratio is skipped and the rest of the suite runs. A skip is announced
 # rather than silent, and it is not counted as a pass, because a count that
 # includes checks nobody ran is the thing this project keeps having to unlearn.
+# A named check that could not run HERE, for a reason the suite knows.
+#
+# WHY THIS EXISTS. `echo "SKIP  ..."` printed a line a reader sees and left
+# PGC_CHECKS alone, so the outcome existed for a human and for nobody else: no
+# record, no count, and nothing for `pgc_reconcile_records` to reconcile. The
+# tree's own comment at native_index_projection.sh said why that mattered -- "the
+# skip must be visible: a check that reports nothing is indistinguishable from a
+# check that passes" -- and that was TRUE while the human line WAS the record. It
+# stopped being true when the RESULT stream became the machine-readable one, and
+# 22 sites were left behind on the wrong side of the change. Named by
+# @linuxhikerpm on #917; the owner asked for every site, not the three examples.
+#
+# DISPLAY IS PASSED WHOLE, exactly as pgc_record takes it, so every existing
+# human line stays byte-identical. These messages are individually worded and a
+# reader greps them; recomposing them here would change what people see for no
+# gain, which is the same reason pgc_record does not compose PASS lines either.
+check_skip() {	# check_skip NAME DISPLAY [REASON]
+	pgc_record SKIP "$1" "$2" "${3:-}"
+}
+
 check_timing() {
 	local name="$1" got="$2" want="$3"
 
 	if [ "${PGC_SKIP_TIMING:-0}" = 1 ]; then
-		echo "SKIP  $name (PGC_SKIP_TIMING: wall-clock measurement)"
+		# Counted and recorded, like every other outcome. It printed a line a
+		# reader sees; leaving PGC_CHECKS at zero made that outcome invisible to
+		# the count and to the records both (#917, found by @linuxhikerpm).
+		pgc_record SKIP "$name" \
+			"SKIP  $name (PGC_SKIP_TIMING: wall-clock measurement)" \
+			"PGC_SKIP_TIMING"
 		return 0
 	fi
 	check "$name" "$got" "$want"
@@ -1227,7 +1333,9 @@ check_timing() {
 # same-run ratio) and nothing said it here, where it is decided (#787).
 check_ratio_needs_quiet_machine() {  # <name> <a> <b> <bound>
 	if [ "${PGC_SKIP_TIMING:-0}" = 1 ]; then
-		echo "SKIP  $1 (PGC_SKIP_TIMING: wall-clock ratio)"
+		pgc_record SKIP "$1" \
+			"SKIP  $1 (PGC_SKIP_TIMING: wall-clock ratio)" \
+			"PGC_SKIP_TIMING"
 		return 0
 	fi
 	check_ratio "$@"
@@ -1476,13 +1584,15 @@ pgc_skip() {  # pgc_skip <capability> <message>
 	cap="$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')"
 	allow_one="PGC_ALLOW_MISSING_$cap"
 	if [ "${PGC_ALLOW_MISSING:-0}" = 1 ] || [ "${!allow_one:-0}" = 1 ]; then
-		echo "SKIP  $2 (waived by $allow_one or PGC_ALLOW_MISSING)"
+		# The unwaived branch below records a FAIL. This one printed and left
+		# PGC_CHECKS at zero, so waiving a dependency also erased the outcome --
+		# the same asymmetry check_timing had, in the function whose whole
+		# subject is "a missing dependency is not a pass".
+		check_skip "$2" "SKIP  $2 (waived by $allow_one or PGC_ALLOW_MISSING)" \
+			"waived by $allow_one or PGC_ALLOW_MISSING"
 		pgc_summary
 	fi
-	PGC_CHECKS=$((PGC_CHECKS + 1))
-	PGC_FAIL=1
-	PGC_FAILED=$((PGC_FAILED + 1))
-	echo "FAIL  $2"
+	pgc_record FAIL "$2" "FAIL  $2"
 	echo "      A missing dependency is an environment defect, not a pass. Install"
 	echo "      it, or set $allow_one=1 to run knowingly without this coverage."
 	pgc_summary
@@ -1507,7 +1617,7 @@ pgc_skip() {  # pgc_skip <capability> <message>
 # did one level up for how many VERSIONS actually ran.
 pgc_summary() {
 	local _failed=$PGC_FAILED
-	local _sum=$((PGC_PASSED + PGC_FAILED + PGC_UNRUN))
+	local _sum=$((PGC_PASSED + PGC_FAILED + PGC_UNRUN + PGC_SKIPPED))
 	echo
 	echo "checks run: $PGC_CHECKS"
 	echo "checks unrunnable: $PGC_UNRUN"
@@ -1515,7 +1625,7 @@ pgc_summary() {
 	# go missing, and this harness has 3,762 check sites -- far past what anyone
 	# notices by reading. If this line does not add up the harness is lying about
 	# its own arithmetic, so it is a failure rather than a note.
-	echo "accounting: $PGC_PASSED passed + $_failed failed + $PGC_UNRUN unrunnable = $PGC_CHECKS"
+	echo "accounting: $PGC_PASSED passed + $_failed failed + $PGC_UNRUN unrunnable + $PGC_SKIPPED skipped = $PGC_CHECKS"
 	# A MEASUREMENT, not an identity. The failed count is its own counter rather
 	# than CHECKS - PASSED - UNRUN, because a derived third term makes
 	# P + (N-P-U) + U = N true for ANY values: a helper that counts a check and
@@ -1525,9 +1635,9 @@ pgc_summary() {
 	# line could not see it. Three counters maintained independently, reconciled
 	# against a fourth, is the only version of it that can fail.
 	if [ "$_sum" != "$PGC_CHECKS" ]; then
-		echo "FAIL  the summary does not reconcile: $PGC_PASSED passed + $PGC_FAILED failed + $PGC_UNRUN unrunnable = $_sum, but $PGC_CHECKS checks ran"
+		echo "FAIL  the summary does not reconcile: $PGC_PASSED passed + $PGC_FAILED failed + $PGC_UNRUN unrunnable + $PGC_SKIPPED skipped = $_sum, but $PGC_CHECKS checks ran"
 		echo "      A check was counted whose outcome nothing recorded. Find the helper"
-		echo "      that bumps PGC_CHECKS without touching PGC_PASSED, PGC_FAILED or PGC_UNRUN."
+		echo "      that bumps PGC_CHECKS without touching PGC_PASSED, PGC_FAILED, PGC_UNRUN or PGC_SKIPPED."
 		PGC_FAIL=1
 	fi
 	if [ "$PGC_FAIL" != "0" ]; then
@@ -1563,7 +1673,11 @@ pgc_summary() {
 		fi
 		exit 1
 	fi
-	if [ "$PGC_CHECKS" = "0" ]; then
+	# EVALUATED nothing, not ENCOUNTERED nothing. Before the fourth counter a
+	# skipped check left PGC_CHECKS at zero, so this branch caught the all-skipped
+	# suite by accident; now it is counted, and the suite would report PASSED with
+	# nothing behind it. The condition is what it always meant.
+	if [ "$((PGC_PASSED + PGC_FAILED + PGC_UNRUN))" = "0" ]; then
 		echo "$(basename "$0"): SKIPPED (ran no checks)"
 		exit $PGC_EXIT_SKIPPED
 	fi
