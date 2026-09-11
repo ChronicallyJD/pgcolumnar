@@ -314,10 +314,30 @@ class Expect:
 
         Called BEFORE the comparison, at every site, because that is where the
         call site knows the assertion ran. The verdict is not passed in: passing it
-        would need the outcome, which would split this back into two steps. It is
-        resolved from the exception in `pytest_runtest_call` instead -- assertions
-        in a body are sequential and a raise ends the test, so a failed test's
-        failing assertion is the LAST record and every earlier one passed.
+        would need the outcome, which would split this back into two steps.
+
+        SO EVERY RECORD IS `PASS` UNTIL A LATER PHASE SETS IT, AND THAT PHASE
+        CANNOT RESOLVE IT FROM THE EXCEPTION. The first version of this comment
+        argued it could: assertions in a body are sequential and a raise ends the
+        test, so the failing assertion would be the last record. **That is false
+        here, and the corpus is what makes it false** -- proving a guard refuses
+        means catching the AssertionError, which five tests do
+        (test_ordered.py:243, test_failed_query_sentinel.py:236, :326, :357, :382).
+        Driven on this branch:
+
+            count before/mid/after: 0 / 1 / 2
+              record 0  'this comparison must fail'   verdict PASS   <- this RAISED
+              record 1  'and the test continues'      verdict PASS
+            1 passed
+
+        A genuinely failed assertion stays PASS, in a passing test, and nothing
+        reaches `pytest_runtest_call` to correct it. Found by @OffgridwithJD
+        attacking the argument rather than the code.
+
+        The verdict therefore has to be set on the comparison's own path, where
+        the outcome is known and no propagation is needed. That stays one
+        operation; it is phase 2's work and is not claimed here. What IS claimed
+        here is the count, which the probe above shows is 2 and correct.
         """
         self._records.append(_Record(name, verdict, reason))
 
