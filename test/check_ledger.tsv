@@ -813,6 +813,36 @@ harness_selftest	440-a-count-grep-never-produced	premise: nor is one inside a ge
 harness_selftest	440-a-count-grep-never-produced	premise: the sweep has a corpus to read	never	-
 harness_selftest	440-a-count-grep-never-produced	premise: while a numeric comparison is not an offence	never	-
 harness_selftest	440-a-count-grep-never-produced	premise: while a valid pattern prints a number	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	a cancelled gate is a red verdict, not a shrug	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	a failure names the run so a reader can reach it	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	a failure naming no job says so rather than printing an empty list	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	a fire drill identifies itself in the issue it opens	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	a gate nobody listed here still decides the verdict (#973)	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	a green run composes the closing message, so the alert clears itself	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	all skipped is green, which is a fork run and a fire drill	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	an empty needs context is refused, not defaulted to green	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	an unparseable context says so without a traceback	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	an unrecognised result is refused rather than treated as green	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	an unrecognised verdict is refused rather than treated as green	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	and it is granted issues: write, which the workflow default withholds	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	and it still says what went wrong, rather than saying nothing	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	and names the job that failed, not just that something did	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	and no per-job result variable survives to drift from the context	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	and no search-index query survives in the code	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	and that marker reaches the job list the reporter prints	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	and the green path reuses the same title, or it would close nothing	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	every gate green is a green verdict	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	one gate failing is a red verdict	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	premise: removing comments left the lookup itself in place	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	premise: the nightly workflow and the reporter are both present	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	premise: the other nightly jobs were parsed, so the comparison is real	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	premise: the per-job-variable pattern sees that shape when it is present	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	premise: the reporter's needs list was parsed	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	the issue lookup reads past the first hundred open issues	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	the reporter runs on every outcome, not only on failure	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	the reporter waits on EVERY other nightly job (#973)	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	the title carries no run number, so every red lands on one issue	never	-
+harness_selftest	450-a-red-nightly-must-be-findable	the verdict comes from the whole needs context, not a second list	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table answer equals filter-off	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table join order matches filter-off	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table plan has coordinator	never	-
