@@ -53,7 +53,7 @@ if not isinstance(d, dict) or not d:
     sys.exit(3)
 for v in d.values():
     print((v or {}).get("result", "missing"))
-')" || return 3
+' 2>/dev/null)" || return 3
 	[ -n "$results" ] || return 3
 	for r in $results; do
 		case "$r" in

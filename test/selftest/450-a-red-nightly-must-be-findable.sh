@@ -105,6 +105,26 @@ PGC_NIGHTLY_REPORT_DRYRUN=1 bash "$_rn_sh" --from-needs '{}' >/dev/null 2>&1 && 
 check "an empty needs context is refused, not defaulted to green" \
 	"$_rn_erc" "3"
 
+# A REFUSAL MUST READ AS A REFUSAL, NOT AS A CRASH. The parse dumped a Python
+# traceback before the script's own message (@OffgridwithJD). Behaviour was right
+# -- rc 3, never green -- but in a CI log a traceback sends the reader after a bug
+# in the reporter instead of after the job list changing shape, and this
+# mechanism's whole value is that a reader can tell at a glance what happened.
+_rn_noise="$(PGC_NIGHTLY_REPORT_DRYRUN=1 bash "$_rn_sh" --from-needs 'not json' 2>&1 || true)"
+check "an unparseable context says so without a traceback" \
+	"$(printf '%s' "$_rn_noise" | grep -c 'Traceback\|JSONDecodeError')" "0"
+check "and it still says what went wrong, rather than saying nothing" \
+	"$(printf '%s' "$_rn_noise" | grep -c 'empty or unparseable')" "1"
+
+# A DRILL MUST SAY IT IS A DRILL. Drill 3 did not: rewriting the step to derive
+# the verdict from the needs context dropped the marker, the job list came back
+# empty, and the issue body read exactly like a genuine red. An alert that cries
+# wolf teaches a reader to discount it, which is the state #973 exists to leave.
+check "a fire drill identifies itself in the issue it opens" \
+	"$(grep -c 'fire drill for #973: no gate actually failed' "$_rn_wf")" "1"
+check "and that marker reaches the job list the reporter prints" \
+	"$(grep -c 'names+=("\$drill_name")' "$_rn_wf")" "1"
+
 # ---- the issue lookup must not go blind on a busy tracker ------------------
 #
 # A bare `--limit 100` silently misses the target once more than a hundred issues
@@ -158,5 +178,5 @@ _rn_bare="$(PGC_NIGHTLY_REPORT_DRYRUN=1 bash "$_rn_sh" failure 2>&1)"
 check "a failure naming no job says so rather than printing an empty list" \
 	"$(printf '%s' "$_rn_bare" | grep -c 'No job name was reported')" "1"
 
-unset _rn_wf _rn_sh _rn_jobs _rn_n _rn_needs _rn_fail _rn_ok _rn_rc _rn_bare _rn_erc _rn_probe
+unset _rn_wf _rn_sh _rn_jobs _rn_n _rn_needs _rn_fail _rn_ok _rn_rc _rn_bare _rn_erc _rn_probe _rn_noise
 unset -f _rn_v

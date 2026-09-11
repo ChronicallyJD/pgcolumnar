@@ -660,6 +660,11 @@ jobs:
           if [ "${DRILL:-false}" = "true" ]; then
             needs_json='{"fire-drill":{"result":"failure"}}'
             echo "fire drill: substituting a failing context through the same derivation"
+            # AND THE ISSUE MUST SAY IT IS A DRILL. Drill 3 did not: rewriting this
+            # step dropped the marker, the job list came back empty, and the body
+            # read exactly like a genuine red. An alert that cries wolf teaches a
+            # reader to discount it, which is the state #973 exists to leave.
+            drill_name="fire drill for #973: no gate actually failed"
           fi
           echo "verdict computed from: $needs_json"
 
@@ -674,4 +679,5 @@ jobs:
             # printing an empty list.
             gh run view "$GITHUB_RUN_ID" --json jobs --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name' 2>/dev/null || true)
 
+          [ -n "${drill_name:-}" ] && names+=("$drill_name")
           .github/scripts/nightly-report.sh --from-needs "$needs_json" ${names+"${names[@]}"}
