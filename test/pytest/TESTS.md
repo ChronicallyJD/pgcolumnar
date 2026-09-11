@@ -71,6 +71,7 @@ behaviour, the source of that number is named.
 - [23. test_mutation_ledger.py: which checks have ever been red](#23-test_mutation_ledgerpy-which-checks-have-ever-been-red)
 - [24. test_loop_coverage_premise.py: a loop that never ran asserted nothing](#24-test_loop_coverage_premisepy-a-loop-that-never-ran-asserted-nothing)
 - [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
+- [26. test_check_records.py: every counted assertion is a record](#26-test_check_recordspy-every-counted-assertion-is-a-record)
 
 ## 1. How to read a test in here
 
@@ -2389,3 +2390,47 @@ crash on this shape when it drained the tap through `ExecProcNode`.
 A non-key fact-table qual with late materialization off. The attach used to
 force the two-pass path with only the join key decoded, so the qual dropped
 every row. Heap is the oracle. Independent of the shell conjunction arm.
+
+## 26. test_check_records.py: every counted assertion is a record
+
+#937, first phase. The shell harness makes counting and recording the same call,
+so no path can do either alone, and then reconciles the totals. **The pytest half
+reaches the same property through Python instead of through the shell's format**,
+which is what "parallel in functionality only" requires: nothing here reads,
+sources or derives from `test/*.sh`.
+
+It is reached more strongly, because Python can remove the possibility rather than
+police it. The count is not a second variable kept in step with the records:
+
+```python
+@property
+def count(self):
+    return len(self._records)
+```
+
+Measured before this file existed: `_counted()` at 15 call sites, `self.count`
+incremented by one line and read by one, and **zero** per-assertion records.
+
+| test | what it pins |
+|---|---|
+| `test_each_counted_assertion_appends_exactly_one_record` | three assertions leave three records, from a premise of zero |
+| `test_the_count_is_the_record_stream` | the count tracks the records at every step, not only at the end |
+| `test_the_count_cannot_be_moved_without_a_record` | **the construction proof**: the count has no setter |
+| `test_a_record_names_the_assertion_that_made_it` | the names, in order |
+| `test_a_refused_assertion_leaves_no_record` | a `VacuityError` is not an outcome; the stream is not a log of attempts |
+| `test_a_name_carrying_a_separator_survives_the_record` | a tab and a newline in a name round-trip byte-identical |
+
+**The construction arm is the one that matters.** A test checking only that the
+count agrees with the records would pass on an implementation keeping two numbers
+that happen to be updated together — which is exactly the drift the shell side
+needs a reconciliation to catch. Asserting the count cannot be written at all is
+what makes the agreement structural.
+
+**The separator arm looks redundant and is not.** There is no separator in an
+object, so it cannot fail today. It exists because the moment somebody formats
+these records into a line, the shell's tab-and-newline defect returns — measured
+there as a record of four fields for a tabbed name and two lines for a newline —
+and without this arm nothing would say so.
+
+Still to come in #937: the verdict resolved from the outcome, and a session
+reconciliation that can fail.

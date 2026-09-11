@@ -90,6 +90,11 @@ NO_CLUSTER = [
     # agrees. The fourth time this arm has caught a merge-order consequence
     # rather than a mistake, which is the argument for it.
     "test_mutation_ledger.py",
+    # #937's first phase. It exercises `Expect` directly -- no connection, no
+    # cluster, no driver -- so the classifier puts it here and the declaration must
+    # agree. The fifth time this arm has decided a membership rather than been told
+    # one.
+    "test_check_records.py",
 ]
 
 
