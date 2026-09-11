@@ -18,6 +18,28 @@ true until the next version shipped.
 
 ### Added
 
+- The pytest harness reports its own check totals, and the record stream is
+  reconciled against what arrived (#937, third phase).
+
+  A run now ends with `checks run: N` and an `accounting:` line counted from the
+  records, so the harness states what it did rather than leaving it to be
+  inferred from pytest's test count. Five assertions across two tests is five.
+
+  The reconciliation compares two quantities that arrive by different routes:
+  what the recorder held, read in the process that ran the test, and what
+  arrived, read back off the report after it was built. Under `-n` the second
+  route crosses a process boundary.
+
+  Reconciling the count against the records would have been vacuous, because
+  the second phase made the count `len(records)` on purpose. Partitioning the
+  records into verdict buckets and summing them is the same trap. Both compare
+  a value with its own definition.
+
+  A record that does not arrive, or that carries a verdict outside the closed
+  set, refuses the run and names the test. Both refusals are proven by injecting
+  the failure from a conftest, because no code in the tree drops a record and an
+  arm that waits for a real defect is not evidence the check can fail.
+
 - Every counted assertion in the pytest harness produces a record, and the
   count is derived from them (#937, first phase).
 

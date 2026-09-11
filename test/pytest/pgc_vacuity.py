@@ -22,6 +22,7 @@ were added for issue #418 after "empty compared with empty" printed PASS, and
 import ast
 import numbers
 import pathlib
+import sys
 
 import functools
 import itertools
@@ -221,6 +222,15 @@ def note_write(nodeid, cur):
 # it once. pytest itself uses 0-6 (`pytest.ExitCode`), so 67 collides with
 # nothing.
 EXIT_INCOMPLETE = 67
+
+# THE CLOSED SET A RECORD'S VERDICT MUST COME FROM. #937 phase 3.
+#
+# lib.sh carries the same four values and `pgc_record` refuses an unknown one
+# rather than dropping the check -- dropping it would leave the count bumped with
+# no outcome recorded, which is the reconciliation failure itself. SKIP has no
+# counterpart here: a bare skip is refused at collection, and the honest form is
+# expect.cannot_run(), which records UNRUN.
+RECORD_VERDICTS = ("PASS", "FAIL", "UNRUN")
 
 
 class VacuityError(AssertionError):
@@ -1137,6 +1147,67 @@ class _UnrunnableCollector:
 
 
 
+class _RecordCollector:
+    """Reconciles what each test's recorder HELD against what ARRIVED. #937 phase 3.
+
+    THE OBVIOUS RECONCILIATION IS VACUOUS HERE, BY CONSTRUCTION, and phase 1 made
+    it so deliberately. `count` IS `len(self._records)`, so checking one against
+    the other compares a value with its own definition. Partitioning the records
+    into PASS/FAIL/UNRUN and asserting the parts sum to the whole is the same trap
+    in a hat -- the buckets are derived from the list being counted. #937 records
+    that the shell side shipped `inputs == sum(buckets)` twice and that both were
+    caught only by mutating them; a third would be worse for having been warned.
+
+    So the two quantities come by different routes:
+
+        held      len(recorder.records), read in the process that RAN the test
+        arrived   the list read back off the report AFTER it was built, crossing
+                  the report boundary and, under -n, a process boundary too
+
+    `_UnrunnableCollector` above is why the second route has to exist at all: a
+    worker's state is invisible to the controller, so the value travels on the
+    report. Measured on the pinned runner, user_properties survive that crossing
+    intact -- which is what makes this a reconciliation rather than a formality.
+
+    WHAT IT CATCHES: a record created after the report was built, one dropped or
+    mangled in transport, and a verdict outside the closed set. WHAT IT DOES NOT:
+    a record that is present, transported and well-formed, and wrong. That is
+    phase 2's job, and saying so here keeps this from reading as a guarantee it
+    is not.
+    """
+
+    def __init__(self):
+        self.records = []      # (nodeid, verdict, name)
+        self.offences = []
+
+    def pytest_runtest_logreport(self, report):
+        if report.when != "call":
+            return
+        held = None
+        arrived = None
+        for key, value in getattr(report, "user_properties", ()):
+            if key == "pgc_records_held":
+                held = value
+            elif key == "pgc_records":
+                arrived = list(value)
+        if held is None and arrived is None:
+            return
+        if arrived is None:
+            arrived = []
+        if held != len(arrived):
+            self.offences.append(
+                f"{report.nodeid}: the recorder held {held} record(s) and "
+                f"{len(arrived)} arrived"
+            )
+        for verdict, name in arrived:
+            if verdict not in RECORD_VERDICTS:
+                self.offences.append(
+                    f"{report.nodeid}: record {name!r} carries the verdict "
+                    f"{verdict!r}, which is not one of {RECORD_VERDICTS}"
+                )
+            self.records.append((report.nodeid, verdict, name))
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
     """Carry an unrunnable declaration out on the report itself.
@@ -1150,32 +1221,88 @@ def pytest_runtest_makereport(item, call):
         if rec is not None and rec.unrunnable:
             reason, detail = rec.unrunnable
             report.user_properties.append(("pgc_unrunnable", f"{reason}\n{detail}"))
+        # BOTH ROUTES, and they are attached separately on purpose (#937 phase 3).
+        # `pgc_records_held` is a number read from the recorder HERE; `pgc_records`
+        # is the stream itself. Deriving the count from the stream on the far side
+        # would compare the stream with itself, which is the vacuous shape this
+        # phase exists to avoid.
+        #
+        # PLAIN TUPLES, not _Record objects: user_properties are serialised across
+        # the xdist boundary, and an object that failed to serialise would break
+        # the transport this check exists to watch.
+        if rec is not None:
+            report.user_properties.append(("pgc_records_held", rec.count))
+            report.user_properties.append(
+                ("pgc_records", [(r.verdict, r.name) for r in rec.records]))
     return report
 
 
 def pytest_terminal_summary(terminalreporter):
-    """Print the third state, in lib.sh's shape.
+    """Print the third state in lib.sh's shape, then the run's own totals.
 
     `UNRUN  <name>: <REASON>: <detail>`, then the count. A state that does not
     say why is a skip with better manners, and a state with no count cannot be
     reconciled against the total.
+
+    THE TOTAL IS COUNTED FROM THE RECORDS, NOT FROM THE TESTS. Those agree
+    whenever every test makes exactly one claim, which is what a hand-written
+    fixture reaches for first -- so an arm in test_check_records.py uses four
+    claims in one test and one in another, where a per-test count would say 2 and
+    the records say 5.
     """
     collector = getattr(terminalreporter.config, "pgc_unrunnable", None)
-    if collector is None or not collector.items:
+    if collector is not None and collector.items:
+        terminalreporter.write_line("")
+        for nodeid, reason, detail in collector.items:
+            terminalreporter.write_line(f"UNRUN  {nodeid}: {reason}: {detail}")
+        terminalreporter.write_line(f"checks unrunnable: {len(collector.items)}")
+
+    records = getattr(terminalreporter.config, "pgc_records", None)
+    if records is None or not records.records:
         return
-    terminalreporter.write_line("")
-    for nodeid, reason, detail in collector.items:
-        terminalreporter.write_line(f"UNRUN  {nodeid}: {reason}: {detail}")
-    terminalreporter.write_line(f"checks unrunnable: {len(collector.items)}")
+    tally = {v: 0 for v in RECORD_VERDICTS}
+    for _nodeid, verdict, _name in records.records:
+        if verdict in tally:
+            tally[verdict] += 1
+    terminalreporter.write_line(f"checks run: {len(records.records)}")
+    terminalreporter.write_line(
+        "accounting: "
+        + " + ".join(f"{tally[v]} {v.lower()}" for v in RECORD_VERDICTS)
+        + f" = {sum(tally.values())}"
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """An unrunnable test must not leave the run green.
+    """An unrunnable test must not leave the run green, and neither must a
+    record stream that does not reconcile.
 
     FAILURE STILL DOMINATES, exactly as in lib.sh: a run with both a failure and
     an unrunnable test is a failure, because the failure is the more urgent fact.
     So this only ever moves a run OFF zero, and never off a non-zero status.
     """
+    # THE RECONCILIATION, FIRST, because it is a statement about whether the run
+    # can be believed at all rather than about one test (#937 phase 3).
+    #
+    # WRITTEN TO STDERR AND FORCED OFF ZERO rather than raised. A UsageError here
+    # is not reported cleanly -- the session is already finishing -- and this must
+    # not depend on an exception surviving a hook that other plugins also wrap.
+    records = getattr(session.config, "pgc_records", None)
+    if records is not None and records.offences:
+        sys.stderr.write(
+            "the pgColumnar vacuity layer refuses this run: the record stream "
+            "does not reconcile, so the totals above describe something other "
+            "than what the assertions did:\n"
+        )
+        for offence in records.offences:
+            sys.stderr.write(f"  {offence}\n")
+        sys.stderr.write(
+            "  -- a record created after the report was built, or dropped in "
+            "transport, is invisible to every other check in this layer.\n"
+        )
+        sys.stderr.flush()
+        if session.exitstatus == 0:
+            session.exitstatus = EXIT_INCOMPLETE
+
     collector = getattr(session.config, "pgc_unrunnable", None)
     if collector is None or not collector.items:
         return
@@ -1285,6 +1412,9 @@ def pytest_configure(config):
     config.pluginmanager.register(collector, "pgc_unrunnable_collector")
     config.pgc_unrunnable = collector
     config.pluginmanager.register(_RunShape(), f"pgc_runshape_{id(config)}")
+    records = _RecordCollector()
+    config.pluginmanager.register(records, f"pgc_records_{id(config)}")
+    config.pgc_records = records
 
 
 def pytest_addoption(parser):

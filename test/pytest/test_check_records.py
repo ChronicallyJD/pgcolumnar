@@ -410,3 +410,143 @@ def test_a_recording_method_takes_exactly_one_record_per_call(expect):
         deltas.append(e.count - before)
     expect.rows([str(d) for d in deltas], ["1"] * len(calls),
                 "every call, including the delegating one, took exactly one record")
+
+
+# ---- phase 3: the session's records reconcile, and the check can fail --------
+#
+# THE OBVIOUS RECONCILIATION HERE IS VACUOUS BY CONSTRUCTION, and phase 1 is what
+# made it so. `count` IS `len(self._records)`, so reconciling the count against
+# the records compares a value with its own definition. #937 warns twice that the
+# shell side shipped `inputs == sum(buckets)` that could not go red, and both were
+# caught only by mutating them -- shipping a third would be worse for having been
+# warned.
+#
+# Partitioning the records into PASS/FAIL/UNRUN and checking the parts sum to the
+# whole is the same trap wearing a different hat: the buckets are derived from the
+# list being counted.
+#
+# So the reconciliation is between two routes that are genuinely different:
+#
+#   1. what the recorder HELD, read in the process that ran the test
+#   2. what ARRIVED, read back off the report after it was built -- crossing the
+#      report boundary, and under `-n` crossing a process boundary as well
+#
+# `_UnrunnableCollector` already records why that second route has to exist: a
+# worker's own state is invisible to the controller, so the value has to travel on
+# the report. Measured on the pinned runner, `user_properties` survive the xdist
+# boundary intact, which is what makes route 2 available at all.
+
+
+def test_the_session_totals_are_reconciled(pytester, expect):
+    """The positive control. A clean run reports its totals and does not refuse."""
+    pytester.makepyfile(
+        """
+        def test_two_claims(expect):
+            expect.num(1, 1, "first")
+            expect.num(2, 2, "second")
+
+        def test_one_claim(expect):
+            expect.text("a", "a", "third")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a clean run passes", passed=2, failed=0)
+    result.stdout.fnmatch_lines(["*checks run: 3*"])
+
+
+def test_the_total_is_printed_from_the_records_not_from_the_test_count(pytester, expect):
+    """Three assertions across two tests is 3, not 2. A total that counted TESTS
+    would agree with the record count whenever every test made exactly one claim,
+    which is the case a hand-written fixture reaches for first."""
+    pytester.makepyfile(
+        """
+        def test_four_claims(expect):
+            expect.num(1, 1, "a")
+            expect.num(2, 2, "b")
+            expect.num(3, 3, "c")
+            expect.num(4, 4, "d")
+
+        def test_one_claim(expect):
+            expect.num(5, 5, "e")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    result.stdout.fnmatch_lines(["*checks run: 5*"])
+    expect.outcomes(result, "and the run itself is clean", passed=2, failed=0)
+
+
+def test_a_record_lost_in_transport_is_refused(pytester, expect):
+    """THE ARM THIS PHASE EXISTS FOR, and it is written before the reconciliation.
+
+    A conftest that drops one record on its way onto the report is exactly the
+    silent failure the two routes exist to catch: the recorder held three, two
+    arrived, and without a reconciliation the run reports 2 and nobody knows a
+    claim went missing.
+
+    It has to be injected from a conftest because no in-tree code does this -- the
+    point of the arm is that the reconciliation CAN fail, and an arm that waits for
+    a real defect to appear is not evidence that it can.
+
+    `tryfirst=True` IS LOAD-BEARING, NOT DECORATION. Both this hook and the
+    layer's are wrappers, and a wrapper's code after its `yield` runs in the
+    REVERSE of call order. My first version used `trylast`, which made this the
+    innermost wrapper, so it ran before the layer attached anything and saw an
+    empty `user_properties` -- the inner run then passed and the arm read exactly
+    like a reconciliation that does not fire. Measured: the debug print inside the
+    loop never executed.
+    """
+    pytester.makepyfile(
+        """
+        def test_three_claims(expect):
+            expect.num(1, 1, "a")
+            expect.num(2, 2, "b")
+            expect.num(3, 3, "c")
+        """
+    )
+    pytester.makeconftest(
+        """
+        import pytest
+
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                for i, (key, value) in enumerate(report.user_properties):
+                    if key == "pgc_records" and value:
+                        report.user_properties[i] = (key, value[:-1])
+            return report
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a record that did not arrive is refused")
+    result.stderr.fnmatch_lines(["*held 3 record(s) and 2 arrived*"])
+
+
+def test_a_verdict_outside_the_closed_set_is_refused(pytester, expect):
+    """The schema half. A verdict the reader cannot key on is a record that says
+    nothing, and `pgc_record` refuses the same thing on the shell side rather than
+    dropping the check -- dropping it would leave the count bumped with no outcome,
+    which is the reconciliation failure itself."""
+    pytester.makepyfile(
+        """
+        def test_one_claim(expect):
+            expect.num(1, 1, "a")
+        """
+    )
+    pytester.makeconftest(
+        """
+        import pytest
+
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                for i, (key, value) in enumerate(report.user_properties):
+                    if key == "pgc_records" and value:
+                        report.user_properties[i] = (key, [("SORTOF", n) for _, n in value])
+            return report
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.run_failed(result, "a verdict outside the closed set is refused")
+    result.stderr.fnmatch_lines(["*SORTOF*"])

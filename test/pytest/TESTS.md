@@ -2470,4 +2470,43 @@ message this layer never composes — there is no verdict for the call site to p
 `AssertionError` subclass: every `VacuityError` is raised *before* its record is
 taken, so no record exists to mark. That is scanned rather than trusted.
 
-Still to come in #937: a session reconciliation that can fail.
+### Phase 3: the session reconciles, and the check can fail
+
+| test | what it pins |
+|---|---|
+| `test_the_session_totals_are_reconciled` | the positive control: a clean run reports and does not refuse |
+| `test_the_total_is_printed_from_the_records_not_from_the_test_count` | 5 claims across 2 tests is 5, not 2 |
+| `test_a_record_lost_in_transport_is_refused` | **the arm this phase exists for** |
+| `test_a_verdict_outside_the_closed_set_is_refused` | the schema half |
+
+**The obvious reconciliation here is vacuous by construction, and phase 1 made it
+so on purpose.** `count` *is* `len(self._records)`, so checking one against the
+other compares a value with its own definition. Partitioning the records into
+PASS/FAIL/UNRUN and asserting the parts sum to the whole is the same trap wearing
+a hat — the buckets are derived from the list being counted. #937 records that the
+shell side shipped `inputs == sum(buckets)` **twice** and that both were caught
+only by mutating them.
+
+So the two quantities come by different routes:
+
+```
+held      len(recorder.records), read in the process that RAN the test
+arrived   the list read back off the report AFTER it was built -- crossing the
+          report boundary, and under -n a process boundary as well
+```
+
+`_UnrunnableCollector` is why the second route has to exist at all: a worker's
+state is invisible to the controller, so the value travels on the report.
+Measured on the pinned runner, `user_properties` survive that crossing intact.
+
+**What it catches:** a record created after the report was built, one dropped or
+mangled in transport, and a verdict outside the closed set. **What it does not:** a
+record that is present, transported, well-formed and wrong. That is phase 2's job,
+and it is said here so this does not read as a guarantee it is not.
+
+**The arms inject the failure from a conftest**, because no in-tree code drops a
+record — an arm that waits for a real defect to appear is not evidence the check
+can fail. `tryfirst=True` on those hooks is load-bearing: a wrapper's post-`yield`
+code runs in the reverse of call order, so `trylast` made the injector run *before*
+the layer attached anything, the inner run passed, and the arm read exactly like a
+reconciliation that does not fire.
