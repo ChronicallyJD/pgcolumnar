@@ -947,8 +947,26 @@ pgc_read_installed_stamp() {	# pgc_read_installed_stamp FILE -> digest or empty
 }
 
 pgc_read_source_stamp() {	# pgc_read_source_stamp FILE -> hash or empty
+	# THE FIRST LINE ONLY, and this is the mirror of the trap in the reader above
+	# (#959 review, @jdatcmd). Stripping hex from the WHOLE FILE was right while a
+	# stamp was one line and became wrong the moment this change added a second:
+	#
+	#     source unfingerprintable + a digest recorded
+	#       file                "" + "d312a10c0cfb"
+	#       whole-file read     d312a10c0cfb      <- the LIBRARY digest, as the source
+	#       verdict             stale             <- was `unknown` before this change
+	#       decision            refuse-source     <- a FATAL naming a library digest
+	#                                                as a source fingerprint
+	#
+	# Before, that case wrote a one-line empty stamp, read empty, and reported
+	# UNVERIFIED -- which is the documented behaviour for a tree that cannot be
+	# fingerprinted. So the regression was introduced by the second line, not found
+	# lying in wait, and it belongs in this change rather than a follow-up.
+	#
+	# A short first line would also have spliced across the newline: "abc" plus
+	# "d312a10c0cfb" read as "abcd312a10c0".
 	[ -r "${1:-}" ] || { echo ""; return; }
-	tr -dc 'a-f0-9' < "$1" | head -c 12
+	sed -n '1p' "$1" | tr -dc 'a-f0-9' | head -c 12
 }
 
 # The stamp lives beside the tree that built the binary, keyed by major, because one

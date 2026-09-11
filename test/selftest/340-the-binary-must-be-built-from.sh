@@ -115,6 +115,22 @@ check "a two-line stamp still yields the source fingerprint first" \
 	"$(pgc_read_source_stamp "$_bs")" "a0e6afc3e13e"
 check "and yields the library digest second" \
 	"$(pgc_read_installed_stamp "$_bs")" "d312a10c0cfb"
+
+# THE MIRROR OF THAT TRAP, in the reader this change did not touch (@jdatcmd swept
+# for it). `pgc_read_source_stamp` stripped hex from the WHOLE file, which was right
+# while a stamp was one line. With two, a source that cannot be fingerprinted writes
+# an empty first line and the whole-file read returns the LIBRARY DIGEST as the
+# source: verdict `stale` instead of `unknown`, so a documented UNVERIFIED became a
+# FATAL naming a library digest as a source fingerprint. Introduced by the second
+# line, so it is fixed here rather than left as a residual.
+pgc_write_source_stamp "$_bs" "" "d312a10c0cfb"
+check "an unfingerprintable source reads as empty, not as the library digest" \
+	"$(pgc_read_source_stamp "$_bs")" ""
+check "so its verdict is unknown rather than a spurious stale" \
+	"$(pgc_freshness_verdict "$(pgc_read_source_stamp "$_bs")" a0e6afc3e13e)" "unknown"
+printf 'abc\nd312a10c0cfb\n' > "$_bs"
+check "and a short first line does not splice the second into it" \
+	"$(pgc_read_source_stamp "$_bs")" "abc"
 unset _bs
 
 # The fingerprint has to MOVE when a build input moves and STAY when nothing does.
