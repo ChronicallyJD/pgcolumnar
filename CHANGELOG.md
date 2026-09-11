@@ -1545,6 +1545,52 @@ true until the next version shipped.
   four. The per-major table is in #965, which is where the remainder should be read
   from rather than from either run alone.
 
+- The unprivileged reader in the fingerprint arms needs a harness it can reach,
+  and a failed source must not be reported as a refused fingerprint (#907).
+
+  The nightly coverage job went red for two nights and nothing said so: every suite
+  job was green, the PR gate was green, and the only failure was one suite inside the
+  job nobody reads. `harness_selftest` reported 249 passed, 1 failed.
+
+  Three checks in `340-the-binary-must-be-built-from` failed, with six
+  `test/lib.sh: Permission denied` lines beside them. The arms there read a fixture
+  tree as a second user, because `chmod 000` is invisible to root, and they sourced
+  `lib.sh` from the checkout. In GitHub Actions the checkout lives under
+  `/home/runner/work`, which `postgres` and `nobody` cannot traverse, so the
+  unprivileged shell could not load the harness at all.
+
+  **Two of the arms passed anyway, and that is the defect worth naming.** The reader
+  did `. "$PGC_TESTDIR/lib.sh" || exit 1`, so a denied source produced empty output --
+  which is exactly what an arm asserting "an unreadable file yields no fingerprint"
+  wants to see. Measured under a tree the reader cannot traverse:
+
+      everything readable, lib.sh UNREACHABLE   -> []              the arms PASS on this
+      b.c unreadable,      lib.sh reachable     -> []              what they mean to test
+      everything readable, lib.sh reachable     -> cde49bff94a7
+
+  So the premises were the only thing standing between the suite and a clean report
+  on two arms that proved nothing.
+
+  Three changes, each with its own reason. A readable copy of `lib.sh`, `portlib.sh`
+  and `pgc_fingerprint.py` is staged beside the fixture, which the reader can always
+  reach -- the same three files, read from a different directory, which is an
+  environment property rather than anything the part asserts. A failed source now
+  answers `harness-unreadable`, a value that cannot be mistaken for a hash or for
+  empty, so no arm can pass that way again. And the arms run only when the premises
+  they rest on were met, skipping loudly otherwise, because a guard that cannot run
+  is not a guard that held.
+
+  Measured, three conditions, PG18:
+
+      tree readable by the reader            unfixed 803 checks 0 FAIL   fixed 804 checks 0 FAIL
+      tree under a mode-750 parent           unfixed 3 FAIL, 6 denied,   fixed 0 FAIL, 0 denied,
+                                                     2 arms PASS vacuously      arms run
+      reader cannot fingerprint at all       --                          2 FAIL, 5 honest SKIP
+
+  The last row is a probe rather than a condition anyone meets today: `python3` was
+  removed from the reader's `PATH` to prove the skip branch can be reached, since an
+  `else` that cannot run proves nothing either.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added

@@ -617,6 +617,24 @@ printf 'all:\n\ttrue\n' > "$_fp/tree/Makefile"
 printf 'x\n' > "$_fp/tree/pgcolumnar.control"
 chmod -R a+rX "$_fp"
 
+# A READABLE COPY OF THE HARNESS, because the reader may not be able to reach the
+# checkout. The arms below source `lib.sh` as a second user, and in GitHub Actions
+# the tree lives under `/home/runner/work`, which `postgres` and `nobody` cannot
+# traverse. The nightly coverage job went red for two nights on exactly that, with
+# six `lib.sh: Permission denied` lines in its log, and the premise checks below
+# are what caught it.
+#
+# Copying is not a weaker test: it is the same three files, and which directory
+# they are read from is an environment property rather than anything this part
+# asserts. `_pgc_fp_module` resolves `pgc_fingerprint.py` beside `lib.sh` through
+# BASH_SOURCE, and `lib.sh` sources `portlib.sh` the same way, so all three must
+# sit together.
+_fp_harness="$_fp/harness"
+mkdir -p "$_fp_harness"
+cp "$PGC_TESTDIR/lib.sh" "$PGC_TESTDIR/portlib.sh" "$PGC_TESTDIR/pgc_fingerprint.py" \
+	"$_fp_harness/" 2>/dev/null
+chmod -R a+rX "$_fp"
+
 _fp_user=""
 if [ "$(id -u)" -ne 0 ]; then
 	_fp_user="-"			# already unprivileged; read in this shell
@@ -627,26 +645,72 @@ else
 fi
 
 # _fp_as reads as the unprivileged user, or in this shell when already one.
-_fp_as() {	# _fp_as EXPR -> stdout
+#
+# IT ANSWERS `harness-unreadable` RATHER THAN NOTHING when the source fails, and
+# that is the whole defect this replaces. The first version did `|| exit 1`, so a
+# reader that could not source `lib.sh` produced empty output -- which is exactly
+# what the arms below want. Measured under a tree the reader cannot traverse:
+#
+#     everything readable, lib.sh UNREACHABLE   -> []     <- the ARMS PASS on this
+#     b.c unreadable,      lib.sh reachable     -> []     <- what they mean to test
+#     everything readable, lib.sh reachable     -> [cde49bff94a7]
+#
+# Two arms reported PASS having proved nothing. A sentinel cannot be mistaken for
+# a hash or for empty, so no arm can ever pass that way again.
+_fp_as() {	# _fp_as EXPR -> stdout, or `harness-unreadable`
+	local _fp_cmd
+	# `echo`, not `printf`: a `\n` inside this concatenation is correct, and the
+	# static checker cannot see through the concatenation to know that (SC1012). A
+	# warning that has to be explained is worse than a form needing no explanation.
+	# And this comment does not open with that checker's name, because a comment
+	# that does is parsed as a DIRECTIVE -- the first wording here turned into
+	# SC1072/SC1073 parse errors on the comment itself.
+	_fp_cmd=". \"$_fp_harness/lib.sh\" 2>/dev/null || { echo harness-unreadable; exit 0; }; $1"
 	if [ "$_fp_user" = "-" ]; then
-		bash -c ". \"$PGC_TESTDIR/lib.sh\" || exit 1; $1"
+		bash -c "$_fp_cmd"
 	else
-		runuser -u "$_fp_user" -- bash -c ". \"$PGC_TESTDIR/lib.sh\" || exit 1; $1"
+		runuser -u "$_fp_user" -- bash -c "$_fp_cmd"
 	fi
 }
 
 if [ -z "$_fp_user" ]; then
 	check_skip "the unreadable-source refusal" "SKIP  no non-root user to read as; root ignores chmod 000" "no non-root user to read as"
 else
+	# Premise nought: the reader can source the copy at all. Stated separately
+	# from the fingerprint premise so a reachability failure and a fingerprint
+	# failure cannot be read as each other.
+	check "premise: the unprivileged reader can source the staged harness" \
+		"$(_fp_as "printf sourced")" "sourced"
+
 	_fp_base="$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")"
 	check "premise: the tree fingerprints to something when it is readable" \
-		"$([ -n "$_fp_base" ] && echo yes || echo empty)" "yes"
+		"$([ -n "$_fp_base" ] && [ "$_fp_base" != harness-unreadable ] && echo yes || echo "${_fp_base:-empty}")" "yes"
 
 	# Premise for the mechanism: the unprivileged reader must agree with this
 	# shell while nothing is denied, or the arms below measure the user switch.
 	check "premise: the unprivileged read agrees while everything is readable" \
 		"$_fp_base" "$(pgc_source_fingerprint "$_fp/tree")"
+fi
 
+# THE ARMS run only when the premises above were met. A guard that cannot run is
+# not a guard that held, so the alternative to running them is SKIPPING them
+# loudly -- never running them against a reader that is broken for a reason they
+# do not describe. The premises stay FAILED in that case, so the suite is still
+# red and still says why.
+if [ -z "$_fp_user" ]; then
+	:					# already skipped above
+elif [ -z "$_fp_base" ] || [ "$_fp_base" = harness-unreadable ] \
+		|| [ "$_fp_base" != "$(pgc_source_fingerprint "$_fp/tree")" ]; then
+	for _fp_n in "an unreadable b.c yields no fingerprint, not a wrong one" \
+			"an unreadable c.c yields no fingerprint, not a wrong one" \
+			"control: and the tree fingerprints again once it is readable" \
+			"so the verdict is unknown -- UNVERIFIED -- and never stale" \
+			"control: a readable run still reads fresh"; do
+		check_skip "$_fp_n" \
+			"SKIP  $_fp_n (the unprivileged reader could not fingerprint a readable tree)" \
+			"the unprivileged reader could not fingerprint a readable tree"
+	done
+else
 	# THE ARM. One unreadable file, and the answer must be EMPTY, not a hash.
 	for _fp_n in b.c c.c; do
 		chmod 000 "$_fp/tree/src/$_fp_n"
@@ -670,7 +734,7 @@ else
 		"$(pgc_freshness_verdict "$_fp_base" \
 			"$(_fp_as "pgc_source_fingerprint \"$_fp/tree\"")")" "fresh"
 fi
-unset _fp_user _fp_u _fp_got _fp_n
+unset _fp_user _fp_u _fp_got _fp_n _fp_base _fp_harness _fp_cmd
 unset -f _fp_as
 
 # ---------------------------------------------------------------------------
