@@ -683,8 +683,10 @@ harness_selftest	410-a-check-must-have-been-red	a check observed red gains the d
 harness_selftest	410-a-check-must-have-been-red	a check the ledger has never seen is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	a clean status says nothing and does not fail the major	never	-
 harness_selftest	410-a-check-must-have-been-red	a date that is not a date is refused rather than stored	never	-
+harness_selftest	410-a-check-must-have-been-red	a deliberate break says so with --mutation	never	-
 harness_selftest	410-a-check-must-have-been-red	a gate over a nonexistent log is an integrity failure, not a pass	never	-
 harness_selftest	410-a-check-must-have-been-red	a later green run does not erase an observation	never	-
+harness_selftest	410-a-check-must-have-been-red	a log carrying a FAIL is refused when no reason is given	never	-
 harness_selftest	410-a-check-must-have-been-red	a name that appeared while another disappeared is reported as a rename	never	-
 harness_selftest	410-a-check-must-have-been-red	a named mutation is recorded against the check that reddened	never	-
 harness_selftest	410-a-check-must-have-been-red	a real refusal is a different status from an integrity failure	never	-
@@ -703,6 +705,7 @@ harness_selftest	410-a-check-must-have-been-red	an empty log is one too, because
 harness_selftest	410-a-check-must-have-been-red	an integrity failure says regenerating will not help	never	-
 harness_selftest	410-a-check-must-have-been-red	an older observation does not overwrite a newer one	never	-
 harness_selftest	410-a-check-must-have-been-red	and CI collects from the retained path rather than the deleted one	never	-
+harness_selftest	410-a-check-must-have-been-red	and a genuine observation says so with --reds-are-real	never	-
 harness_selftest	410-a-check-must-have-been-red	and a level prior carries no distance, so zero is silent	never	-
 harness_selftest	410-a-check-must-have-been-red	and a log that does not reconcile with its own checks run:	never	-
 harness_selftest	410-a-check-must-have-been-red	and a newer one does	never	-
@@ -724,6 +727,7 @@ harness_selftest	410-a-check-must-have-been-red	and it says why, rather than fal
 harness_selftest	410-a-check-must-have-been-red	and never says a change introduces a file at a ref that is not there	never	-
 harness_selftest	410-a-check-must-have-been-red	and none of them ends in a tab	never	-
 harness_selftest	410-a-check-must-have-been-red	and not against one that stayed green	never	-
+harness_selftest	410-a-check-must-have-been-red	and nothing is written, so a refused merge is not half-applied	never	-
 harness_selftest	410-a-check-must-have-been-red	and one that stayed green keeps its debt	never	-
 harness_selftest	410-a-check-must-have-been-red	and only when there is a base, so a push build does not fail on it	never	-
 harness_selftest	410-a-check-must-have-been-red	and records neither as ever having been red	never	-
@@ -733,6 +737,7 @@ harness_selftest	410-a-check-must-have-been-red	and the history it is about to l
 harness_selftest	410-a-check-must-have-been-red	and the message says how to fix it, because regenerating is the intended action	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names both values	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names how many failed, so the author can narrow the run	never	-
+harness_selftest	410-a-check-must-have-been-red	and the refusal names the check that reddened	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names the raise	never	-
 harness_selftest	410-a-check-must-have-been-red	and the runner names no remote at that call site	never	-
 harness_selftest	410-a-check-must-have-been-red	auto refuses when GITHUB_BASE_REF names a ref that is not here	never	-
@@ -741,6 +746,8 @@ harness_selftest	410-a-check-must-have-been-red	auto with no base ref and no ups
 harness_selftest	410-a-check-must-have-been-red	both failure arms fail the major	never	-
 harness_selftest	410-a-check-must-have-been-red	but that suite is counted as not covered, which is the debt	never	-
 harness_selftest	410-a-check-must-have-been-red	control: a well-formed log still merges	never	-
+harness_selftest	410-a-check-must-have-been-red	control: an all-PASS log still merges with no flag at all	never	-
+harness_selftest	410-a-check-must-have-been-red	control: the same log merges with a different reason, so the refusal above is --mutation-across-two-checks and not the log	never	-
 harness_selftest	410-a-check-must-have-been-red	control: the same log merges without --mutation	never	-
 harness_selftest	410-a-check-must-have-been-red	each says what was wrong with the input	never	-
 harness_selftest	410-a-check-must-have-been-red	every committed row has five fields	never	-
