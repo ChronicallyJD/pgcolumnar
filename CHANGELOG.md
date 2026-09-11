@@ -1716,6 +1716,55 @@ true until the next version shipped.
   than nothing, because an empty result reports the same emptiness for "the
   controller is broken" and "this part misspelled a variable".
 
+- A continuation check carries the discriminator its headline already names, so two
+  checks stop sharing one ledger row (#982, first of eight).
+
+  The ledger keys on `(suite, part, name)`. Twenty-four checks across eight suites share
+  a key with another check, so one going red would mark its namesake observed-red for a
+  claim nothing attacked -- the same failure `pgc_record`'s `BASH_SOURCE` part-derivation
+  fixed across parts, one frame further in.
+
+  The cause is a convention rather than carelessness. Suites name a follow-up check as a
+  short continuation of a distinct headline, which reads well:
+
+      PASS  a skipped timing check emits exactly one record
+      PASS  and its verdict is SKIP
+
+  Two parallel blocks in `400-a-check-result-must-be-machine` test `check_timing` and
+  `check_ratio_needs_quiet_machine`. Their headlines say which; only the continuations
+  were short enough to collide.
+
+  **The rule this proposes, for the remaining seven files: a continuation check carries
+  the same discriminator its headline already interpolates.** No new convention, no
+  readability lost, and at loop sites the variable is already in scope:
+
+      before   check_num "and does NOT report it as a missing file"
+      after    check_num "and the s3 URL is NOT reported as a missing file"
+
+  Six renames here, measured on the resulting log rather than asserted, against a control
+  run on clean `main`:
+
+      clean main bf325b34   857 records   854 distinct keys   3 colliding   3 lost
+      this branch           857 records   857 distinct keys   0 colliding   0 lost
+
+  The record count is unchanged, so this adds and removes no checks -- it only renames.
+
+  A rename creates orphan ledger rows, and this removes the three it creates. Each carried
+  verdict `never` and no mutation, which is the criterion `f80ca7d05` established for
+  dropping a row without losing history; a row with a date or a mutation would have had to
+  travel with the rename instead.
+
+  **And a collapsed key cannot be un-collapsed with its history intact.** `rename-scan`
+  pairs each old name with one of the two new ones arbitrarily, because one row cannot
+  become two. It does not matter here -- all three carried nothing -- but if any of those
+  six had ever gone red, the ledger would hold that red against a key covering both, and
+  splitting it would leave nobody able to say which check earned it. That is an argument
+  for fixing collisions before one of them reddens rather than after.
+
+  The orphan check written for this also found two rows whose checks no longer exist
+  anywhere in the tree, removed by #917 with their rows left behind. Those are not created
+  by this change and are filed separately rather than tidied away here.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
