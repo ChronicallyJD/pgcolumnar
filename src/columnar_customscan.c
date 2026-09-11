@@ -123,6 +123,10 @@ typedef struct PgColumnarCustomScanState
 	Datum	   *projValues;			/* scratch, length K+1 (index 0 = rownumber) */
 	bool	   *projNulls;
 	PgColumnarLivenessCache *livenessCache;	/* cached base liveness for the scan */
+	bool		runtimeRangeAttached;
+	void	   *runtimeBloom;
+	AttrNumber	runtimeBloomAttno;
+	uint64		runtimeRowsRejected;
 } PgColumnarCustomScanState;
 
 /* path -> plan */
@@ -3201,14 +3205,32 @@ pgcolumnar_setup_late_materialization(PgColumnarCustomScanState *cstate,
  * scan that rejects millions of rows does not accumulate their qual allocations.
  */
 static bool
+pgcolumnar_runtime_bloom_keeps(PgColumnarCustomScanState *cstate,
+							   TupleTableSlot *slot)
+{
+	if (cstate->runtimeBloom == NULL)
+		return true;
+	if (PgColumnarRuntimeBloomMatch(cstate->runtimeBloom,
+								 slot->tts_values[cstate->runtimeBloomAttno - 1],
+								 slot->tts_isnull[cstate->runtimeBloomAttno - 1]))
+		return true;
+	cstate->runtimeRowsRejected++;
+	return false;
+}
+
+static bool
 pgcolumnar_scan_row_filter(void *arg)
 {
 	ScanState  *ss = (ScanState *) arg;
+	PgColumnarCustomScanState *cstate = (PgColumnarCustomScanState *) ss;
 	ExprContext *econtext = ss->ps.ps_ExprContext;
 	TupleTableSlot *slot = ss->ss_ScanTupleSlot;
 
 	ExecClearTuple(slot);
 	ExecStoreVirtualTuple(slot);
+
+	if (!pgcolumnar_runtime_bloom_keeps(cstate, slot))
+		return false;
 
 	ResetExprContext(econtext);
 	econtext->ecxt_scantuple = slot;
@@ -3245,11 +3267,15 @@ static bool
 pgcolumnar_scan_row_filter_nocount(void *arg)
 {
 	ScanState  *ss = (ScanState *) arg;
+	PgColumnarCustomScanState *cstate = (PgColumnarCustomScanState *) ss;
 	ExprContext *econtext = ss->ps.ps_ExprContext;
 	TupleTableSlot *slot = ss->ss_ScanTupleSlot;
 
 	ExecClearTuple(slot);
 	ExecStoreVirtualTuple(slot);
+
+	if (!pgcolumnar_runtime_bloom_keeps(cstate, slot))
+		return false;
 
 	ResetExprContext(econtext);
 	econtext->ecxt_scantuple = slot;
@@ -3404,9 +3430,22 @@ PgColumnarScanNext(ScanState *ss)
 
 		ExecClearTuple(slot);
 	}
-	else if (!PgColumnarReadNextRow(cstate->readState, slot->tts_values,
-									slot->tts_isnull, &rowNumber))
-		return NULL;
+	else
+	{
+		/*
+		 * When late materialization is off, the Bloom probe cannot run in the
+		 * two-pass filter: that path is what would leave qual columns undecoded.
+		 * Probe after the full row is built instead.
+		 */
+		for (;;)
+		{
+			if (!PgColumnarReadNextRow(cstate->readState, slot->tts_values,
+									   slot->tts_isnull, &rowNumber))
+				return NULL;
+			if (pgcolumnar_runtime_bloom_keeps(cstate, slot))
+				break;
+		}
+	}
 
 	ExecStoreVirtualTuple(slot);
 	PgColumnarRowNumberToItemPointer(rowNumber, &slot->tts_tid);
@@ -3434,6 +3473,7 @@ PgColumnarReScanCustomScan(CustomScanState *node)
 {
 	PgColumnarCustomScanState *cstate = (PgColumnarCustomScanState *) node;
 
+	cstate->runtimeRowsRejected = 0;
 	if (cstate->readState != NULL)
 	{
 		PgColumnarRescanRead(cstate->readState);
@@ -3709,7 +3749,148 @@ PgColumnarExplainCustomScan(CustomScanState *node, List *ancestors,
 		ExplainPropertyInteger("Columnar Rows Filtered Before Materialization", NULL,
 							   (int64) PgColumnarRowsFilteredEarly(cstate->readState),
 							   es);
+		if (cstate->runtimeRangeAttached)
+			ExplainPropertyInteger("Runtime Filter Groups Removed", NULL,
+								   (int64) PgColumnarRuntimeGroupsRemoved(cstate->readState),
+								   es);
+		if (cstate->runtimeBloom != NULL)
+			ExplainPropertyInteger("Runtime Filter Rows Rejected", NULL,
+								   (int64) cstate->runtimeRowsRejected,
+								   es);
 	}
+}
+
+/*
+ * pgcolumnar_ensure_runtime_bloom_columns
+ *		The two-pass filter must decode every column ExecQual reads, plus the
+ *		join key.  Turning late materialization on with only the key marked
+ *		drops rows whose qual names any other column.
+ *
+ * Do not force the path when the GUC is off or the qual is volatile.  Bloom
+ * then probes in PgColumnarScanNext after the full row is built.
+ */
+static void
+pgcolumnar_ensure_runtime_bloom_columns(PgColumnarCustomScanState *state,
+									   AttrNumber attno)
+{
+	CustomScan *cscan = (CustomScan *) state->css.ss.ps.plan;
+	Bitmapset  *qualAttrs = NULL;
+	int			natts = state->nTotalColumns;
+	int			x = -1;
+
+	if (!pgcolumnar_enable_late_materialization)
+		return;
+
+	if (state->qualCols != NULL)
+	{
+		state->qualCols[attno - 1] = true;
+		return;
+	}
+
+	if (cscan->scan.plan.qual != NIL &&
+		contain_volatile_functions((Node *) cscan->scan.plan.qual))
+		return;
+
+	if (cscan->scan.plan.qual != NIL)
+	{
+		pull_varattnos((Node *) cscan->scan.plan.qual, cscan->scan.scanrelid,
+					   &qualAttrs);
+		while ((x = bms_next_member(qualAttrs, x)) >= 0)
+		{
+			AttrNumber	qattno = x + FirstLowInvalidHeapAttributeNumber;
+
+			if (qattno <= 0 || qattno > natts)
+				return;
+		}
+	}
+
+	state->qualCols = palloc0(sizeof(bool) * natts);
+	x = -1;
+	while ((x = bms_next_member(qualAttrs, x)) >= 0)
+	{
+		AttrNumber	qattno = x + FirstLowInvalidHeapAttributeNumber;
+
+		state->qualCols[qattno - 1] = true;
+	}
+	state->qualCols[attno - 1] = true;
+	state->lateMat = true;
+}
+
+/*
+ * PgColumnarAttachRuntimeBloom
+ *		Publish a completed build-side Bloom filter to a direct base scan
+ *		before its first tuple is requested.  Projection scans are excluded
+ *		by the planner; checking again here turns a planner mistake into an
+ *		error, not a wrong answer.
+ */
+void
+PgColumnarAttachRuntimeBloom(PlanState *scanState, void *filter, AttrNumber attno)
+{
+	PgColumnarCustomScanState *state;
+
+	if (scanState == NULL)
+		return;
+	if (!IsA(scanState, CustomScanState))
+		elog(ERROR, "pgcolumnar runtime bloom expected a custom scan");
+	state = (PgColumnarCustomScanState *) scanState;
+	if (state->css.methods != &pgcolumnar_exec_methods)
+		elog(ERROR, "pgcolumnar runtime bloom expected a columnar scan");
+
+	if (filter == NULL)
+	{
+		state->runtimeBloom = NULL;
+		state->runtimeBloomAttno = InvalidAttrNumber;
+		return;
+	}
+	if (state->projScan || state->readState == NULL)
+		elog(ERROR, "pgcolumnar runtime bloom expected a direct base scan");
+	if (attno <= 0 || attno > state->nTotalColumns)
+		elog(ERROR, "pgcolumnar runtime bloom key is out of range");
+
+	state->runtimeBloom = filter;
+	state->runtimeBloomAttno = attno;
+	state->runtimeRowsRejected = 0;
+	pgcolumnar_ensure_runtime_bloom_columns(state, attno);
+}
+
+/*
+ * PgColumnarAttachRuntimeRange
+ *		Publish a completed build-side hull to a direct base scan before its
+ *		first tuple is requested.  Projection scans are excluded by the planner;
+ *		checking again here turns a planner mistake into an error, not a wrong
+ *		answer.
+ */
+bool
+PgColumnarAttachRuntimeRange(PlanState *scanState, AttrNumber attno, Oid subtype,
+							 Datum minimum, Datum maximum)
+{
+	PgColumnarCustomScanState *state;
+
+	if (!IsA(scanState, CustomScanState))
+		elog(ERROR, "pgcolumnar runtime range expected a custom scan");
+	state = (PgColumnarCustomScanState *) scanState;
+	if (state->css.methods != &pgcolumnar_exec_methods || state->projScan ||
+		state->readState == NULL)
+		elog(ERROR, "pgcolumnar runtime range expected a direct base scan");
+
+	state->runtimeRangeAttached =
+		PgColumnarReadSetRuntimeRange(state->readState, attno, subtype,
+									  minimum, maximum);
+	return state->runtimeRangeAttached;
+}
+
+void
+PgColumnarDetachRuntimeRange(PlanState *scanState)
+{
+	PgColumnarCustomScanState *state;
+
+	if (scanState == NULL || !IsA(scanState, CustomScanState))
+		return;
+	state = (PgColumnarCustomScanState *) scanState;
+	if (state->css.methods != &pgcolumnar_exec_methods || state->readState == NULL)
+		return;
+	PgColumnarReadClearRuntimeRange(state->readState);
+	state->runtimeRangeAttached = false;
 }
 
 /* -------------------------------------------------------------------------

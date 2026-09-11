@@ -3452,6 +3452,15 @@ _PG_init(void)
 							 0,
 							 NULL, NULL, NULL);
 
+	DefineCustomBoolVariable("pgcolumnar.enable_join_runtime_filter",
+							 "Enable serial hash-join runtime filtering for direct columnar scans.",
+							 NULL,
+							 &pgcolumnar_enable_join_runtime_filter,
+							 false,
+							 PGC_USERSET,
+							 0,
+							 NULL, NULL, NULL);
+
 	DefineCustomBoolVariable("pgcolumnar.enable_projection_scan",
 							 "Let the planner scan a covering projection instead of the "
 							 "base table when one serves the query better (gap 26).",
@@ -3743,6 +3752,7 @@ _PG_init(void)
 
 	/* register the custom scan provider and install the pathlist hook */
 	PgColumnarCustomScanInit();
+	PgColumnarRuntimeFilterInit();
 
 	/* install the vectorized-aggregate upper-path hook (spec 9) */
 	PgColumnarVectorInit();

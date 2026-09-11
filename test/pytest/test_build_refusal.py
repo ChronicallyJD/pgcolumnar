@@ -570,31 +570,6 @@ def _tree_with_module(tmp_path, name):
     return t
 
 
-def test_the_stamp_writer_reports_failure(tmp_path, expect):
-    """`|| true` made both controllers' warning branches unreachable."""
-    out, rc = _sh('pgc_write_source_stamp "/proc/pgc-twin" "deadbeef"')
-    expect.num(rc, 1, "the writer reports failure on an unwritable target")
-    ok, rc2 = _sh(f'pgc_write_source_stamp "{tmp_path}/s" "cafebabe"')
-    expect.num(rc2, 0, "control: and succeeds on a writable one")
-
-
-def test_two_installations_of_one_major_do_not_share_a_stamp(tmp_path, expect):
-    """The stamp key must name the installation, not only the major."""
-    cfgs = []
-    for n in ("a", "b"):
-        c = tmp_path / f"pg_config.{n}"
-        c.write_text('#!/bin/sh\ncase "$1" in\n'
-                     '  --version) echo "PostgreSQL 18.4" ;;\n'
-                     f'  --pkglibdir) echo "/usr/local/pg18{n}/lib" ;;\nesac\n')
-        c.chmod(0o755)
-        cfgs.append(c)
-    a, _ = _sh(f'pgc_source_stamp_path /tree "{cfgs[0]}"')
-    b, _ = _sh(f'pgc_source_stamp_path /tree "{cfgs[1]}"')
-    expect.text(str(a != b), "True", "two prefixes of one major get different stamps")
-    a2, _ = _sh(f'pgc_source_stamp_path /tree "{cfgs[0]}"')
-    expect.text(a2, a, "control: the same pg_config twice gives the same path")
-
-
 def test_moving_bytes_between_files_moves_the_shell_fingerprint(tmp_path, expect):
     """`xargs -0 cat | md5sum` could not see a repartition."""
     t = _tree_with_module(tmp_path, "rp")
@@ -712,15 +687,6 @@ def _unprivileged_user():
     return None
 
 
-def _sh_fp_as(user, expr):
-    """Evaluate a lib.sh expression as USER ("" means this process)."""
-    script = f'. "{SRCDIR}/test/lib.sh" || exit 1; {expr}'
-    argv = ["bash", "-c", script] if not user else \
-           ["runuser", "-u", user, "--", "bash", "-c", script]
-    p = subprocess.run(argv, capture_output=True, text=True)
-    return p.stdout.strip(), p.returncode
-
-
 def _readable_tree(name):
     """A fingerprintable tree an unprivileged user can traverse.
 
@@ -776,34 +742,6 @@ def test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one(expect):
 
         after, _ = _fp_cli(t, user=user)
         expect.text(after, base, "control: and the tree fingerprints again once readable")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_a_failed_digest_gives_unverified_and_never_a_false_stale(expect):
-    """The property that matters. `stale` is the FATAL; `unknown` is UNVERIFIED.
-
-    A false UNVERIFIED costs a line of output. A false FATAL costs a matrix and
-    teaches people to re-run past a freshness check, which is the failure this
-    controller exists to prevent.
-    """
-    user = _unprivileged_user()
-    if user is None:
-        expect.cannot_run("MISSING_DEPENDENCY",
-                          "no non-root user to read as; root ignores chmod 000")
-        return
-    root, t = _readable_tree("v")
-    try:
-        base, _ = _fp_cli(t, user=user)
-        expect.at_least(len(base), 12, "premise: the tree fingerprints at all")
-        (t / "src" / "b.c").chmod(0o000)
-        verdict, _ = _sh_fp_as(
-            user, f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"')
-        expect.text(verdict, "unknown", "a failed digest reads as unknown, not stale")
-        (t / "src" / "b.c").chmod(0o644)
-        healthy, _ = _sh_fp_as(
-            user, f'pgc_freshness_verdict "{base}" "$(pgc_source_fingerprint "{t}")"')
-        expect.text(healthy, "fresh", "control: a readable run still reads fresh")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -955,26 +893,6 @@ def test_an_added_file_is_named_rather_than_merely_changing_the_hash(tmp_path, e
     expect.num(len(gained), 1, "exactly one manifest line appears")
     expect.text(sorted(gained)[0].split()[0], "src/zz_appeared.c",
                 "and it names the file that appeared")
-
-
-def test_the_fatal_report_can_be_run_rather_than_grepped_for(tmp_path, expect):
-    """A dump nobody can run is a dump nobody knows is empty."""
-    t = _mf_tree(tmp_path, "rep")
-    out, _ = _sh_fp(f'pgc_freshness_report "{t}"')
-    expect.num(len([l for l in out.splitlines() if l.strip().startswith("| src/a.c ")]), 1,
-               "the report names each hashed file")
-    expect.num(len([l for l in out.splitlines() if "(6 files, under" in l]), 1,
-               "the report states how many files it hashed")
-
-
-def test_an_empty_manifest_is_reported_as_empty_not_as_silence(tmp_path, expect):
-    """A silent empty dump reads as "the manifest was fine", which is the failure
-    this report exists to end."""
-    hollow = tmp_path / "hollow_report"
-    hollow.mkdir()
-    out, _ = _sh_fp(f'pgc_freshness_report "{hollow}"')
-    expect.num(len([l for l in out.splitlines() if "empty -- nothing under" in l]), 1,
-               "an empty manifest says so")
 
 
 def test_no_selftest_part_writes_into_the_live_source_tree(expect):

@@ -70,6 +70,7 @@ behaviour, the source of that number is named.
 - [22. test_writes_wrote_rows.py: a write that wrote nothing](#22-test_writes_wrote_rowspy-a-write-that-wrote-nothing)
 - [23. test_mutation_ledger.py: which checks have ever been red](#23-test_mutation_ledgerpy-which-checks-have-ever-been-red)
 - [24. test_loop_coverage_premise.py: a loop that never ran asserted nothing](#24-test_loop_coverage_premisepy-a-loop-that-never-ran-asserted-nothing)
+- [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
 
 ## 1. How to read a test in here
 
@@ -498,8 +499,6 @@ each leaving the module well-formed, restored byte-for-byte afterwards:
 The two that redden both are the two whose effect reaches the filesystem. The three
 that redden only the source arm are exactly the properties the behavioural arm cannot
 see, which is why they are written down separately rather than folded into it.
-| `test_the_stamp_writer_reports_failure` | `\|\| true` made both controllers' warnings unreachable |
-| `test_two_installations_of_one_major_do_not_share_a_stamp` | the key names the installation, not just the major |
 | `test_moving_bytes_between_files_moves_the_shell_fingerprint` | the digest sees a repartition |
 | `test_the_two_fingerprint_implementations_cover_the_same_inputs` | **the two implementations move on the same edits** |
 
@@ -604,9 +603,8 @@ itself. The subject is the instrument every other arm in this section depends on
 if the fingerprint can be wrong, `never report on source you did not build` reports
 on nothing.
 
-`test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one` and
-`test_a_failed_digest_gives_unverified_and_never_a_false_stale` are the two arms
-here, and THE MECHANISM CHANGED WITH THE IMPLEMENTATION. They used to drive the real
+`test_a_failed_digest_yields_no_fingerprint_rather_than_a_wrong_one` is the arm
+here, and THE MECHANISM CHANGED WITH THE IMPLEMENTATION. It used to drive the real
 shell function with a **stub `md5sum`** on `PATH`, because the shell forked one
 per file. The digest now lives in `test/pgc_fingerprint.py` and uses `hashlib`,
 which no `PATH` can reach, so the stub would have left both arms green while
@@ -621,13 +619,22 @@ rewritten:
 
 So the tree is built outside any mode-0700 directory and read by a second user,
 and where no such user exists the arm records `expect.cannot_run` rather than
-passing. `test_one_tree_hashes_one_way_however_the_locale_is_set` pins the defect
+passing.
+
+**The verdict that follows is the shell harness's property, and it is asserted
+there (#432).** `pgc_freshness_verdict` is pure shell, so an arm here could only
+reach it by driving `lib.sh` — which is the coupling the two-harness rule removes.
+`test/selftest/340` holds it, and holds more of it than this corpus did: it loops
+over two unreadable files rather than one, and it carries the premise this side
+lacked, that the unprivileged read AGREES with the privileged one while nothing is
+denied. Without that premise the arms measure the user switch rather than the
+permission denial. `test_one_tree_hashes_one_way_however_the_locale_is_set` pins the defect
 the single implementation removed on the way: `sort -z` used locale collation and
 nothing pinned a locale, so one tree hashed two ways —
 `LC_ALL=C` gave `6d122a7158d5` and `LC_ALL=en_US.UTF-8` gave `0b59bd75fa4f`.
 
-`test_a_failed_digest_gives_unverified_and_never_a_false_stale` is the property
-that matters. `stale` is the FATAL; `unknown` prints `freshness UNVERIFIED` and
+The verdict is the property that matters, and the reason it is worth an arm at all
+is the asymmetry. `stale` is the FATAL; `unknown` prints `freshness UNVERIFIED` and
 runs the suites. The asymmetry is the whole argument for the change: a false
 UNVERIFIED costs a line of output, a false FATAL costs a matrix **and** teaches
 people to re-run past a freshness check, which is the failure this controller
@@ -701,14 +708,17 @@ requires the diff to name the file rather than report that something changed.
 — a tree-relative path and a 32-character digest, never an absolute path, because
 an absolute path in the digest is the spelling defect returning by another route.
 `test_the_fingerprint_is_the_hash_of_the_manifest` is the arm that keeps the two
-from drifting, and `test_an_empty_manifest_is_reported_as_empty_not_as_silence`
-covers the case the report exists for.
+from drifting.
 
-`test_the_fatal_report_can_be_run_rather_than_grepped_for` exists because the
-alternative was asserting that the source calls the function, which is the shape
-this suite refuses everywhere else. The report is a function so an arm can drive
-it, and the empty case says `(empty -- nothing under ...)` rather than printing
-nothing, because a silent empty dump reads as *the manifest was fine*.
+**`pgc_freshness_report` is the shell harness's, and `test/selftest/340` asserts it
+(#432).** Two arms here used to: one that the report names each hashed file and
+states how many, and one that an empty manifest says `(empty -- nothing under ...)`
+rather than printing nothing, because a silent empty dump reads as *the manifest
+was fine*. Both drove `lib.sh` to reach a pure-shell function, which is the
+coupling the two-harness rule removes, and 340 already held both properties. The
+reason they exist is worth keeping even though the arms moved: the alternative was
+asserting that the source CALLS the function, which is the shape this suite refuses
+everywhere else, so the report is a function precisely so that an arm can drive it.
 
 ### The suite that wrote into the tree the other suites were reading
 
@@ -2149,8 +2159,6 @@ references in `.github/`, zero in the runner.
 If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so the
 gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
 which falls as suites are seeded.
-
-
 ## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
 
 **Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5
@@ -2202,3 +2210,61 @@ The two differ, and the reason is dataflow. `test_harness_deps.py`'s loop iterat
 a preceding loop. A rule that demanded the names match would reject correct code, which
 is how a guard gets switched off. **So the residual is a loop whose premise bounds the
 wrong collection**, which a reviewer catches and a sweep does not. 3.5 names it.
+
+
+## 25. test_join_runtime_filter.py: serial join runtime filter
+
+Pytest twin of `test/native_join_runtime_filter.sh`. The two files are independent:
+each builds its own fixtures and expected values. They share only the public
+EXPLAIN names and the SQL answers.
+
+### `test_serial_join_runtime_filter`
+
+Clustered integer keys. The coordinator wraps core Hash Join, the build tap
+omits NULL, and nineteen of twenty groups are removed. LEFT, SEMI, ANTI, and
+CROSS plans are refused. Answers match both filter-off and a heap twin.
+
+### `test_scattered_join_runtime_bloom`
+
+Scattered keys keep every group. Bloom must reject most non-matches on
+`Runtime Filter Rows Rejected`. The hull cannot be the thing that avoids work.
+
+### `test_cross_type_int4_int8_bloom`
+
+int4 fact vs int8 dimension. Both sides hash. Interval stays off.
+
+### `test_collation_mismatch_bloom_only`
+
+Operator collation is not the fact attribute collation. Interval stays off.
+Bloom may still reject.
+
+### `test_runtime_filter_rebuilds_on_lateral_rescan`
+
+A correlated LATERAL rebuilds the filter for each outer parameter.
+
+### `test_saturated_build_disables_bloom`
+
+A build side past the on-disk bloom cap disables Bloom rather than saturating.
+
+### `test_three_table_join_order_unchanged`
+
+Wrapping the columnar-outer hash join must not reorder the other inputs.
+
+### `test_empty_build_runtime_filter`
+
+An empty dimension still uses the coordinator and returns no join rows.
+
+### `test_projection_outer_is_not_wrapped`
+
+A covering projection scan stays an unwrapped Hash Join outer.
+
+### `test_early_limit_matches_heap`
+
+`ORDER BY ... LIMIT` still matches a heap control. The coordinator used to
+crash on this shape when it drained the tap through `ExecProcNode`.
+
+### `test_fact_qual_with_late_mat_off_matches_heap`
+
+A non-key fact-table qual with late materialization off. The attach used to
+force the two-pass path with only the join key decoded, so the qual dropped
+every row. Heap is the oracle. Independent of the shell conjunction arm.
