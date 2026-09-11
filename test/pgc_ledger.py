@@ -561,6 +561,41 @@ def cmd_gate(args):
     print(f"  ledger census: rows={len(rows)} | never observed red={never}, "
           f"ever red={len(rows) - never}, new this run={len(unknown)}")
 
+    # THE CENSUS IS COMPARED, NOT ONLY PRINTED (#952). Reporting is not enforcing:
+    # the line above stated the true number while the budget claimed another, and
+    # rc was 0 on a fifteen-row lie.
+    #
+    # DECIDABLE FROM THE TWO INPUTS ALONE. It needs no prior and no `--against`,
+    # which is the whole point: the case it catches is a MERGE COMMIT, where two
+    # PRs each re-derived the census from the same base, the ledger then takes both
+    # sets of rows, and the budget keeps whichever side won the conflict. A check
+    # that needed the prior could not speak about the commit that creates the
+    # disagreement.
+    #
+    # STILL NOT A CEILING, and this does not make it one. A ceiling refuses a RISE,
+    # and bounding this number deadlocks -- every added check enters as `never`, so
+    # landing one would require raising a number the design says may only fall.
+    # That argument is in check_ledger_budget.txt and nothing here changes it. What
+    # is refused is a CONTRADICTION, in either direction, which is what "a
+    # measurement that must be true" means.
+    stated = budget.get("checks_never_observed_red")
+    if stated is None:
+        # Absence is not a contradiction, and a silent skip is not acceptable
+        # either, so it is said out loud. Measured reason for not refusing: every
+        # other gate fixture in both harnesses writes a budget stating only
+        # suites_not_covered. What holds the COMMITTED budget to naming both is a
+        # separate arm in each harness.
+        print("    the budget names no checks_never_observed_red, so nothing asserts "
+              "the census")
+    elif stated != never:
+        print(f"    the budget states checks_never_observed_red {stated}, the ledger "
+              f"holds {never}: these describe the same file and disagree")
+        print("      re-derive it from a run on THIS tree. Arithmetic across merges "
+              "has been right by accident and is not evidence.")
+        rc = 1
+    else:
+        print(f"    census stated {stated}, ledger holds {never}: they agree")
+
     if not args.registered:
         raise LedgerError(
             "--registered is required: without the registered suite list the coverage "

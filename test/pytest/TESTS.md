@@ -1865,10 +1865,23 @@ why new code should use it. The SQL-side sentinel in `test_hilbert_locality.py`
 cannot use it — it is produced by `coalesce(...)` inside the query — and does not need
 to, for the same reason.
 
+**The exclusion is derived from the signature too (#938).** Selection was the only
+rule, so `wrote(cur, want, name)` sat outside because its first parameter is not
+called `got`. That is the right answer for a cursor, and it would also have been the
+answer for a comparison whose first parameter was `left`. Exclusion is now a
+positive match on the kind of the left operand (`cur`, `result`, `plan`, `exc`,
+`reason`), and `inputs == selected + excluded` fails when a method matches neither
+rule. A declared list of method names is not the fix: a new method whose first
+parameter is `cur` is excluded for the same reason `wrote` is.
+
+
 | test | what it asserts | how it could fail |
 | --- | --- | --- |
 | `test_the_comparison_surface_is_what_this_file_thinks_it_is` | the derivation finds the layer's `(got, want)` assertions | a renamed or removed assertion makes the arm below vacuous |
 | `test_the_shape_table_covers_every_comparison_the_layer_offers` | every derived comparison has a declared valid pair | an assertion added to the layer is silently outside the arm below |
+| `test_every_public_assertion_is_selected_or_excluded` | every public Expect method is selected or excluded, with no residue | a method whose first parameter is not `got` lands in neither bucket |
+| `test_wrote_is_excluded_because_its_left_operand_is_a_cursor` | `wrote` is out because the left operand is a cursor | a name-list would exclude it for being called `wrote` |
+| `test_a_caller_supplied_value_not_named_got_fails_the_partition` | a value comparison named `left` is residue, not silently excluded | the hole #938 names: a future assertion not called `got` |
 | `test_every_comparison_refuses_a_failed_query_on_either_side` | each comparison refuses a sentinel on the left and on the right | a comparison that compares instead of refusing; the arm distinguishes "refused" from "failed" |
 | `test_row_set_refuses_before_it_maps_rather_than_after` | `row_set` refuses a sentinel that arrived as a cell | `row_set` reprs its rows before delegating, so a refusal only in `rows` cannot see it |
 | `test_the_producer_is_unique_per_occurrence` | fifty calls are fifty distinct values, all carrying the prefix | a producer that returns a constant, which is what the comment used to claim |
@@ -2160,6 +2173,29 @@ references in `.github/`, zero in the runner.
 If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so the
 gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
 which falls as suites are seeded.
+
+### `test_the_gate_refuses_a_census_that_contradicts_its_own_ledger`
+
+The arm above asserts the two committed files agree. This one asserts the **tool
+refuses a pair that does not** — because the gate printed `ledger census: rows=N`
+and never compared it to the budget's claim, returning 0 on a fifteen-row lie
+(#952). Reporting is not enforcing.
+
+It is decidable from the two inputs alone, with no prior and no `--against`, and
+that is the point rather than an economy. The disagreement is created by a **merge**:
+two PRs each re-derive the census from the same base, the ledger then takes both sets
+of rows, and the budget keeps whichever side won the conflict. A check that needed the
+prior could not speak about the commit that creates the problem. Three PRs in flight
+at once set 769, 762 and 800 from a base of 756, and no two of them composed.
+
+Refused in **both** directions, which is what separates it from a ceiling: a ceiling
+refuses a rise, and bounding this number deadlocks, as `check_ledger_budget.txt`
+argues. Absence of the field is reported rather than refused, because absence is not a
+contradiction — and because every other gate fixture in both harnesses states only
+`suites_not_covered`, so refusing there would redden about twenty arms testing
+something else. What holds the committed budget to naming both numbers is the arm
+above.
+
 ## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
 
 **Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5

@@ -308,6 +308,57 @@ def test_the_committed_ledger_and_budget_agree(expect):
                "and the ceiling matches the suites with no rows")
 
 
+def test_the_gate_refuses_a_census_that_contradicts_its_own_ledger(tmp_path, expect):
+    """#952. The gate PRINTED the census and never compared it, so rc=0 on a lie.
+
+    Reporting is not enforcing. The case this catches is a MERGE, not a PR: two PRs
+    each rewrote the census from the same base, so the composed tree keeps whichever
+    side won the conflict while the ledger takes both sets of rows. Decidable from the
+    two inputs alone -- no prior, no `--against` -- which is exactly why it still
+    refuses on a merge commit, where the prior is the thing in question.
+
+    Refused in BOTH directions. The census is not a ceiling and this does not make it
+    one: a ceiling refuses a rise, and bounding this number deadlocks, as the budget
+    file argues. What is refused here is a contradiction.
+    """
+    ledger = _w(tmp_path, "l.tsv", "")
+    reg = _w(tmp_path, "reg", "demo\n")
+    log = _w(tmp_path, "g.log", GREEN)
+    _run("merge", "--ledger", ledger, "--date", "2026-09-10", log)
+
+    # THE PREMISE, asserted: the numbers below mean nothing unless the ledger really
+    # holds two rows and both are `never`.
+    rows = _rows(ledger)
+    expect.num(len(rows), 2, "premise: the merged ledger holds two rows")
+    expect.num(len([r for r in rows if r[3] == "never"]), 2,
+               "premise: both entered as never, so this ledger's census is 2")
+
+    ok = _w(tmp_path, "ok.txt", "suites_not_covered 0\nchecks_never_observed_red 2\n")
+    out, rc = _run("gate", "--ledger", ledger, "--budget", ok, "--registered", reg, log)
+    expect.num(rc, 0, "a census that matches the ledger passes")
+    expect.num(out.count("census stated 2, ledger holds 2"), 1,
+               "and the agreement is printed, so a reader sees it was compared")
+
+    for claim, why in (("1", "understates"), ("3", "overstates")):
+        b = _w(tmp_path, "b%s.txt" % claim,
+               "suites_not_covered 0\nchecks_never_observed_red %s\n" % claim)
+        out, rc = _run("gate", "--ledger", ledger, "--budget", b, "--registered", reg, log)
+        expect.num(rc, 1, "a census that %s the ledger is refused" % why)
+        expect.num(out.count("checks_never_observed_red %s, the ledger holds 2" % claim), 1,
+                   "and the refusal quotes the claim and the measurement (%s)" % why)
+
+    # ABSENCE IS NOT A MISMATCH, and that is measured rather than preferred: every
+    # other gate fixture here and in selftest 410 writes a budget stating only
+    # `suites_not_covered`, so refusing on absence would redden about twenty arms
+    # testing something else. What stops the COMMITTED budget dropping the field is
+    # the separate arm asserting it names both numbers, in both harnesses.
+    none = _w(tmp_path, "none.txt", "suites_not_covered 0\n")
+    out, rc = _run("gate", "--ledger", ledger, "--budget", none, "--registered", reg, log)
+    expect.num(rc, 0, "a budget stating no census is not refused")
+    expect.num(out.count("names no checks_never_observed_red"), 1,
+               "but the gate says so, so the skip is visible rather than silent")
+
+
 def test_a_log_that_does_not_parse_is_not_evidence(tmp_path, expect):
     """`len(f) >= 5` accepted four shapes the emitter cannot produce.
 

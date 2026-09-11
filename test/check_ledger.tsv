@@ -619,7 +619,11 @@ harness_selftest	400-a-check-result-must-be-machine	the same timing check, ENABL
 harness_selftest	400-a-check-result-must-be-machine	the sweep finds a check inside a PIPED loop	never	-
 harness_selftest	410-a-check-must-have-been-red	--mutation across two failing checks in one run is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	a before-log and an after-log together are refused, not silently empty	never	-
+harness_selftest	410-a-check-must-have-been-red	a budget stating no census is not refused, because absence is not a contradiction	never	-
 harness_selftest	410-a-check-must-have-been-red	a budget that does not exist at the prior is a note, not a refusal	never	-
+harness_selftest	410-a-check-must-have-been-red	a census that matches the ledger passes	never	-
+harness_selftest	410-a-check-must-have-been-red	a census that overstates the ledger is refused too, because this is not a ceiling	never	-
+harness_selftest	410-a-check-must-have-been-red	a census that understates the ledger is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	a check in an UNCOVERED suite is not refused	never	-
 harness_selftest	410-a-check-must-have-been-red	a check merely added is not reported as a rename	never	-
 harness_selftest	410-a-check-must-have-been-red	a check observed red gains the date it was seen	never	-
@@ -675,19 +679,23 @@ harness_selftest	410-a-check-must-have-been-red	and one that stayed green keeps 
 harness_selftest	410-a-check-must-have-been-red	and only when there is a base, so a push build does not fail on it	never	-
 harness_selftest	410-a-check-must-have-been-red	and records neither as ever having been red	never	-
 harness_selftest	410-a-check-must-have-been-red	and the addition in the other part is not called a rename	never	-
+harness_selftest	410-a-check-must-have-been-red	and the census line it always printed is still there	never	-
 harness_selftest	410-a-check-must-have-been-red	and the comparison passes when the ceiling did not rise	never	-
+harness_selftest	410-a-check-must-have-been-red	and the gate prints that it compared them	never	-
 harness_selftest	410-a-check-must-have-been-red	and the history it is about to lose travels with it	never	-
 harness_selftest	410-a-check-must-have-been-red	and the message says how to fix it, because regenerating is the intended action	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names both values	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names how many failed, so the author can narrow the run	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names the check that reddened	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names the raise	never	-
+harness_selftest	410-a-check-must-have-been-red	and the refusal quotes the claim beside the measurement	never	-
 harness_selftest	410-a-check-must-have-been-red	and the runner names no remote at that call site	never	-
 harness_selftest	410-a-check-must-have-been-red	auto refuses when GITHUB_BASE_REF names a ref that is not here	never	-
 harness_selftest	410-a-check-must-have-been-red	auto uses the base ref when it resolves, and names it	never	-
 harness_selftest	410-a-check-must-have-been-red	auto with no base ref and no upstream is an integrity failure	never	-
 harness_selftest	410-a-check-must-have-been-red	both failure arms fail the major	never	-
 harness_selftest	410-a-check-must-have-been-red	but that suite is counted as not covered, which is the debt	never	-
+harness_selftest	410-a-check-must-have-been-red	but the gate says so, so the skip is visible rather than silent	never	-
 harness_selftest	410-a-check-must-have-been-red	control: a well-formed log still merges	never	-
 harness_selftest	410-a-check-must-have-been-red	control: an all-PASS log still merges with no flag at all	never	-
 harness_selftest	410-a-check-must-have-been-red	control: the same log merges with a different reason, so the refusal above is --mutation-across-two-checks and not the log	never	-
@@ -701,9 +709,11 @@ harness_selftest	410-a-check-must-have-been-red	once the suite is covered, a new
 harness_selftest	410-a-check-must-have-been-red	one --mutation cannot be attributed across several runs at once	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: and it is a file git has never seen, which is the case that used to fail open	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: and the nobudget branch does not, which is the bootstrap shape	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: both are never, so this ledger's census is two	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the budget is a tracked file too	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the budget was restored byte-exact	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the check has history before the rename	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the fixture ledger holds two rows	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the fixture log names checks the real ledger already knows	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the gate's status block was found in the runner	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the hasbudget branch carries the budget	never	-
