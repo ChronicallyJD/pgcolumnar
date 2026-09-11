@@ -1,30 +1,47 @@
-# ---- an unrunnable pytest test must not leave the run green ------------------
+# ---- the two harnesses must agree about the third state ----------------------
 #
-# WHY THIS EXISTS. `expect.cannot_run(REASON, detail)` is the pytest corpus's
-# third state, the counterpart of `check_unrunnable` here. It wrote
-# `self.unrunnable` and NOTHING READ IT, so a test that declared itself
-# unrunnable reported `1 passed` and exit 0. Measured, before the fix.
+# WHY THIS EXISTS. `expect.cannot_run(REASON, detail)` in the pytest corpus is the
+# counterpart of `check_unrunnable` here, and the two sides share three things that
+# are WRITTEN DOWN TWICE, once in each language: the INCOMPLETE exit code, the
+# closed list of reasons, and the one-line shape an unrunnable check prints. A
+# value duplicated across a language boundary drifts, and the drift is invisible --
+# the corpus would exit 67, a runner would compare against something else, and an
+# INCOMPLETE run would read as a failure or as a pass depending on which way it
+# moved.
 #
-# That is the write-only-flag shape selftest 320 already polices one level up,
-# where the runner's INCOMPLETE branch set a variable the verdict never read. It
-# mattered more here: a bare `@pytest.mark.skip` FAILS the pytest run, so the
-# layer refused the cheap dishonest escape and permitted the expensive-looking
-# one. An escape hatch that costs nothing is the default.
+# WHAT THIS PART DOES **NOT** DO ANY MORE (#432). It used to also pin the SHAPE of
+# `pgc_vacuity.py`: that the unrunnable field is written, that something reads it,
+# that the read reaches `session.exitstatus`, and that the override is conditional.
+# Eleven arms, every one a text pin on the other harness's source. Those are gone.
+# A shell arm asserting a grep matches cannot prove a python arm is CAUGHT -- #927's
+# precedent -- and the behaviour is pinned where it can actually be observed, by four
+# arms in `test/pytest/test_layer.py` that run pytest inside pytest and assert on the
+# inner run's exit status.
 #
-# WHY THE CHECKS ARE STATIC. The behaviour itself is pinned in the corpus, by
-# four arms in test/pytest/test_layer.py that run pytest inside pytest and assert
-# on the inner run's exit status. Those need pytest, psycopg and a virtualenv;
-# CI installs none of them, and `pgc_skip` treats a missing dependency as a
-# failure rather than a skip. So the behavioural half lives where it can run and
-# this half asserts the STRUCTURE that behaviour rests on, which is greppable
-# from a checkout with nothing installed. Same division as selftest 320's last
-# two arms, which grep the runner for the call and for the absence of the flag.
+# THE OLD REASON FOR KEEPING THEM WAS TRUE AND IS NOT ANY MORE. It said those arms
+# "need pytest, psycopg and a virtualenv; CI installs none of them". CI now has a
+# `pytest-guards` job that installs pytest pinned from `requirements-test.txt`,
+# asserts psycopg is absent, and runs the database-free file list -- which includes
+# `test_layer.py`. So the behavioural half runs in CI and this half is not its last
+# line of defence.
 #
-# THE NUMBER IS THE POINT OF THE FIRST ARM. 67 now lives in two files. A number
-# duplicated across a language boundary is a number that drifts, and the drift
-# is invisible: the corpus would exit 67, the runner would compare against
-# something else, and an INCOMPLETE run would read as a failure or as a pass
-# depending on which way it moved.
+# MEASURED BEFORE DELETING ANYTHING, because "the other side covers it" is a claim.
+# With `session.exitstatus = EXIT_INCOMPLETE` made unreachable in `pgc_vacuity.py`
+# -- the defect exactly as it shipped -- those four arms go from `4 passed` to
+# `2 failed, 2 passed`. Two, not four, and that is correct rather than partial: the
+# other two assert exit 1 for a run with a real failure and exit 0 for a run with
+# nothing unrunnable, and neither of those outcomes moves. The file was restored and
+# compared byte-for-byte afterwards.
+#
+# WHAT IS LEFT IS THE ONE PERMITTED CROSS-REFERENCE, in CONTEXT.md's sense: a
+# property that IS the relationship between the two harnesses and so cannot be
+# expressed from one side. Each of the three agreements below is PARSED OUT OF BOTH
+# FILES rather than written here. A check that restates the value tests this file
+# against itself: both copies could drift together and it would still pass.
+#
+# AND THE LIST AND THE SHAPE ARE NEW. The part checked the exit code only, while
+# two more duplications sat beside it unchecked -- including the reason list, whose
+# whole purpose is to be closed on both sides.
 
 _ts_lib="$PGC_TESTDIR/lib.sh"
 _ts_vac="$PGC_TESTDIR/pytest/pgc_vacuity.py"
@@ -35,9 +52,8 @@ check "premise: the harness library is where this part thinks it is" \
 check "premise: the pytest layer is where this part thinks it is" \
 	"$([ -f "$_ts_vac" ] && echo yes || echo no)" "yes"
 
-# Parsed out of each file rather than written here. A check that restates the
-# number tests this file against itself: both copies could drift together and it
-# would still pass.
+# ---- agreement 1: the INCOMPLETE exit code ----------------------------------
+
 _ts_sh_code="$(sed -n 's/^PGC_EXIT_INCOMPLETE=\([0-9]\{1,\}\).*/\1/p' "$_ts_lib" | head -1)"
 _ts_py_code="$(sed -n 's/^EXIT_INCOMPLETE[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$_ts_vac" | head -1)"
 
@@ -50,102 +66,101 @@ check "premise: the pytest layer states one too" \
 check "the two harnesses agree on the INCOMPLETE exit code" \
 	"$_ts_py_code" "$_ts_sh_code"
 
-# ---- the field must be READ, which is the defect this part is named after ---
+# ---- agreement 2: the closed list of reasons --------------------------------
 #
-# Counted as two populations rather than asserted as a boolean, so the failure
-# says which side is missing.
-_ts_writes="$(grep -c 'self\.unrunnable[[:space:]]*=' "$_ts_vac")"
-_ts_reads="$(grep -c 'rec\.unrunnable' "$_ts_vac")"
+# Sorted, because the two files are free to list them in different orders and an
+# order difference is not a drift. Compared as one string so the failure prints
+# both lists side by side and names which token moved.
 
-check "the layer still writes the unrunnable state" \
-	"$([ "$_ts_writes" -ge 1 ] && echo yes || echo "$_ts_writes")" "yes"
+_ts_sh_reasons="$(sed -n 's/^PGC_UNRUN_REASONS="\([^"]*\)".*/\1/p' "$_ts_lib" \
+	| head -1 | tr ' ' '\n' | grep -E '^[A-Z_]+$' | sort | tr '\n' ' ')"
+_ts_py_reasons="$(sed -n '/^UNRUNNABLE_REASONS = (/,/^)/p' "$_ts_vac" \
+	| grep -oE '"[A-Z_]+"' | tr -d '"' | sort | tr '\n' ' ')"
 
-check "and something READS it, rather than only writing it" \
-	"$([ "$_ts_reads" -ge 1 ] && echo yes || echo "$_ts_reads")" "yes"
+check "premise: lib.sh states a closed list of unrunnable reasons" \
+	"$([ -n "$_ts_sh_reasons" ] && echo yes || echo no)" "yes"
 
-# ---- and the read has to reach the run's exit status ------------------------
+check "premise: the pytest layer states a closed list too" \
+	"$([ -n "$_ts_py_reasons" ] && echo yes || echo no)" "yes"
+
+check "the two harnesses agree on the closed list of unrunnable reasons" \
+	"$_ts_py_reasons" "$_ts_sh_reasons"
+
+# ---- agreement 3: the line an unrunnable check prints -----------------------
 #
-# Reading the field into a list nothing acts on would satisfy the arm above and
-# leave the defect exactly where it was.
-#
-# TWO CORRECTIONS THIS ARM ALREADY NEEDED, both found by running it against a
-# LATER branch rather than by rereading it.
-#
-# `=` MATCHES INSIDE `==`. The first pattern was `exitstatus[[:space:]]*=`, which
-# counted the comparison `if ... session.exitstatus == 0:` as an assignment. A
-# read counted as a write, in the arm whose entire subject is the difference
-# between the two. `[^=]` after the `=` is what separates them.
-#
-# AND THE COUNT IS A FLOOR, NOT AN EQUALITY. Written as "exactly 1", it went red
-# on the next branch in this stack, which adds a second escalation for a
-# different condition -- a legitimate addition reported as a defect. The property
-# is "the read reaches the exit status", so one site satisfies it and two do not
-# make it less true. An equality here is a guard that reddens on growth, and a
-# guard that reddens on growth gets switched off. Measured: 1 site on this
-# branch, 2 on audit/432-pytest-oracles, 0 on the pre-fix layer -- so the floor
-# still fails exactly where it must.
-_ts_assigns="$(grep -c 'session\.exitstatus[[:space:]]*=[^=]' "$_ts_vac")"
-check "the layer ends a session by setting its exit status" \
-	"$([ "$_ts_assigns" -ge 1 ] && echo yes || echo "$_ts_assigns")" "yes"
+# Normalised, not compared raw: one side interpolates `$name` and the other
+# `{nodeid}`, which is a difference between two languages rather than between two
+# behaviours. Every interpolation becomes `%`, so what is compared is the literal
+# text around them -- the part a log reader and `pgc_record` actually see.
 
-# Failure dominates, the same rule lib.sh keeps: a run with a failure AND an
-# unrunnable test is a failure. So the override must be conditional on a
-# currently-clean run. Unconditional, it would MASK failures as INCOMPLETE.
-check "and only ever moves a run off zero, so a failure still dominates" \
-	"$(grep -c 'exitstatus == 0' "$_ts_vac")" "1"
+_ts_shape_of() {	# _ts_shape_of LINE -> the literal text with interpolations as %
+	printf '%s\n' "$1" \
+		| grep -oE 'UNRUN  [^"]*' \
+		| sed -e 's/\$[A-Za-z_][A-Za-z_0-9]*/%/g' -e 's/{[A-Za-z_][A-Za-z_0-9]*}/%/g' \
+		| head -1
+}
 
-# The state says why. A third state that does not name its reason is a skip.
-check "the layer prints the unrunnable reason in lib.sh's shape" \
-	"$(grep -c 'UNRUN.*{reason}' "$_ts_vac")" "1"
+# THE LINE HAS TO BE THE CODE, NOT THE PROSE ABOUT IT. The first version matched
+# `UNRUN  ` anywhere and took `pgc_vacuity.py`'s DOCSTRING, which spells the shape
+# out as `UNRUN  <name>: <REASON>: <detail>` for a reader and then keeps talking --
+# so the arm compared a sentence against a format string and failed. Requiring a
+# quote immediately before the marker selects the quoted string in both languages
+# and excludes the prose, which opens with a backtick. The premise arms below could
+# not have caught this: the sentence is not empty.
+_ts_sh_shape="$(_ts_shape_of "$(grep -m1 '"UNRUN  ' "$_ts_lib")")"
+_ts_py_shape="$(_ts_shape_of "$(grep -m1 '"UNRUN  ' "$_ts_vac")")"
 
-# ---- and these greps must be able to FAIL -----------------------------------
+check "premise: lib.sh prints a line for an unrunnable check" \
+	"$([ -n "$_ts_sh_shape" ] && echo yes || echo no)" "yes"
+
+check "premise: the pytest layer prints one too" \
+	"$([ -n "$_ts_py_shape" ] && echo yes || echo no)" "yes"
+
+check "the two harnesses print an unrunnable check in the same shape" \
+	"$_ts_py_shape" "$_ts_sh_shape"
+
+# ---- and each comparison must be able to FAIL -------------------------------
 #
-# Every arm above passes on a healthy tree, which a grep that matches nothing
-# also does -- against an EMPTY file, `grep -c` returns 0 and every `-ge 1` arm
-# would read "no" while every `-c ... "1"` arm would read 0. Those would be
-# visible. The dangerous case is the opposite: a pattern that is subtly wrong
-# still matching. So the fixtures below are the real code with ONE property
-# removed, and the arms assert the greps notice.
+# Three agreements that pass on a healthy tree, which three comparisons of an
+# empty string against an empty string also do. The premises above refuse the
+# empty case; these fixtures are the drifted case, which is the one that matters,
+# because a reader cannot tell an agreement from a pair of blanks.
 
 _ts_fix="$PGC_WORKDIR/thirdstate"; rm -rf "$_ts_fix"; mkdir -p "$_ts_fix"
 
-# The defect as it shipped: the field is written and never read.
-{
-	printf 'EXIT_INCOMPLETE = 67\n'
-	printf 'class Expect:\n'
-	printf '    def cannot_run(self, reason, detail=""):\n'
-	printf '        self.unrunnable = (reason, detail)\n'
-} > "$_ts_fix/writeonly.py"
-
-check "a write-only unrunnable field is caught" \
-	"$(grep -c 'rec\.unrunnable' "$_ts_fix/writeonly.py")" "0"
-
-check "premise: and that same fixture does show the write, so the arm is not blind" \
-	"$(grep -c 'self\.unrunnable[[:space:]]*=' "$_ts_fix/writeonly.py")" "1"
-
-# The exit code drifted. Both files parse; the values differ.
 printf 'EXIT_INCOMPLETE = 66\n' > "$_ts_fix/drifted.py"
 _ts_drift="$(sed -n 's/^EXIT_INCOMPLETE[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$_ts_fix/drifted.py" | head -1)"
 check "a drifted exit code is visible rather than absorbed" \
 	"$([ "$_ts_drift" = "$_ts_sh_code" ] && echo agrees || echo "differs:$_ts_drift/$_ts_sh_code")" \
 	"differs:66/67"
 
-# An unconditional override, which would mask a failing run as INCOMPLETE.
-printf '    session.exitstatus = EXIT_INCOMPLETE\n' > "$_ts_fix/unconditional.py"
-check "an unconditional exit override is caught by the dominance arm" \
-	"$(grep -c 'exitstatus == 0' "$_ts_fix/unconditional.py")" "0"
+{
+	printf 'UNRUNNABLE_REASONS = (\n'
+	printf '    "MISSING_DEPENDENCY",\n'
+	printf '    "UNSUPPORTED_MAJOR",\n'
+	printf ')\n'
+} > "$_ts_fix/shortlist.py"
+_ts_short="$(sed -n '/^UNRUNNABLE_REASONS = (/,/^)/p' "$_ts_fix/shortlist.py" \
+	| grep -oE '"[A-Z_]+"' | tr -d '"' | sort | tr '\n' ' ')"
+check "a reason dropped from one side only is visible" \
+	"$([ "$_ts_short" = "$_ts_sh_reasons" ] && echo agrees || echo differs)" "differs"
 
-# A file holding ONLY the comparison. Under the first pattern this counted as an
-# assignment, which is the false positive that shipped; under the corrected one it
-# is zero. Without this arm the correction above is itself unproved.
-printf '    if exitstatus == 0 and session.exitstatus == 0:\n' > "$_ts_fix/compare.py"
-check "a comparison on the exit status is not counted as an assignment" \
-	"$(grep -c 'session\.exitstatus[[:space:]]*=[^=]' "$_ts_fix/compare.py")" "0"
+check "premise: and that fixture is a real list rather than an empty parse" \
+	"$(printf '%s' "$_ts_short" | wc -w)" "2"
 
-check "premise: while a real assignment on the same line shape IS counted" \
-	"$(grep -c 'session\.exitstatus[[:space:]]*=[^=]' "$_ts_fix/unconditional.py")" "1"
+# Two spaces after UNRUN, as the real shape has: the drift under test is the lost
+# colons, not a lost space. The first fixture wrote ONE space, so the parse found
+# nothing and the comparison was empty-against-real -- which "differs", for the
+# wrong reason. Its own premise arm caught that, which is what the premise is for.
+printf '    terminalreporter.write_line(f"UNRUN  {nodeid} {reason} {detail}")\n' \
+	> "$_ts_fix/drifted_shape.py"
+_ts_shape_drift="$(_ts_shape_of "$(grep -m1 '"UNRUN  ' "$_ts_fix/drifted_shape.py")")"
+check "a drifted print shape is visible" \
+	"$([ "$_ts_shape_drift" = "$_ts_sh_shape" ] && echo agrees || echo differs)" "differs"
 
-check "premise: while the real layer satisfies that same arm" \
-	"$(grep -c 'exitstatus == 0' "$_ts_vac")" "1"
+check "premise: and that fixture parses to a shape rather than to nothing" \
+	"$([ -n "$_ts_shape_drift" ] && echo yes || echo no)" "yes"
 
-unset _ts_lib _ts_vac _ts_sh_code _ts_py_code _ts_writes _ts_reads _ts_fix _ts_drift _ts_assigns
+unset _ts_lib _ts_vac _ts_sh_code _ts_py_code _ts_sh_reasons _ts_py_reasons \
+	_ts_sh_shape _ts_py_shape _ts_fix _ts_drift _ts_short _ts_shape_drift
+unset -f _ts_shape_of

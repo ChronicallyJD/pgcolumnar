@@ -408,109 +408,39 @@ harness_selftest	340-the-binary-must-be-built-from	the stamp writer reports fail
 harness_selftest	340-the-binary-must-be-built-from	the writer writes the file the reader looks for	never	-
 harness_selftest	340-the-binary-must-be-built-from	two installations of one major get different stamp paths	never	-
 harness_selftest	340-the-binary-must-be-built-from	two unreadable pg_configs do not alias onto one stamp	never	-
-harness_selftest	350-the-pytest-corpus-must-be	README.md quotes the number of modes the inventory names as refused	never	-
-harness_selftest	350-the-pytest-corpus-must-be	TESTS.md states no totals line for a merge to get wrong	never	-
-harness_selftest	350-the-pytest-corpus-must-be	TESTS.md states the counted number as well	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a documented file that does not exist is named	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a documented test that does not exist is named, not passed over	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a name defined in two files is named, not passed over	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a prose total that disagrees with the ids is visible	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a stated total that disagrees with disk is visible	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a stated total that disagrees with the ids is visible	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an absent prose total is empty rather than a stray number	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an absent total is empty rather than a number that happens to match	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an anchor that strips the underscores is named, not passed over	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an id named twice counts once	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an id of fewer than three words is not counted as a mode	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an unbackticked name in prose is not treated as a claim	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an undocumented file is caught along with the tests inside it	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an undocumented test is named rather than passed over	never	-
 harness_selftest	350-the-pytest-corpus-must-be	and derives the pins from requirements-test.txt	never	-
 harness_selftest	350-the-pytest-corpus-must-be	and it derives the file list rather than repeating it	never	-
-harness_selftest	350-the-pytest-corpus-must-be	and the same comparison agrees on the fixture that is right	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: a document naming only what exists is clean	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: a fully documented corpus reports nothing missing	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: an anchor that keeps the underscores resolves	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: distinct names in the same corpus report no duplicate	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every in-document link in README.md reaches a heading	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every in-document link in TESTS.md reaches a heading	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every in-document link in VACUITY_MODES.md reaches a heading	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every test file and every test in the corpus is named in TESTS.md	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every test the document names exists in the corpus	never	-
-harness_selftest	350-the-pytest-corpus-must-be	no test name is defined twice in the corpus	never	-
+harness_selftest	350-the-pytest-corpus-must-be	and the job asserts the driver is absent rather than assuming it	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the CI workflow is where this part thinks it is	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the corpus carries the documentation this part polices	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the counting rule finds modes at all	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the link sweep saw the directory's documents	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the mode inventory is where this part thinks it is	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the pytest corpus is where this part thinks it is	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the reader still finds a totals line when one is there	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the reverse sweep reads backticked names at all	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the sweep found the corpus rather than an empty glob	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the sweep reads the contents list's links	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 1a's document total is the sum of its two sections	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 1a's not-refused total is the count of ids in section 3	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 1a's refused total is the count of ids in section 2	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 2's opening states the counted number of refused modes	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the admitted gap is the run total minus what is written down	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the anchor rule drops punctuation and keeps underscores	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the closing paragraph states the counted number too	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the counter counts a fixture's section 2	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the counter counts a fixture's section 3	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the counter stops at the next heading	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the gate runs the harness guards	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the row's value is read, not a digit inside its label	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the sweep counts the fixture's tests and files	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	a comparison on the exit status is not counted as an assignment	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	a drifted exit code is visible rather than absorbed	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	a write-only unrunnable field is caught	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	an unconditional exit override is caught by the dominance arm	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	and only ever moves a run off zero, so a failure still dominates	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	and something READS it, rather than only writing it	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	premise: and that same fixture does show the write, so the arm is not blind	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	a drifted print shape is visible	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	a reason dropped from one side only is visible	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: and that fixture is a real list rather than an empty parse	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: and that fixture parses to a shape rather than to nothing	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: lib.sh prints a line for an unrunnable check	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: lib.sh states a closed list of unrunnable reasons	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: lib.sh states an INCOMPLETE exit code this part could read	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: the harness library is where this part thinks it is	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer is where this part thinks it is	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer prints one too	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer states a closed list too	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer states one too	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	premise: while a real assignment on the same line shape IS counted	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	premise: while the real layer satisfies that same arm	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	the layer ends a session by setting its exit status	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	the layer prints the unrunnable reason in lib.sh's shape	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	the layer still writes the unrunnable state	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses agree on the INCOMPLETE exit code	never	-
-harness_selftest	370-the-plan-marker-guard-must	a neutered absent arm is caught	never	-
-harness_selftest	370-the-plan-marker-guard-must	a neutered empty-plan refusal is caught	never	-
-harness_selftest	370-the-plan-marker-guard-must	a neutered present arm is caught	never	-
-harness_selftest	370-the-plan-marker-guard-must	and that refusal is a VacuityError, not an ordinary assertion	never	-
-harness_selftest	370-the-plan-marker-guard-must	plan_marker keeps the arm that fails when the key is absent	never	-
-harness_selftest	370-the-plan-marker-guard-must	plan_marker keeps the arm that fails when the key is present	never	-
-harness_selftest	370-the-plan-marker-guard-must	plan_marker refuses a plan with no nodes at all	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: both line numbers were found, so the ordering arm can mean something	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: plan_marker's body was actually cut out of the file	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: the pytest layer is where this part thinks it is	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: while the real body satisfies all three, so the greps work	never	-
-harness_selftest	370-the-plan-marker-guard-must	the empty-plan refusal precedes the arm it protects	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses agree on the closed list of unrunnable reasons	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses print an unrunnable check in the same shape	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a caller that reimplements the digest is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a fingerprint that reads src only is caught	never	-
-harness_selftest	380-the-pytest-cluster-helpers	a make_cluster with no cleanup is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	an import from the pytest tree is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and a hard-coded module list is caught by the name arm	never	-
-harness_selftest	380-the-pytest-cluster-helpers	and it catches BaseException, so an interrupt cleans up too	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and it names no module directory, so it is a derivation and not a list	never	-
-harness_selftest	380-the-pytest-cluster-helpers	and it stops a partially started cluster before removing the tree	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and no longer mixes in the bare filename	never	-
-harness_selftest	380-the-pytest-cluster-helpers	and the original error is re-raised rather than swallowed	never	-
 harness_selftest	380-the-pytest-cluster-helpers	and the shell keeps none either	never	-
-harness_selftest	380-the-pytest-cluster-helpers	make_cluster removes its tree when setup raises	never	-
-harness_selftest	380-the-pytest-cluster-helpers	premise: and the real helper still carries its cleanup	never	-
-harness_selftest	380-the-pytest-cluster-helpers	premise: make_cluster's body was actually cut out of the file	never	-
 harness_selftest	380-the-pytest-cluster-helpers	premise: the one fingerprint implementation is where this part thinks it is	never	-
-harness_selftest	380-the-pytest-cluster-helpers	premise: the pytest cluster helper is where this part thinks it is	never	-
 harness_selftest	380-the-pytest-cluster-helpers	premise: while the real module satisfies the derivation arm	never	-
 harness_selftest	380-the-pytest-cluster-helpers	the fingerprint derives its build directories from a Makefile on disk	never	-
 harness_selftest	380-the-pytest-cluster-helpers	the hash mixes in each file's path relative to the tree, not its name	never	-
 harness_selftest	380-the-pytest-cluster-helpers	the module imports nothing from the pytest tree	never	-
-harness_selftest	380-the-pytest-cluster-helpers	the pytest helper keeps no private fingerprint implementation	never	-
 harness_selftest	390-a-registered-suite-must-account	a NEW unaccounted suite fails even while the known debt is excused	never	-
 harness_selftest	390-a-registered-suite-must-account	a comment mentioning pgc_summary is not a declaration	never	-
 harness_selftest	390-a-registered-suite-must-account	a declared suite that produced no accounting is caught	never	-

@@ -211,19 +211,82 @@ for it to stop being one.
 
 **The debt this starts with, on 2026-09-10: 3 python files and 7 shell files.**
 
+**Progress, 2026-09-11.** The fourth never arrived: #923 deleted
+`test_check_results_are_machine_readable.py` rather than land a fresh violation. And
+`test_build_refusal.py` is down from 36 cross-harness calls to 13, of which 7 are the
+debt proper, 2 are the permitted cross-reference below, and 2 are one historical-parity
+arm. **Counted by mechanism rather than by line, because a line total moves with the
+pattern:** the real executable coupling across the whole corpus was six sites in three
+files -- `pgc_cluster.py` once, `test_build_refusal.py` three times, and
+`test_suite_accounting.py` twice -- and the two `lib.sh` writes in
+`test_build_refusal.py` are fake trees under `tmp_path`, rule 2, not references.
+
 Python that reaches into shell:
 
-- `test_build_refusal.py` -- sources the real `test/lib.sh` in three helpers
-  (`_sh`, `_sh_fp`, `_sh_fp_as`), behind 36 calls. The largest of these. Counted
-  with `ast`, not `grep`: the pattern `[^_a-z]_sh(` also matches `def _sh(`, which
-  is how the first draft said 39 -- 36 calls plus the 3 definitions. Reported by
-  @OffgridwithJD. Rule 3 above, caught in the very entry that states it.
+- `test_build_refusal.py` -- **reduced, not cleared.** It sourced the real
+  `test/lib.sh` in three helpers (`_sh`, `_sh_fp`, `_sh_fp_as`) behind 36 calls and
+  was the largest item here. Counted with `ast`, not `grep`: the pattern
+  `[^_a-z]_sh(` also matches `def _sh(`, which is how the first draft said 39 -- 36
+  calls plus the 3 definitions. Reported by @OffgridwithJD. Rule 3 above, caught in
+  the very entry that states it.
+
+  **22 of those calls are gone.** Their subject was `test/pgc_fingerprint.py`, the ONE
+  implementation since #907, and `pgc_source_fingerprint` and `pgc_source_manifest`
+  are thin wrappers that shell out to exactly it -- so the path was
+  python -> bash -> lib.sh -> python3 -> the module, and removing the middle two
+  changed no subject. Measured before converting anything: byte-identical
+  fingerprint, identical manifest line for line, and agreement across LC_ALL=C,
+  C.UTF-8 and en_US.UTF-8. Two of them needed a separate process rather than an
+  in-process call -- one reads as an unprivileged user because root ignores
+  `chmod 000`, one varies the locale -- and both use the module's own CLI, which is
+  the entry point lib.sh uses with lib.sh taken out of the path.
+
+  **13 calls remain, in three groups, and only the first is debt.** Seven drive
+  `pgc_write_source_stamp`, `pgc_source_stamp_path`, `pgc_freshness_report` and
+  `pgc_freshness_verdict`, which are PURE SHELL rather than wrappers over shared
+  code: those properties belong to the shell harness and moving them is the next
+  step. Two are `test_the_two_fingerprint_implementations_cover_the_same_inputs`,
+  which reaches across on purpose -- see below. The last two are a historical-parity
+  arm whose fixture is its own, bar one call for a directory list.
+
+- **The one permitted cross-reference, named as the rule asks.**
+  `test_the_two_fingerprint_implementations_cover_the_same_inputs` asserts that the
+  shell path and the Python path give the same value, which is to say that neither
+  side carries a private copy. That property IS the relationship, so it cannot be
+  expressed from one side: the rule's own escape clause -- "say which, and say why"
+  -- applies, and this is the saying. It caught four defects in one day (#907), and
+  it is what reddens on the FIRST edit if a private implementation comes back rather
+  than on the first edit that happens to diverge. Every other reference in this
+  inventory is expected to go; this one is expected to stay.
 - `test_suite_accounting.py` -- reads `run_all_versions.sh`'s text, sources the
   real `lib.sh` from a suite it writes, and executes the real runner.
 - `pgc_cluster.py` -- sources the real `test/lib.sh`.
+- `test_mutation_ledger.py` -- runs `run_all_versions.sh --list-suites` for the
+  registered suite list. It **arrived after this inventory was written**, with #925,
+  and the arm below is what said so: the set-equality assertion reddened on the
+  rebase naming a fourth file, which is the whole reason the inventory is a mechanism
+  and not this paragraph. Same mechanism as `test_suite_accounting.py`, so it is the
+  same item of debt twice and they should move together.
 
-Shell whose subject is python: `lib.sh`, and `selftest/030`, `040`, `350`, `360`,
-`370`, `380`.
+Shell whose subject is python: `selftest/350`, `360` and `380`. **Three, not the
+seven this line first named, and the three it dropped were rule 3 all along.**
+`lib.sh`, `selftest/030` and `selftest/040` reference NO path under `test/pytest`:
+their only matches were the shell functions `pgc_cluster_datadir` and
+`pgc_cluster_is_ours`, both defined in `lib.sh` itself -- "a word that merely looks
+like a filename", caught for the second time in the entry that states the rule.
+`selftest/370` was the fourth and is **deleted**: every property it pinned was a text
+pin on `pgc_vacuity.py`, and #927 is the precedent -- a shell arm asserting a text pin
+cannot prove a python arm is caught. Its one property that the pytest corpus did not
+already assert behaviourally moved to `test_guards_pinned.py`, where python reads its
+own module rather than the other harness's.
+
+**And that property is not behaviourally observable today, which is why it moved as a
+SOURCE check and says so.** Measured: with `plan_marker`'s empty-plan refusal moved to
+the very end of the function, `plan_marker([], absent=True)` still refuses --
+`plan_marker` has no early return, so the refusal fires wherever it sits. 370's stated
+reason, that "the absent arm returns a pass first", describes a shape the function does
+not have. The arm is prospective insurance against a refactor that adds an early return,
+and it is labelled as that rather than as a live guard.
 
 **`test_build_refusal.py` is the example worth studying, because it does both.**
 It writes a fake `test/lib.sh` into a `tmp_path` and drives that -- rule 2, not a

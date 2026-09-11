@@ -871,3 +871,143 @@ def test_the_job_installs_no_database_driver(expect):
 
 if __name__ == "__main__":
     sys.exit(_main(sys.argv[1:]))
+
+# ---- the harness-independence inventory, as a mechanism (#432) ------------------
+#
+# CONTEXT.md: the two harnesses are parallel in functionality and independent in
+# implementation, and they must not call, import or reference each other. Its inventory
+# of what still does was PROSE -- falsifiable by hand, but nothing reddened when a new
+# reference appeared. #923 nearly landed a fourth coupled file, and the review that
+# caught it was a person reading, not an arm.
+#
+# So the inventory is declared here and asserted in BOTH directions. A new file that
+# reaches into the shell harness reddens this; a file that stops reaching and is not
+# removed from the declaration reddens it too, which is what stops the list rotting
+# into a permanent exemption.
+#
+# A FILE-LEVEL GUARD, which is what CONTEXT.md's rule asks for -- "count files, not
+# lines" -- and also the most this can honestly be. Within a flagged file it cannot tell
+# a path joined onto the REAL tree from the same name joined onto a `tmp_path`: both are
+# the string "lib.sh" and only the dataflow says which. test_build_refusal.py contains
+# both, and CONTEXT.md already records that the fake ones are rule 2 rather than
+# references. So the assertion is over the SET OF FILES, and the per-file entry carries
+# the mechanism a reader needs to check it by hand.
+#
+# THE COUNTING RULE IS CONTEXT.md'S, and the three exclusions are the ones it names,
+# in the order it says they get confused: prose is not a reference, a file the test
+# BUILDS ITSELF under tmp_path is not a reference even with the same name, and a word
+# that merely looks like a filename is not one. Docstrings are dropped by AST position
+# rather than by pattern, which is the only way to tell the first from a string the
+# code actually passes to bash.
+
+# THE DESCRIPTIONS NAME NO FILE, and that is not squeamishness: the first version
+# spelled the helper library's path in them, and the detector flagged THIS file for its
+# own inventory -- four files where the tree has three. The mechanism is what the entry
+# has to carry; the filenames are in CONTEXT.md, which is prose and may name anything.
+SHELL_REFERENCES = {
+    "pgc_cluster.py":
+        "sources the shell harness's helper library to call its build-and-install "
+        "function, so the build refusal has one implementation rather than two",
+    "test_build_refusal.py":
+        "sources that library for the pure-shell stamp and freshness helpers, and "
+        "for the one permitted cross-implementation arm; see its module docstring",
+    "test_suite_accounting.py":
+        "reads the matrix runner's text and executes the real runner",
+    "test_mutation_ledger.py":
+        "executes the matrix runner with its list flag to get the registered suite "
+        "list, which is the same mechanism the entry above uses",
+}
+
+_SHELL_NAMES = re.compile(
+    r"(^|/)(lib\.sh|run_all_versions\.sh|portlib\.sh|harness_selftest\.sh)"
+    r"|(^|/)test/[A-Za-z0-9_]+\.sh"
+    r"|(^|/)selftest/")
+
+
+def _docstring_nodes(tree):
+    """Every Constant that is a docstring, by position rather than by content."""
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) \
+                    and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                out.add(id(body[0].value))
+    return out
+
+
+def _shell_reference_sites(source):
+    """-> [(lineno, text)] for executable strings naming a shell file in this tree.
+
+    An f-string's PIECES are Constants of their own, so counting both the JoinedStr and
+    its parts reported one reference as two. Measured: the fixture below asserted 1 and
+    the first version answered 2.
+    """
+    tree = ast.parse(source)
+    skip = _docstring_nodes(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            for piece in node.values:
+                if isinstance(piece, ast.Constant):
+                    skip.add(id(piece))
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in skip:
+                continue
+            if _SHELL_NAMES.search(node.value):
+                hits.append((node.lineno, node.value[:60]))
+        elif isinstance(node, ast.JoinedStr):
+            txt = "".join(v.value for v in node.values
+                          if isinstance(v, ast.Constant) and isinstance(v.value, str))
+            if _SHELL_NAMES.search(txt):
+                hits.append((node.lineno, txt[:60]))
+    return sorted(set(hits))
+
+
+# THE FIXTURES ARE ASSEMBLED, never written out, and the first version of this arm got
+# that wrong: spelling the shell file's name in its own test data made THIS FILE a
+# referencing file, and the inventory arm below reported four files where the tree has
+# three. A scan flagging its own fixtures is the third time that shape has cost me a
+# measurement today, so the name is built from fragments no single string contains.
+_LIB = "test/" + "lib" + ".sh"
+
+
+def test_the_shell_reference_detector_sees_code_and_not_prose(expect):
+    """The premise, and the distinction the whole arm below rests on."""
+    expect.num(len(_shell_reference_sites(
+        'def f():\n    """This drives ' + _LIB + ' and says so."""\n    return 1\n')), 0,
+        "a docstring naming a shell file is prose, not a reference")
+    expect.num(len(_shell_reference_sites(
+        'import subprocess\nsubprocess.run(["bash", "-c", ". ' + _LIB + '"])\n')), 1,
+        "a string the code passes to bash is a reference")
+    expect.num(len(_shell_reference_sites(
+        'srcdir = "/x"\nscript = f\'. "{srcdir}/' + _LIB + '" || exit 1\'\n')), 1,
+        "and so is one built with an f-string, counted ONCE rather than per piece")
+    expect.num(len(_shell_reference_sites('sharedir = "/usr/share"\n')), 0,
+        "a word that merely looks like a path is not a reference")
+
+
+def test_the_harness_independence_inventory_is_exactly_what_the_corpus_does(expect):
+    """CONTEXT.md's inventory, asserted in both directions.
+
+    A file that starts reaching into the shell harness reddens this. A file that stops
+    and is left in the declaration reddens it too -- otherwise the list becomes a
+    permanent exemption that outlives the coupling it was written for, which is how
+    every hand-maintained exempt list in this tree has gone wrong.
+    """
+    here = pathlib.Path(__file__).parent
+    files = sorted(here.glob("*.py"))
+    expect.at_least(len(files), 10, "premise: the scan has a corpus to read")
+    found = {}
+    for f in files:
+        sites = _shell_reference_sites(f.read_text(encoding="utf-8"))
+        if sites:
+            found[f.name] = sites
+    expect.text(repr(sorted(found)), repr(sorted(SHELL_REFERENCES)),
+                "the files that reach into the shell harness are exactly the declared ones")
+    for name in sorted(found):
+        expect.at_least(len(SHELL_REFERENCES.get(name, "")), 20,
+                        f"{name}'s entry says by what mechanism it reaches across")

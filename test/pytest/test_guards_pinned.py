@@ -292,3 +292,47 @@ def test_ordering_observable_both_empty_names_its_own_refusal(pytester, expect):
             expect.ordering_observable([], [], "no rows either way")
         '''), "ordering_observable names its own both-empty refusal",
                    "both directions are empty")
+
+# ---- plan_marker's refusal must stay ahead of the arms it protects --------------
+#
+# MOVED HERE FROM test/selftest/370 (#432). That part read `pgc_vacuity.py`'s TEXT from
+# the shell harness, which is the coupling CONTEXT.md's independence rule forbids: a
+# shell arm asserting a text pin cannot prove a python arm is caught, which is why #927
+# deleted the part whose subject was a python module's source rather than repairing it.
+# Python reading its OWN module is not a cross-harness reference -- it is one harness
+# checking itself -- so the property keeps its home and loses the boundary crossing.
+#
+# IT IS A SOURCE CHECK BECAUSE THE ORDERING IS NOT OBSERVABLE TODAY, and that is worth
+# stating rather than implying. Measured: with the refusal moved to the very END of
+# `plan_marker`, `plan_marker([], absent=True)` STILL refuses. `plan_marker` has no early
+# return -- the passing case falls off the end -- so the refusal fires wherever it sits,
+# and no input distinguishes the orders.
+#
+# 370's stated reason was that "an empty plan leaves found=False and the absent arm
+# returns a pass first". The absent arm does not return; it falls through. So the defect
+# that comment describes cannot arise in this shape, and the behavioural arm above
+# (`test_plan_marker_refuses_an_absence_claim_over_an_empty_plan`) does not redden when
+# the order changes -- I checked, expecting it to, and it did not.
+#
+# The arm is therefore PROSPECTIVE: it is insurance against a refactor that adds an early
+# return, after which the order would decide whether an empty plan passes. That is a real
+# risk and cheap to pin, but it is a claim about source order and it says so.
+
+
+def test_the_empty_plan_refusal_precedes_the_arms_it_protects(expect):
+    """The refusal must sit before the arms, so a future early return cannot skip it."""
+    import inspect
+
+    # THE CLASS COMES OFF THE FIXTURE, so this file still imports nothing: the
+    # `expect` object IS an instance of the layer being read.
+    body = inspect.getsource(type(expect).plan_marker)
+    lines = body.split("\n")
+    i_refusal = next((n for n, l in enumerate(lines) if "if not nodes:" in l), None)
+    i_absent = next((n for n, l in enumerate(lines) if "if absent and found:" in l), None)
+    i_present = next((n for n, l in enumerate(lines)
+                      if "if not absent and not found:" in l), None)
+    expect.text(f"{i_refusal is not None} {i_absent is not None} {i_present is not None}",
+                "True True True",
+                "premise: all three were found, so the ordering can mean something")
+    expect.num(int(i_refusal < i_absent and i_refusal < i_present), 1,
+               "the empty-plan refusal precedes both arms it protects")

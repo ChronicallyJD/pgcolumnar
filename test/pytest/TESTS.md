@@ -324,6 +324,7 @@ as the failure.
 | `test_plan_marker_absent_arm_passes_on_a_plan_that_lacks_the_key` | **control** |
 | `test_plan_marker_refuses_an_absence_claim_over_an_empty_plan` | the hole under both arms |
 | `test_refusal_itself_refuses_an_empty_pattern_list` | the new helper must not become the defect it removes |
+| `test_the_empty_plan_refusal_precedes_the_arms_it_protects` | the refusal's **position**: no arm may answer ahead of it |
 
 ### plan_marker, and the three ways it could not fail
 
@@ -343,6 +344,23 @@ exit 0, because a plan that never arrived looks exactly like a plan that
 legitimately lacks the node. That is now a `VacuityError`, and it is refused for
 the present arm too — an empty plan means the `EXPLAIN` did not arrive, so
 neither question can be answered.
+
+**The empty-plan refusal is pinned by position, not only by behaviour.** A guard
+that sits after the code it protects is a guard that never runs. So one arm reads
+`plan_marker`'s own source and asserts the empty-plan refusal comes before both
+arms. Two measurements say what that arm is worth today:
+
+- Move the refusal to the end of the function and the arm fails; leave it where it
+  is and it passes. It discriminates.
+- With the refusal moved to the end, `plan_marker([], absent=True)` **still
+  refuses**, because `plan_marker` has no early return for the absent arm. So the
+  order is not load-bearing right now.
+
+It is therefore prospective insurance: the day someone adds an early return, the
+refusal stops being reachable and this arm is the only thing that says so. The
+check was a shell part (`test/selftest/370`) until the two harnesses were
+separated; a shell part can pin the text of a Python function but cannot run it,
+so the arm moved here and 370 was deleted.
 
 The four arm tests are behavioural rather than refusals, because `plan_marker`'s
 two arms raise `AssertionError`: `expect.refusal` does not apply and
@@ -448,6 +466,37 @@ is where a wrong quote would hide.
 | `test_the_fingerprint_covers_a_separately_built_module` | an `objstore/` edit moves the hash |
 | `test_an_objstore_edit_forces_a_second_build` | and forces a rebuild, end to end |
 | `test_make_cluster_leaves_nothing_behind_when_setup_fails` | a failed setup leaks no directory |
+| `test_the_cleanup_guard_has_the_shape_the_leak_needs` | **source check**: the guard catches `BaseException`, stops the cluster, removes the tree, and re-raises |
+| `test_this_module_keeps_no_private_fingerprint` | **source check**: no second digest implementation in this caller |
+
+**Two of these are SOURCE checks, and they say so.** `test_make_cluster_leaves_nothing_behind_when_setup_fails`
+provokes a real failed setup and asserts no directory is left; that is the property.
+But `make_cluster` fails exactly one way in that arm — a missing `pg_config` — while
+three more properties decide whether the guard works at all: it must survive a
+`KeyboardInterrupt`, stop a postmaster it already started, and re-raise rather than
+return `None`. Two of those cannot be provoked from a test (you cannot deliver SIGINT
+into `initdb` reliably, and a cluster that started is one the arm would then have to
+stop), so they are read off `inspect.getsource(make_cluster)` instead.
+
+They arrived from `test/selftest/380`, which read this file as text across the harness
+boundary. Reading our own module is not a cross-harness reference; a shell part
+grepping it is the thing CONTEXT.md refuses. What the shell part could never do is the
+behavioural arm above it.
+
+Five mutations say the source arms discriminate, each asserted to have applied and
+each leaving the module well-formed, restored byte-for-byte afterwards:
+
+| mutation of `pgc_cluster.py` | what reddens |
+| --- | --- |
+| `except BaseException:` narrowed to `except Exception:` | the source arm |
+| `cluster.stop()` removed | the source arm |
+| the bare `raise` turned into `pass` | the source arm **and** the behavioural one |
+| a private `hashlib.md5` added | the no-private-digest arm |
+| `shutil.rmtree(root, …)` removed | the source arm **and** the behavioural one |
+
+The two that redden both are the two whose effect reaches the filesystem. The three
+that redden only the source arm are exactly the properties the behavioural arm cannot
+see, which is why they are written down separately rather than folded into it.
 | `test_the_stamp_writer_reports_failure` | `\|\| true` made both controllers' warnings unreachable |
 | `test_two_installations_of_one_major_do_not_share_a_stamp` | the key names the installation, not just the major |
 | `test_moving_bytes_between_files_moves_the_shell_fingerprint` | the digest sees a repartition |
@@ -782,6 +831,15 @@ many times.
 | `test_an_undocumented_file_is_caught_with_the_tests_inside_it` | how 29 tests went missing at once |
 | `test_a_document_with_no_totals_line_states_none` | absent totals report `None`, which must not read as "they match" |
 | `test_a_stated_total_that_disagrees_with_disk_is_visible` | the count arm's own red |
+| `test_the_counting_rule_counts_a_fixture_as_the_document_says` | the mode rule, on a fixture: deduplicated, and section 3 minus its back-references |
+| `test_an_id_of_fewer_than_three_words_is_not_a_mode` | the rule is three words, so `one-two` in prose is not a mode |
+| `test_the_counter_stops_at_the_next_heading` | section 2's count must not reach into section 4 |
+| `test_the_row_reader_takes_the_value_not_a_digit_in_the_label` | the labels contain digits; reading the first number returns the 2 from "section 2" |
+| `test_an_absent_row_is_none_rather_than_a_number_that_happens_to_match` | a missing row must not read as a row stating zero |
+| `test_a_stated_total_that_disagrees_with_the_ids_is_visible` | the inventory arm's own red, with the agreeing control beside it |
+| `test_the_anchor_rule_drops_punctuation_and_keeps_underscores` | GitHub's derivation, on the heading the defect was found in |
+| `test_an_anchor_that_strips_the_underscores_is_caught` | the exact broken link that shipped, with a control |
+| `test_every_in_document_link_in_this_directory_reaches_a_heading` | every contents-list link resolves, with a coverage premise |
 
 The five fixture arms exist because everything above them passes on a healthy tree,
 which is exactly what a guard that does nothing also does. They run the identical
@@ -789,20 +847,26 @@ functions over a corpus built to be wrong.
 
 ### The twin, and which half has teeth
 
-This is the pytest half. The other half is
-`test/selftest/350-the-pytest-corpus-must-be.sh`, and the two are **not**
-interchangeable:
+**This section said "Nothing runs pytest. Not `run_all_versions.sh`, not any
+workflow under `.github/`", and that is no longer true.** CI has a `pytest-guards`
+job: it installs pytest pinned from `requirements-test.txt`, asserts `psycopg` is
+absent, derives the file list from `NO_CLUSTER` in `test_harness_deps.py`, and runs
+it. This file is in that list. So a guard written only here DOES fire in the gate,
+and the argument that made the `.sh` half the enforcement has gone.
 
-- **The `.sh` half is the one that gates.** `harness_selftest` is registered in
-  `SUITES`, so it runs in the matrix and in CI.
-- **Nothing runs pytest.** Not `run_all_versions.sh`, not any workflow under
-  `.github/`. A guard written only here would never fire in the gate, and a guard
-  that does not run is a comment.
+That argument was load-bearing, and it was stale in three places at once — here,
+in `test/selftest/360`, and in `test/selftest/380` — each saying the behavioural
+half could not run in CI. **A stale justification for keeping coverage in the wrong
+place is harder to find than a missing check, because nothing reddens.** Nothing
+was wrong; the reason was.
 
-So the `.sh` copy is the enforcement and this one is what a person running the
-corpus by hand gets, with the offenders arriving as a Python list rather than as a
-string assembled by shell. Both are written in the same change, per the rule in
-section 9.
+So the duplication is being removed in the direction the two-harness rule requires
+(#432). `test/selftest/350`'s arms over this corpus and over this directory's
+documents are the ones that had to read across the boundary, and they are gone; the
+properties they held that this file did not yet test — the mode-counting rule's
+edges and the contents-list anchor rule — moved here, where their subject is. What
+stays in `350` is its arms over `ci.yml`, whose subject is the workflow rather than
+either harness.
 
 This guard reddened on its own arrival, which is the only reason it is known to
 work here: adding this file moved the corpus from `(54, 5)` to `(62, 6)` and the
@@ -1292,6 +1356,8 @@ fixtures are read off `conftest.py` rather than named in the classifier.
 | `test_the_gate_runs_the_membership_decision_rather_than_only_this_file` | selftest 350 runs the decision, and the command line it uses works |
 | `test_ci_derives_the_file_list_rather_than_repeating_it` | the CI job asks this module for `NO_CLUSTER`, names no file literally, and states no count |
 | `test_the_job_installs_no_database_driver` | the job asserts psycopg is absent rather than assuming it |
+| `test_the_shell_reference_detector_sees_code_and_not_prose` | the premise: a docstring is prose, a string passed to bash is a reference, an f-string counts once |
+| `test_the_harness_independence_inventory_is_exactly_what_the_corpus_does` | CONTEXT.md's inventory, asserted in both directions |
 
 **THIS IS NOW IN THE GATE.** `.github/workflows/ci.yml` runs a `pytest-guards`
 job: no database, no build, an interpreter and the two pinned runner packages.
@@ -1316,6 +1382,36 @@ rather than the harness, could not run beside anything else, and would leave the
 environment broken if the test died. A module that raises on import, first on the
 path, is the same observation and reversible by construction. Both behavioural
 arms assert the shim actually bites before believing anything it produces.
+
+### The harness-independence inventory, as a mechanism
+
+CONTEXT.md's rule is that the two harnesses are parallel in functionality and
+independent in implementation: **a pytest test that drives `test/lib.sh` is the first
+measurement wearing a Python wrapper**, so it agrees with the shell by construction and
+can never report it wrong. Its inventory of what still reaches across was **prose** —
+falsifiable by hand, but nothing reddened when a new reference appeared. #923 nearly
+landed a fourth coupled file, and what caught it was a person reading.
+
+`SHELL_REFERENCES` declares the three files that reach across and **why each one does**,
+and the arm asserts set equality in both directions. A new file that reaches in reddens
+it; a file that stops reaching and is left in the declaration reddens it too — which is
+what stops the list rotting into a permanent exemption, the way every hand-maintained
+exempt list in this tree has gone wrong.
+
+**A file-level guard, which is what the rule asks for and also the most it can honestly
+be.** Within a flagged file it cannot tell a path joined onto the real tree from the
+same name joined onto a `tmp_path`: both are the string `lib.sh`, and only the dataflow
+says which. `test_build_refusal.py` contains both, and CONTEXT.md already records the
+fake ones as rule 2 rather than references. So the assertion is over the **set of
+files**, and each entry carries the mechanism a reader needs to check it by hand.
+
+**Two things the first version got wrong, both found by running it.** It counted an
+f-string as two references, because the pieces of one are `Constant` nodes of their own.
+And it flagged **this file**, because the declaration's own descriptions named the shell
+files — four files where the tree has three. The descriptions now name the mechanism
+without the filenames, and the detector's fixtures assemble the name from fragments. A
+scan flagging its own test data is the third time that shape cost a measurement in one
+session.
 
 ## 16. test_harness_deps_classifier.py: the classifier, in the file the gate runs
 
