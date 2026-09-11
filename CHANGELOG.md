@@ -433,7 +433,7 @@ true until the next version shipped.
 
   Entry 1 is struck and anchored to `error-swallowed-to-empty`, and it records what the
   entry got wrong rather than replacing it: both halves of "the constant exists and
-  nothing writes it" were false — two sites already minted sentinels by hand, and the
+  nothing writes it" were false -- two sites already minted sentinels by hand, and the
   missing thing was the REFUSAL in four of the five comparisons.
 
   **Fixing it made the second arm vacuous on this document**, because with every entry
@@ -442,14 +442,14 @@ true until the next version shipped.
   two-entry fixture where moving the open entry's id into section 2 must be named, with
   the clean control beside it.
 
-  The totals do not move — 28 refused, 44 not refused, 72 named — because the mode was
+  The totals do not move -- 28 refused, 44 not refused, 72 named -- because the mode was
   already counted as refused. Only the list that tells the next person what to do was
   wrong.
 
   **And 3.6 now records measured populations, so the next entry is chosen on evidence.**
   Section 5's new rule is that an entry must name a mode id, which makes WHICH id worth
   measuring. Four of 3.6's were counted by AST scan over the whole corpus:
-  `truthy-cursor-from-execute` has 7 sites and **all are benign** — every one is
+  `truthy-cursor-from-execute` has 7 sites and **all are benign** -- every one is
   `x = cur.execute(...)`, idiomatic in psycopg3, and **zero** branch on it, which is the
   dangerous form; `empty-query-string-succeeds` has 0; the multistatement mode has 1, a
   setup that fetches nothing with a `count(*)` premise right after it; and the
@@ -460,7 +460,7 @@ true until the next version shipped.
 
   One instrument defect of mine, caught by that fixture: the parser matched the
   SECTION HEADING as an entry. `re.split(r"^## ")` leaves a chunk beginning "5. What to
-  add next", which the numbered-item pattern also matches — inventing an entry 5 that
+  add next", which the numbered-item pattern also matches -- inventing an entry 5 that
   is the title and colliding with the real entry 5. The fixture reported 3 entries in a
   two-entry document, which is how it was found.
 
