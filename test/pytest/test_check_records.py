@@ -347,6 +347,39 @@ def test_every_recording_method_resolves_its_verdict(expect):
                 allow_empty=True)
 
 
+def test_wrapping_a_method_twice_changes_nothing(expect):
+    """WHAT THE ARM ABOVE CANNOT SEE, measured rather than left as a worry.
+
+    @OffgridwithJD attacked the drift arm and named double-wrapping as the most
+    reachable thing it would miss: the marker is on the outer wrapper, so a method
+    wrapped twice looks exactly like one wrapped once.
+
+    That is true, and it does not matter -- which is the answer, not an excuse.
+    Both wrappers compute the same `taken` and resolve the same record to the same
+    verdict and reason, because the inner call appends nothing before the outer one
+    measures. Measured here rather than argued, because "I think it is harmless" is
+    the sentence that has been wrong three times today.
+
+    So the arm is not extended to catch it. A guard against a change that alters
+    nothing is a false red waiting to happen, and this layer's budget forbids those
+    more strictly than it forbids a gap.
+    """
+    e = pgc_vacuity.Expect("double::wrapped")
+    original = pgc_vacuity.Expect.num
+    pgc_vacuity.Expect.num = pgc_vacuity._resolving(original)
+    try:
+        try:
+            e.num(1, 2, "a claim that is false")
+        except AssertionError:
+            pass
+        e.num(3, 3, "a claim that is true")
+    finally:
+        pgc_vacuity.Expect.num = original
+    expect.ordered_rows([r.verdict for r in e.records], ["FAIL", "PASS"],
+                        "a doubly-wrapped method resolves exactly as a single one does")
+    expect.num(e.count, 2, "and still takes one record per call")
+
+
 def test_a_recording_method_takes_exactly_one_record_per_call(expect):
     """THE INVARIANT THE RESOLUTION RESTS ON, pinned because a mutation showed it
     was assumed.

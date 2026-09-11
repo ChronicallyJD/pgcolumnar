@@ -297,6 +297,14 @@ def _resolving(method):
     comment is still true -- which is the opposite of how the first version of it
     would have aged.
 
+    WRAPPING TWICE CHANGES NOTHING, and the drift arm deliberately does not look
+    for it. The marker sits on the outer wrapper, so a doubly-wrapped method is
+    indistinguishable from a singly-wrapped one -- @OffgridwithJD named that as the
+    gap most likely to be reached. Measured: both wrappers compute the same
+    `taken` and write the same verdict and reason, because the inner call appends
+    nothing before the outer one measures. An arm against a change that alters no
+    behaviour would be a false red waiting to happen.
+
     A REFUSAL MARKS NOTHING, and that needs no special case for VacuityError being
     an AssertionError subclass: every VacuityError in the recording methods is
     raised BEFORE the record is taken, so no record exists to mark. That is not an

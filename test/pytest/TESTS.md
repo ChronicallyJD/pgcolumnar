@@ -2444,6 +2444,7 @@ and without this arm nothing would say so.
 | `test_every_refusal_precedes_its_record` | the static half, so that boundary cannot drift |
 | `test_every_recording_method_resolves_its_verdict` | all 15, derived from the module rather than listed |
 | `test_a_recording_method_takes_exactly_one_record_per_call` | the invariant the resolution rests on, pinned after a mutation showed it was assumed |
+| `test_wrapping_a_method_twice_changes_nothing` | what the drift arm cannot see, measured and deliberately not guarded |
 
 **The first design was wrong and the corpus is what refuted it.** Resolving each
 verdict from the exception in `pytest_runtest_call` assumed a raise ends the test.
