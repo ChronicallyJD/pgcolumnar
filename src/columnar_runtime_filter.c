@@ -36,7 +36,7 @@
 #include "utils/typcache.h"
 #include "utils/tuplestore.h"
 
-bool pgcolumnar_enable_join_runtime_filter = true;
+bool pgcolumnar_enable_join_runtime_filter = false;
 
 typedef struct PgColumnarRuntimeFilterState
 {
@@ -541,7 +541,7 @@ PgColumnarBeginRuntimeTap(CustomScanState *node,
     if (list_length(customScan->custom_plans) != 1)
         elog(ERROR, "pgcolumnar runtime filter tap expected one source plan");
 
-    sourcePlan = linitial_node(Plan, customScan->custom_plans);
+    sourcePlan = (Plan *) linitial(customScan->custom_plans);
     state->sourceState = ExecInitNode(sourcePlan, estate, eflags);
     node->custom_ps = list_make1(state->sourceState);
     state->keyResno = intVal(linitial(customScan->custom_private));
@@ -773,6 +773,9 @@ PgColumnarExplainRuntimeTap(CustomScanState *node,
                            NULL,
                            (int64) state->buildRows,
                            es);
+    ExplainPropertyText("Runtime Filter Drain",
+                        "coordinator drained the source; Hash replays the spool",
+                        es);
 }
 
 static void
@@ -791,7 +794,7 @@ PgColumnarBeginRuntimeFilter(CustomScanState *node,
         elog(ERROR,
              "pgcolumnar runtime filter expected one core Hash Join plan");
 
-    childPlan = linitial_node(Plan, customScan->custom_plans);
+    childPlan = (Plan *) linitial(customScan->custom_plans);
     state->joinState = ExecInitNode(childPlan, estate, eflags);
     if (!IsA(state->joinState, HashJoinState))
         elog(ERROR,
@@ -893,6 +896,7 @@ PgColumnarReScanRuntimeFilter(CustomScanState *node)
     PgColumnarAttachRuntimeBloom(outerPlanState(state->joinState),
                                  NULL,
                                  InvalidAttrNumber);
+    PgColumnarDetachRuntimeRange(outerPlanState(state->joinState));
     ExecReScan(state->joinState);
     PgColumnarResetRuntimeTap((PgColumnarRuntimeTapState *) state->tapState);
     MemoryContextReset(state->filterContext);

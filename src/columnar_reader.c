@@ -883,14 +883,20 @@ PgColumnarReadSetRuntimeRange(PgColumnarReadState *readState,
 
 	MemSet(keys, 0, sizeof(keys));
 	MemSet(built, 0, sizeof(built));
-	ScanKeyEntryInitialize(&keys[0], 0, attno,
-						   BTGreaterEqualStrategyNumber, InvalidOid,
-						   InvalidOid, InvalidOid, minimum);
+	/*
+	 * ScanKeyEntryInitialize with InvalidOid procedure is legal only for a
+	 * NULL-search key.  The predicate builder reads these six fields only.
+	 */
+	keys[0].sk_flags = 0;
+	keys[0].sk_attno = attno;
+	keys[0].sk_strategy = BTGreaterEqualStrategyNumber;
 	keys[0].sk_subtype = subtype;
-	ScanKeyEntryInitialize(&keys[1], 0, attno,
-						   BTLessEqualStrategyNumber, InvalidOid,
-						   InvalidOid, InvalidOid, maximum);
+	keys[0].sk_argument = minimum;
+	keys[1].sk_flags = 0;
+	keys[1].sk_attno = attno;
+	keys[1].sk_strategy = BTLessEqualStrategyNumber;
 	keys[1].sk_subtype = subtype;
+	keys[1].sk_argument = maximum;
 
 	builtCount = pgcolumnar_make_predicates(built, 2, keys,
 										readState->tupdesc,
@@ -931,6 +937,16 @@ PgColumnarReadSetRuntimeRange(PgColumnarReadState *readState,
 	MemoryContextSwitchTo(oldContext);
 	return true;
 }
+
+void
+PgColumnarReadClearRuntimeRange(PgColumnarReadState *readState)
+{
+	if (readState == NULL || readState->runtimePredicateCount == 0)
+		return;
+	readState->numPredicates = readState->runtimePredicateStart;
+	readState->runtimePredicateCount = 0;
+}
+
 
 uint64
 PgColumnarRuntimeGroupsRemoved(PgColumnarReadState *readState)

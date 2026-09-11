@@ -3205,6 +3205,20 @@ pgcolumnar_setup_late_materialization(PgColumnarCustomScanState *cstate,
  * scan that rejects millions of rows does not accumulate their qual allocations.
  */
 static bool
+pgcolumnar_runtime_bloom_keeps(PgColumnarCustomScanState *cstate,
+							   TupleTableSlot *slot)
+{
+	if (cstate->runtimeBloom == NULL)
+		return true;
+	if (PgColumnarRuntimeBloomMatch(cstate->runtimeBloom,
+								 slot->tts_values[cstate->runtimeBloomAttno - 1],
+								 slot->tts_isnull[cstate->runtimeBloomAttno - 1]))
+		return true;
+	cstate->runtimeRowsRejected++;
+	return false;
+}
+
+static bool
 pgcolumnar_scan_row_filter(void *arg)
 {
 	ScanState  *ss = (ScanState *) arg;
@@ -3215,14 +3229,8 @@ pgcolumnar_scan_row_filter(void *arg)
 	ExecClearTuple(slot);
 	ExecStoreVirtualTuple(slot);
 
-	if (cstate->runtimeBloom != NULL &&
-		!PgColumnarRuntimeBloomMatch(cstate->runtimeBloom,
-								 slot->tts_values[cstate->runtimeBloomAttno - 1],
-								 slot->tts_isnull[cstate->runtimeBloomAttno - 1]))
-	{
-		cstate->runtimeRowsRejected++;
+	if (!pgcolumnar_runtime_bloom_keeps(cstate, slot))
 		return false;
-	}
 
 	ResetExprContext(econtext);
 	econtext->ecxt_scantuple = slot;
@@ -3266,10 +3274,7 @@ pgcolumnar_scan_row_filter_nocount(void *arg)
 	ExecClearTuple(slot);
 	ExecStoreVirtualTuple(slot);
 
-	if (cstate->runtimeBloom != NULL &&
-		!PgColumnarRuntimeBloomMatch(cstate->runtimeBloom,
-								 slot->tts_values[cstate->runtimeBloomAttno - 1],
-								 slot->tts_isnull[cstate->runtimeBloomAttno - 1]))
+	if (!pgcolumnar_runtime_bloom_keeps(cstate, slot))
 		return false;
 
 	ResetExprContext(econtext);
@@ -3425,9 +3430,22 @@ PgColumnarScanNext(ScanState *ss)
 
 		ExecClearTuple(slot);
 	}
-	else if (!PgColumnarReadNextRow(cstate->readState, slot->tts_values,
-									slot->tts_isnull, &rowNumber))
-		return NULL;
+	else
+	{
+		/*
+		 * When late materialization is off, the Bloom probe cannot run in the
+		 * two-pass filter: that path is what would leave qual columns undecoded.
+		 * Probe after the full row is built instead.
+		 */
+		for (;;)
+		{
+			if (!PgColumnarReadNextRow(cstate->readState, slot->tts_values,
+									   slot->tts_isnull, &rowNumber))
+				return NULL;
+			if (pgcolumnar_runtime_bloom_keeps(cstate, slot))
+				break;
+		}
+	}
 
 	ExecStoreVirtualTuple(slot);
 	PgColumnarRowNumberToItemPointer(rowNumber, &slot->tts_tid);
@@ -3743,11 +3761,67 @@ PgColumnarExplainCustomScan(CustomScanState *node, List *ancestors,
 }
 
 /*
- * PgColumnarAttachRuntimeRange
- *		Publish a completed build-side hull to a direct base scan before its
- *		first tuple is requested.  Projection scans are excluded by the planner;
- *		checking again here turns a planner mistake into an error, not a wrong
- *		answer.
+ * pgcolumnar_ensure_runtime_bloom_columns
+ *		The two-pass filter must decode every column ExecQual reads, plus the
+ *		join key.  Turning late materialization on with only the key marked
+ *		drops rows whose qual names any other column.
+ *
+ * Do not force the path when the GUC is off or the qual is volatile.  Bloom
+ * then probes in PgColumnarScanNext after the full row is built.
+ */
+static void
+pgcolumnar_ensure_runtime_bloom_columns(PgColumnarCustomScanState *state,
+									   AttrNumber attno)
+{
+	CustomScan *cscan = (CustomScan *) state->css.ss.ps.plan;
+	Bitmapset  *qualAttrs = NULL;
+	int			natts = state->nTotalColumns;
+	int			x = -1;
+
+	if (!pgcolumnar_enable_late_materialization)
+		return;
+
+	if (state->qualCols != NULL)
+	{
+		state->qualCols[attno - 1] = true;
+		return;
+	}
+
+	if (cscan->scan.plan.qual != NIL &&
+		contain_volatile_functions((Node *) cscan->scan.plan.qual))
+		return;
+
+	if (cscan->scan.plan.qual != NIL)
+	{
+		pull_varattnos((Node *) cscan->scan.plan.qual, cscan->scan.scanrelid,
+					   &qualAttrs);
+		while ((x = bms_next_member(qualAttrs, x)) >= 0)
+		{
+			AttrNumber	qattno = x + FirstLowInvalidHeapAttributeNumber;
+
+			if (qattno <= 0 || qattno > natts)
+				return;
+		}
+	}
+
+	state->qualCols = palloc0(sizeof(bool) * natts);
+	x = -1;
+	while ((x = bms_next_member(qualAttrs, x)) >= 0)
+	{
+		AttrNumber	qattno = x + FirstLowInvalidHeapAttributeNumber;
+
+		state->qualCols[qattno - 1] = true;
+	}
+	state->qualCols[attno - 1] = true;
+	state->lateMat = true;
+}
+
+/*
+ * PgColumnarAttachRuntimeBloom
+ *		Publish a completed build-side Bloom filter to a direct base scan
+ *		before its first tuple is requested.  Projection scans are excluded
+ *		by the planner; checking again here turns a planner mistake into an
+ *		error, not a wrong answer.
  */
 void
 PgColumnarAttachRuntimeBloom(PlanState *scanState, void *filter, AttrNumber attno)
@@ -3776,12 +3850,16 @@ PgColumnarAttachRuntimeBloom(PlanState *scanState, void *filter, AttrNumber attn
 	state->runtimeBloom = filter;
 	state->runtimeBloomAttno = attno;
 	state->runtimeRowsRejected = 0;
-	if (state->qualCols == NULL)
-		state->qualCols = palloc0(sizeof(bool) * state->nTotalColumns);
-	state->qualCols[attno - 1] = true;
-	state->lateMat = true;
+	pgcolumnar_ensure_runtime_bloom_columns(state, attno);
 }
 
+/*
+ * PgColumnarAttachRuntimeRange
+ *		Publish a completed build-side hull to a direct base scan before its
+ *		first tuple is requested.  Projection scans are excluded by the planner;
+ *		checking again here turns a planner mistake into an error, not a wrong
+ *		answer.
+ */
 bool
 PgColumnarAttachRuntimeRange(PlanState *scanState, AttrNumber attno, Oid subtype,
 							 Datum minimum, Datum maximum)
@@ -3799,6 +3877,20 @@ PgColumnarAttachRuntimeRange(PlanState *scanState, AttrNumber attno, Oid subtype
 		PgColumnarReadSetRuntimeRange(state->readState, attno, subtype,
 									  minimum, maximum);
 	return state->runtimeRangeAttached;
+}
+
+void
+PgColumnarDetachRuntimeRange(PlanState *scanState)
+{
+	PgColumnarCustomScanState *state;
+
+	if (scanState == NULL || !IsA(scanState, CustomScanState))
+		return;
+	state = (PgColumnarCustomScanState *) scanState;
+	if (state->css.methods != &pgcolumnar_exec_methods || state->readState == NULL)
+		return;
+	PgColumnarReadClearRuntimeRange(state->readState);
+	state->runtimeRangeAttached = false;
 }
 
 /* -------------------------------------------------------------------------

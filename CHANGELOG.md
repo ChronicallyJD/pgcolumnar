@@ -30,7 +30,7 @@ true until the next version shipped.
 
   The path is serial and INNER only. LEFT, SEMI, ANTI, CROSS, parallel, and
   projection-backed outers are refused. `pgcolumnar.enable_join_runtime_filter`
-  is on by default.
+  is off by default until the skip is measured on the join fixture.
 
   `EXPLAIN (ANALYZE)` reports `Runtime Filter Groups Removed` and
   `Runtime Filter Rows Rejected`. Those counters are dedicated. They are not

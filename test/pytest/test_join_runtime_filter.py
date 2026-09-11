@@ -621,3 +621,52 @@ def test_early_limit_matches_heap(pgc_conn, expect):
         name="early limit still uses the runtime coordinator",
     )
     expect.rows(got, heap, "early limit equals heap")
+
+def test_fact_qual_with_late_mat_off_matches_heap(pgc_conn, expect):
+    """A non-key fact qual with late materialization off must still match heap."""
+    with pgc_conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE dimq(k int);
+            INSERT INTO dimq SELECT g FROM generate_series(9100, 9249) g;
+            CREATE TABLE factq(k int, n int, payload text) USING pgcolumnar;
+            SELECT pgcolumnar.set_options($t$factq$t$, stripe_row_limit => 1000);
+            INSERT INTO factq SELECT g, g, repeat(md5(g::text), 3)
+            FROM generate_series(1, 16000) g;
+            CREATE TABLE heapq AS SELECT * FROM factq;
+            ANALYZE dimq;
+            ANALYZE factq
+            """
+        )
+        if _has_runtime_filter(pgc_conn):
+            cur.execute("SET pgcolumnar.enable_join_runtime_filter=on")
+        cur.execute("SET pgcolumnar.enable_late_materialization=off")
+        cur.execute("SET max_parallel_workers_per_gather=0")
+        cur.execute("SET enable_nestloop=off")
+        cur.execute("SET enable_mergejoin=off")
+        sql = """
+            SELECT count(*), sum(factq.k), sum(factq.n)
+            FROM factq JOIN dimq ON factq.k = dimq.k
+            WHERE factq.n > 80
+        """
+        cur.execute(
+            "EXPLAIN (ANALYZE, FORMAT JSON, COSTS OFF, TIMING OFF, SUMMARY OFF) " + sql
+        )
+        plan = cur.fetchone()[0]
+        cur.execute(sql)
+        got = cur.fetchone()
+        cur.execute(
+            """
+            SELECT count(*), sum(heapq.k), sum(heapq.n)
+            FROM heapq JOIN dimq ON heapq.k = dimq.k
+            WHERE heapq.n > 80
+            """
+        )
+        heap = cur.fetchone()
+
+    expect.plan_node(
+        plan,
+        provider="Columnar Runtime Filter Coordinator",
+        name="late-mat-off fact qual still uses the runtime coordinator",
+    )
+    expect.rows([got], [heap], "late-mat-off fact qual equals heap")

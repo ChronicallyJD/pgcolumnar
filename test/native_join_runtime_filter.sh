@@ -271,4 +271,24 @@ SQLL="SELECT fact_lim.k FROM fact_lim JOIN dim_lim ON fact_lim.k=dim_lim.k ORDER
 onl="$(pc "${rf_on}SET max_parallel_workers_per_gather=0;SET enable_nestloop=off;SET enable_mergejoin=off;EXPLAIN(ANALYZE,TIMING off,SUMMARY off)$SQLL")"
 check "early limit has coordinator" "$(grep -c 'Columnar Runtime Filter Coordinator' <<<"$onl")" 1
 check "early limit equals heap" "$(pc "${rf_on}SET max_parallel_workers_per_gather=0;SET enable_nestloop=off;SET enable_mergejoin=off;$SQLL" | grep -v '^SET$')" "$(q "SELECT heap_lim.k FROM heap_lim JOIN dim_lim ON heap_lim.k=dim_lim.k ORDER BY heap_lim.k LIMIT 3")"
+# Fact-table local qual must see every column it names. The coordinator
+# used to mark only the join key, so a conjunction that also named a
+# non-key column dropped every surviving row. Independent of the pytest
+# twin: different names, key range, and row count.
+q "$(cat <<'SQL'
+CREATE TABLE dim_fq(k int);
+INSERT INTO dim_fq SELECT g FROM generate_series(5500, 5699) g;
+CREATE TABLE fact_fq(k int, extra int, payload text) USING pgcolumnar;
+SELECT pgcolumnar.set_options($t$fact_fq$t$, stripe_row_limit => 1000);
+INSERT INTO fact_fq SELECT g, g, repeat(md5(g::text), 4)
+FROM generate_series(1, 12000) g;
+CREATE TABLE heap_fq AS SELECT * FROM fact_fq;
+ANALYZE dim_fq;
+ANALYZE fact_fq;
+SQL
+)" >/dev/null
+SQLFQ="SELECT count(*),sum(fact_fq.k),sum(fact_fq.extra) FROM fact_fq JOIN dim_fq ON fact_fq.k=dim_fq.k WHERE fact_fq.k > 100 AND fact_fq.extra > 40"
+onfq="$(pc "${rf_on}SET max_parallel_workers_per_gather=0;SET enable_nestloop=off;SET enable_mergejoin=off;EXPLAIN(ANALYZE,TIMING off,SUMMARY off)$SQLFQ")"
+check "fact-qual plan has coordinator" "$(grep -c 'Columnar Runtime Filter Coordinator' <<<"$onfq")" 1
+check "fact-qual conjunction equals heap" "$(pc "${rf_on}$SQLFQ"|tail -1)" "$(q "SELECT count(*),sum(heap_fq.k),sum(heap_fq.extra) FROM heap_fq JOIN dim_fq ON heap_fq.k=dim_fq.k WHERE heap_fq.k > 100 AND heap_fq.extra > 40")"
 pgc_summary

@@ -2254,3 +2254,8 @@ A covering projection scan stays an unwrapped Hash Join outer.
 `ORDER BY ... LIMIT` still matches a heap control. The coordinator used to
 crash on this shape when it drained the tap through `ExecProcNode`.
 
+### `test_fact_qual_with_late_mat_off_matches_heap`
+
+A non-key fact-table qual with late materialization off. The attach used to
+force the two-pass path with only the join key decoded, so the qual dropped
+every row. Heap is the oracle. Independent of the shell conjunction arm.

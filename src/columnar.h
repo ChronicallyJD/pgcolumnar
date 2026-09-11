@@ -670,6 +670,7 @@ extern void PgColumnarReadSetParallelCounter(PgColumnarReadState *readState,
 extern bool PgColumnarReadSetRuntimeRange(PgColumnarReadState *readState,
 										AttrNumber attno, Oid subtype,
 										Datum minimum, Datum maximum);
+extern void PgColumnarReadClearRuntimeRange(PgColumnarReadState *readState);
 extern uint64 PgColumnarRuntimeGroupsRemoved(PgColumnarReadState *readState);
 extern void PgColumnarReadStats(PgColumnarReadState *readState,
 							  uint64 *groupsRead, uint64 *groupsSkipped,
@@ -930,6 +931,7 @@ extern bool PgColumnarRuntimeBloomMatch(void *filter, Datum value, bool isNull);
 extern bool PgColumnarAttachRuntimeRange(PlanState *scanState,
 										 AttrNumber attno, Oid subtype,
 										 Datum minimum, Datum maximum);
+extern void PgColumnarDetachRuntimeRange(PlanState *scanState);
 extern Node *PgColumnarCreateAggScanState(CustomScan *cscan);
 extern Node *PgColumnarCreateGroupAggScanState(CustomScan *cscan);
 

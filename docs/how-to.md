@@ -143,7 +143,7 @@ It also rejects rows whose keys are absent from a Bloom filter of those keys.
 EXPLAIN (ANALYZE) SELECT sum(amount) FROM fact JOIN dim ON fact.k = dim.k;
 ```
 
-**Tuning.** It is on by default (`pgcolumnar.enable_join_runtime_filter`).
+**Tuning.** It is off by default (`pgcolumnar.enable_join_runtime_filter`).
 It applies only to a serial inner Hash Join whose outer path is a direct columnar scan.
 A LEFT, SEMI, ANTI, or CROSS join is unchanged.
 A covering projection is also unchanged.
