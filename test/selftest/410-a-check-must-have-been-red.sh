@@ -93,14 +93,14 @@ check "control: a well-formed log still merges" \
 # `unknown`. A free-form --date was accepted verbatim, so a typo became an
 # observation date the ledger treated as authoritative.
 : > "$_lw/date.tsv"
-_led_run merge --ledger "$_lw/date.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
-_led_run merge --ledger "$_lw/date.tsv" --date 2026-09-01 "$_lw/red.log" >/dev/null
+_led_run merge --reds-are-real --ledger "$_lw/date.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
+_led_run merge --reds-are-real --ledger "$_lw/date.tsv" --date 2026-09-01 "$_lw/red.log" >/dev/null
 check "an older observation does not overwrite a newer one" \
 	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/date.tsv")" "2026-09-10"
-_led_run merge --ledger "$_lw/date.tsv" --date 2026-09-20 "$_lw/red.log" >/dev/null
+_led_run merge --reds-are-real --ledger "$_lw/date.tsv" --date 2026-09-20 "$_lw/red.log" >/dev/null
 check "and a newer one does" \
 	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/date.tsv")" "2026-09-20"
-_led_run merge --ledger "$_lw/date.tsv" "$_lw/red.log" >/dev/null
+_led_run merge --reds-are-real --ledger "$_lw/date.tsv" "$_lw/red.log" >/dev/null
 check "and an undated merge does not erase a known date" \
 	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/date.tsv")" "2026-09-20"
 check "a date that is not a date is refused rather than stored" \
@@ -118,8 +118,8 @@ check "--mutation across two failing checks in one run is refused" \
 check "and the refusal names how many failed, so the author can narrow the run" \
 	"$(_led_run merge --ledger "$_lw/m2.tsv" --date 2026-09-10 --mutation M "$_lw/twofail.log" \
 		| grep -c '2 checks failed')" "1"
-check "control: the same log merges without --mutation" \
-	"$(_led_rc merge --ledger "$_lw/m2.tsv" --date 2026-09-10 "$_lw/twofail.log")" "0"
+check "control: the same log merges with a different reason, so the refusal above is --mutation-across-two-checks and not the log" \
+	"$(_led_rc merge --reds-are-real --ledger "$_lw/m2.tsv" --date 2026-09-10 "$_lw/twofail.log")" "0"
 
 # The three must be distinguishable from a REAL refusal, or fail-closed just
 # renames every outcome.
@@ -143,7 +143,7 @@ check "every row has five fields and no trailing tab" \
 check "and an empty mutation is a placeholder, not an empty last field" \
 	"$(grep -cP '\t$' "$_lw/ledger.tsv" || true)" "0"
 
-_led_run merge --ledger "$_lw/ledger.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
+_led_run merge --reds-are-real --ledger "$_lw/ledger.tsv" --date 2026-09-10 "$_lw/red.log" >/dev/null
 check "a check observed red gains the date it was seen" \
 	"$(awk -F'\t' '$3=="first check"{print $4}' "$_lw/ledger.tsv")" "2026-09-10"
 check "and one that stayed green keeps its debt" \
@@ -182,7 +182,7 @@ check "the same check in two logs is two runs, not a duplicate" \
 printf 'RESULT\tdemo\tpart1\tsame\tPASS\t\nRESULT\tdemo\tpart1\tsame\tFAIL\t\nchecks run: 2\n' > "$_lw/twice.log"
 : > "$_lw/dup2.tsv"
 check "the same name twice in ONE log is a duplicate, and is named" \
-	"$(_led_run merge --ledger "$_lw/dup2.tsv" --date 2026-09-10 "$_lw/twice.log" \
+	"$(_led_run merge --reds-are-real --ledger "$_lw/dup2.tsv" --date 2026-09-10 "$_lw/twice.log" \
 		| grep -c 'duplicate check name in one run, so one ledger row covers 2: demo	part1	same')" "1"
 
 # ---- renames, grouped by part and scanned against ONE run -------------------
@@ -195,7 +195,7 @@ check "the same name twice in ONE log is a duplicate, and is named" \
 : > "$_lw/ren.tsv"
 printf 'RESULT\tdemo\tpart1\tthe old name\tFAIL\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n' > "$_lw/before.log"
 printf 'RESULT\tdemo\tpart1\tthe new name\tPASS\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n' > "$_lw/after.log"
-_led_run merge --ledger "$_lw/ren.tsv" --date 2026-09-01 "$_lw/before.log" >/dev/null
+_led_run merge --reds-are-real --ledger "$_lw/ren.tsv" --date 2026-09-01 "$_lw/before.log" >/dev/null
 check "premise: the check has history before the rename" \
 	"$(awk -F'\t' '$3=="the old name"{print $4}' "$_lw/ren.tsv")" "2026-09-01"
 check "a name that appeared while another disappeared is reported as a rename" \
@@ -648,3 +648,46 @@ check "and it is that case that says the change introduces the file" \
 check "a ref that exists with the budget still compares" \
 	"$(cd "$_rr" && python3 "$_led" gate --ledger led --budget b.txt --registered reg \
 		--against hasbudget log 2>&1 | grep -c 'ceiling against hasbudget')" "1"
+
+# ---- a red needs a reason (#946) --------------------------------------------
+#
+# `merge` already refuses a log that does not RECONCILE, and that is not the
+# property that matters: both logs that poisoned this ledger on the day it landed
+# reconciled. One was 827 records against `checks run: 827` with fifteen checks red
+# because the tree was copied without `.git`; the other was a single FAIL from an
+# unfinished change. A rule about reconciliation would have caught neither.
+#
+# An environment red and a real regression are IDENTICAL in the log, so the caller
+# has to say which it is rather than the tool guessing.
+
+_r946="$PGC_WORKDIR/r946"; mkdir -p "$_r946"
+printf 'RESULT\tdemo\tp\tthe check\tFAIL\t\nRESULT\tdemo\tp\tother\tPASS\t\nchecks run: 2\n' > "$_r946/red.log"
+printf 'RESULT\tdemo\tp\tthe check\tPASS\t\nRESULT\tdemo\tp\tother\tPASS\t\nchecks run: 2\n' > "$_r946/green.log"
+
+: > "$_r946/a.tsv"
+check "a log carrying a FAIL is refused when no reason is given" \
+	"$(_led_rc merge --ledger "$_r946/a.tsv" --date 2026-09-10 "$_r946/red.log")" "2"
+check "and the refusal names the check that reddened" \
+	"$(_led_run merge --ledger "$_r946/a.tsv" --date 2026-09-10 "$_r946/red.log" \
+	   | grep -c 'the check')" "1"
+# NOTHING HALF-APPLIED. A refusal that had already written rows would leave the
+# ledger holding the very observation it just declined to accept.
+check "and nothing is written, so a refused merge is not half-applied" \
+	"$(wc -c < "$_r946/a.tsv" | tr -d ' ')" "0"
+
+# BOTH WAYS OF SAYING WHY MUST STILL WORK. Refusing reds outright would refuse a
+# genuine CI red, which is the most valuable row this ledger can hold and has no
+# mutation to name.
+: > "$_r946/b.tsv"
+check "a deliberate break says so with --mutation" \
+	"$(_led_rc merge --ledger "$_r946/b.tsv" --date 2026-09-10 --mutation M "$_r946/red.log")" "0"
+: > "$_r946/c.tsv"
+check "and a genuine observation says so with --reds-are-real" \
+	"$(_led_rc merge --ledger "$_r946/c.tsv" --date 2026-09-10 --reds-are-real "$_r946/red.log")" "0"
+
+# THE CONTROL, without which every arm above passes on a tool that refuses
+# everything it is handed.
+: > "$_r946/d.tsv"
+check "control: an all-PASS log still merges with no flag at all" \
+	"$(_led_rc merge --ledger "$_r946/d.tsv" --date 2026-09-10 "$_r946/green.log")" "0"
+unset _r946
