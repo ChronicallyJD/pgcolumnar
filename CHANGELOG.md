@@ -1268,6 +1268,19 @@ true until the next version shipped.
   now re-records. It names the two cases that remain: a declaration that no longer
   resolves, and the implicit base projection, which is not readable by name at all.
 
+- A `conftest.py` can no longer switch off the order-collapse guard by rebinding
+  the module-level name it used to read (#924).
+
+  The scan looked up `_ORDER_KILLERS` on each call. A conftest is imported before
+  collection, so `pgc_vacuity._ORDER_KILLERS = ()` turned the refusal off for every
+  test in that directory, with no reason recorded. Two lines, less to type than
+  the honest form. Measured: the same collapse test was uncollectable with no extra
+  file, and reported `1 passed` with only that rebind.
+
+  The killer names are bound at definition time, in a default argument, the same
+  way `query_error` already binds its prefix. There is no module-level name left
+  to rebind. `_RECORDERS` is a registry the layer writes, not rule data, and is
+  unchanged.
 - The pytest harness no longer reports results against a library another process
   installed (#956).
 
