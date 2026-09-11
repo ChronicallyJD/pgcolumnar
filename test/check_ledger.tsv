@@ -587,15 +587,12 @@ harness_selftest	400-a-check-result-must-be-machine	a verdict pgc_record cannot 
 harness_selftest	400-a-check-result-must-be-machine	an empty check name does not reconcile	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check still prints its old line	never	-
-harness_selftest	400-a-check-result-must-be-machine	and is counted as a pass, not a skip	never	-
 harness_selftest	400-a-check-result-must-be-machine	and it is counted	never	-
 harness_selftest	400-a-check-result-must-be-machine	and it is counted, so checks run: reports it	never	-
-harness_selftest	400-a-check-result-must-be-machine	and its human line is unchanged	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its name field is the check's name, spaces intact	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says FAIL	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says PASS	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says UNRUN, which is neither of the other two	never	-
-harness_selftest	400-a-check-result-must-be-machine	and its verdict is SKIP	never	-
 harness_selftest	400-a-check-result-must-be-machine	and leaves one whose variable is assigned earlier	never	-
 harness_selftest	400-a-check-result-must-be-machine	and leaves one whose variable is the loop it sits in	never	-
 harness_selftest	400-a-check-result-must-be-machine	and names its own cause instead	never	-
@@ -608,6 +605,12 @@ harness_selftest	400-a-check-result-must-be-machine	and records PASS when the ra
 harness_selftest	400-a-check-result-must-be-machine	and still reports the two numbers	never	-
 harness_selftest	400-a-check-result-must-be-machine	and that place is pgc_record	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the REASON_CODE travels in the reason field, not in prose	never	-
+harness_selftest	400-a-check-result-must-be-machine	and the ratio check is counted as a pass, not a skip	never	-
+harness_selftest	400-a-check-result-must-be-machine	and the ratio check's human line is unchanged	never	-
+harness_selftest	400-a-check-result-must-be-machine	and the ratio check's verdict is SKIP	never	-
+harness_selftest	400-a-check-result-must-be-machine	and the timing check is counted as a pass, not a skip	never	-
+harness_selftest	400-a-check-result-must-be-machine	and the timing check's human line is unchanged	never	-
+harness_selftest	400-a-check-result-must-be-machine	and the timing check's verdict is SKIP	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the two numbers are named, not just the verdict	never	-
 harness_selftest	400-a-check-result-must-be-machine	and with timing enabled the skipped term is zero, not absent	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_num on a non-number emits one record	never	-

@@ -383,32 +383,32 @@ _tmc() {	# _tmc SKIPFLAG HELPER ARGS... -> "CHECKS/PASSED/SKIPPED"
 
 check "a skipped timing check emits exactly one record" \
 	"$(_tm 1 check_timing "a timing check" 1 1 | wc -l)" "1"
-check "and its verdict is SKIP" \
+check "and the timing check's verdict is SKIP" \
 	"$(_tm 1 check_timing "a timing check" 1 1 | cut -f5)" "SKIP"
 check "and it is counted, so checks run: reports it" \
 	"$(_tmc 1 check_timing "a timing check" 1 1)" "1/0/1"
-check "and its human line is unchanged" \
+check "and the timing check's human line is unchanged" \
 	"$(_tmh 1 check_timing "a timing check" 1 1)" \
 	"SKIP  a timing check (PGC_SKIP_TIMING: wall-clock measurement)"
 
 check "the same timing check, ENABLED, emits one record and passes" \
 	"$(_tm 0 check_timing "a timing check" 1 1 | cut -f5)" "PASS"
-check "and is counted as a pass, not a skip" \
+check "and the timing check is counted as a pass, not a skip" \
 	"$(_tmc 0 check_timing "a timing check" 1 1)" "1/1/0"
 
 check "a skipped ratio check emits exactly one record" \
 	"$(_tm 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2 | wc -l)" "1"
-check "and its verdict is SKIP" \
+check "and the ratio check's verdict is SKIP" \
 	"$(_tm 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2 | cut -f5)" "SKIP"
 check "and it is counted" \
 	"$(_tmc 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2)" "1/0/1"
-check "and its human line is unchanged" \
+check "and the ratio check's human line is unchanged" \
 	"$(_tmh 1 check_ratio_needs_quiet_machine "a ratio check" 1 1 2)" \
 	"SKIP  a ratio check (PGC_SKIP_TIMING: wall-clock ratio)"
 
 check "the same ratio check, ENABLED, emits one record and passes" \
 	"$(_tm 0 check_ratio_needs_quiet_machine "a ratio check" 1 1 2 | cut -f5)" "PASS"
-check "and is counted as a pass, not a skip" \
+check "and the ratio check is counted as a pass, not a skip" \
 	"$(_tmc 0 check_ratio_needs_quiet_machine "a ratio check" 1 1 2)" "1/1/0"
 
 # ---- and the accounting line carries the fourth term ------------------------
