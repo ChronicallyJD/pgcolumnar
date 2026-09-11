@@ -288,6 +288,42 @@ binds the exception and the body pins its SQLSTATE. See section 2.
   `db-derived-empty-parametrize`, `null-filter-matches-nothing`,
   `loop-over-zero-rows`, `assert-inside-a-loop-over-zero-rows`
 
+  **`assert-inside-a-loop-over-zero-rows` is NARROWED, and half of it was already
+  closed by a mechanism nobody had noticed covered it (#432).** The mode is two shapes:
+
+  *Already refused.* When a loop's body holds the test's ONLY counted assertions, a
+  zero-trip loop leaves the count at 0 and `pytest_runtest_call` raises `VacuityError`.
+  Measured on a planted test rather than read off the hook --
+
+      only assertion inside a zero-trip loop   VacuityError: made no counted assertion
+      the same loop with one row               1 passed
+
+  *Was open.* When the test ALSO asserts outside the loop the count is non-zero, the
+  test passes, and the loop's assertions simply never ran. `test_loop_coverage_premise.py`
+  now requires a cardinality premise for exactly that shape.
+
+  THE POPULATION, measured over the whole corpus before the arm was written:
+
+  | shape | loops | state |
+  | --- | ---: | --- |
+  | non-empty by construction (literal, range, local literal) | 20 | cannot be zero-trip |
+  | derived, loop holds the only assertions | 0 | already refused |
+  | derived, WITH assertions outside the loop | 2 | **at risk**, now guarded |
+
+  Both at-risk loops already carried a premise, so the arm is green on arrival. That is
+  the point rather than a weakness: the property was true and nothing held it there.
+
+  **WHY IT NARROWS RATHER THAN CLOSES.** The honest requirement is "a premise bounding
+  the cardinality of THIS iterable". What is enforced is "a counted assertion outside
+  the loop that takes `len(...)` of something". `test_harness_deps.py`'s loop iterates
+  `sorted(found)` while its premise bounds `len(files)` -- `found` is built from `files`
+  in a preceding loop -- so a rule demanding the names match would reject correct code.
+  The residual is a loop whose premise bounds the wrong collection, which a reviewer
+  catches and a sweep does not.
+
+  `loop-over-zero-rows` is untouched: it is the sibling about a loop that produces no
+  assertion at all, which the whole-run guard covers only when the test has no others.
+
 ### 3.6 psycopg's typed results introduce their own
 
 - `sql-null-to-python-none`, `none-conflates-null-no-row-and-missing-column`
@@ -296,6 +332,27 @@ binds the exception and the body pins its SQLSTATE. See section 2.
 - `only-first-result-set-fetched`, `multistatement-execute-positions-on-the-first-result`
 - `executemany-returning-fetchall-sees-only-the-first-batch`,
   `server-cursor-rowcount-is-not-a-row-count`, `empty-query-string-succeeds`
+
+**MEASURED POPULATIONS, so the next entry is chosen on evidence (#432).** Section 5's
+new rule is that an entry must name a mode id, which makes *which* id worth measuring
+rather than guessing. Four of 3.6's were counted over the whole corpus by AST scan:
+
+| mode | sites | what they are |
+| --- | ---: | --- |
+| `truthy-cursor-from-execute` | 7 | **all benign.** Every one is `x = cur.execute(...)`, which is idiomatic psycopg3 — `execute` returns the cursor. **Zero** branch on it (`if`, `while`, `assert`), which is the dangerous form. |
+| `empty-query-string-succeeds` | 0 | no `execute()` on an empty or whitespace literal anywhere. |
+| `multistatement-execute-positions-on-the-first-result` | 1 | `test_saop_element_pushdown.py`, a three-statement SETUP that fetches nothing. The arm immediately after asserts `count(*) = 40000`, so the INSERT is proven to have run. |
+| `server-cursor-rowcount-is-not-a-row-count` | 2 | **both legitimate.** A `DELETE`'s `rowcount` with an `at_least` premise on it, and a field on a stub cursor class. |
+
+**So all four are prospective.** A guard for any of them would be insurance against a
+shape the corpus has not yet written, not a closure of one it has — and it should say
+so, the way `test_the_empty_plan_refusal_precedes_the_arms_it_protects` does.
+
+That is not an argument against writing them. It is an argument against writing them
+and calling the mode closed: the counting rule in 1a treats section 2 as "refused
+today", and a refusal with no population has not refused anything yet. The cheapest of
+the four is the branching form of the first, because the dangerous spelling is distinct
+from the benign one and a planted fixture separates them in two lines.
 
 The enumerating agent's own summary is worth keeping: psycopg **fixes** the half of
 issue #418 where an error read as empty, because a failed statement raises and `[]`
@@ -354,8 +411,18 @@ exit 4, and no tests run at all.
 
 Each entry names the red test to write first.
 
-1. `test_expect_query_error_sentinel_is_unique_per_failure` — make something produce
-   `QUERY_ERROR.<seq>`; the constant exists and nothing writes it.
+1. ~~`test_expect_query_error_sentinel_is_unique_per_failure` — closes
+   `error-swallowed-to-empty`.~~ **Done, and this entry was wrong about the gap.** It
+   said "the constant exists and nothing writes it", and both halves were false:
+   `test_hilbert_locality.py` already minted sentinels by hand, one of them from inside
+   SQL, and the thing actually missing was not a producer but the REFUSAL in four of the
+   five comparisons — `expect.text`, `rows`, `row_set` and `ordered_rows` each passed
+   with a sentinel on both sides, and only `expect.hash` refused. 3.2 records that
+   measurement rather than quietly replacing it. `query_error()` now mints a value
+   unique per occurrence, as `lib.sh`'s `QUERY_ERROR.$seq` does, and
+   `test_failed_query_sentinel.py` holds ten arms over it — including the producer's
+   uniqueness and the constant's NON-uniqueness, which is the reason the producer
+   exists at all.
 2. ~~`test_layer_requires_a_write_to_have_written` — closes `insert-wrote-no-rows`.~~
    **Done**, and in two files rather than one, because it is two properties. The
    refusal and the tag-versus-count classification live in
@@ -381,9 +448,41 @@ Each entry names the red test to write first.
    remains, measured: a comprehension or a tuple instead of a `for`, and a helper defined
    in another file. Both are ordinary Python. The refused count therefore did not move.
 
-The three that turned a whole run green rather than one test are done. What remains
-is per-assertion work, so the ordering matters less: take the sentinel first, since
-the constant already exists and nothing writes it.
+6. ~~`test_every_at_risk_loop_carries_a_coverage_premise` — narrows
+   `assert-inside-a-loop-over-zero-rows`.~~ **Done, and it NARROWS rather than closes**
+   — 3.5 has the measurement and names the residual. Half the mode was already refused
+   by `pytest_runtest_call`, which fails a test that counted nothing; the half that was
+   open is a loop whose assertions sit alongside others outside it. Population measured
+   before building: 20 loops non-empty by construction, 0 in the already-refused shape,
+   **2 at risk** and both already compliant.
+
+**Every entry on this list is now struck, and the list is checked (#432).** Section 5
+was the one part of this document with no mechanism: 1a, 2 and 3 are all compared
+against the ids on disk, and this was prose. Entry 1 stayed wrong long after the work
+landed, which is the most expensive place in the document for a stale sentence — its
+only reader is someone about to build something.
+
+Two arms in `test_docs_cover_the_corpus.py` hold it now:
+
+- every entry names at least one mode id, so it is tied to the inventory at all.
+  Entry 1 named none, which is exactly how it stayed wrong: there was nothing to
+  check it against.
+- no UN-STRUCK entry names an id section 2 already claims as refused. An entry whose
+  id has reached section 2 is done by this document's own accounting, whatever the
+  test ended up being called.
+
+**What is not checkable, stated rather than implied.** "Has this work been done" is not
+mechanical — entry 1's work landed under four test names, none of them the one the
+entry proposed, so asking whether the NAMED test exists would have passed and said
+nothing. The id is the only durable anchor.
+
+And with every entry struck, the second arm has nothing to refuse on this document, so
+it is the planted fixture beside it that keeps it honest: a two-entry document where
+moving the open entry's id into section 2 must be caught. A sweep over an empty
+population reports the same clean answer as a correct one.
+
+When the next mode is taken, add it here with its id, un-struck, and the arms will
+hold the entry to the inventory from then on.
 
 ## 6. What this document cannot tell you
 

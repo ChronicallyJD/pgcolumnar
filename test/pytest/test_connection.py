@@ -291,3 +291,45 @@ def test_the_acknowledgement_is_by_cursor_against_the_real_driver(pgc_conn, expe
         expect.num(int(writes[1].acknowledged), 1, "acknowledges the second write")
         expect.num(int(writes[0].acknowledged), 0, "and leaves the first unnamed")
         expect.wrote(first, 0, "so name the first explicitly too")
+
+
+def test_the_block_compression_default_is_pinned_to_its_measurement(pgc_conn, expect):
+    """#890: zstd:3 stays the default until a measurement says otherwise.
+
+    The roadmap proposed making this default depend on a storage tier, on the
+    premise that block compression trades CPU for I/O. Phase 1 refuted the premise
+    ON THIS ENGINE: our cascade runs lightweight encodings first, so zstd works on
+    already-reduced bytes and its remaining cost is small against the memory traffic
+    it removes. Measured on PG 17.10, 400k rows, minimum of 12, arms round-robined,
+    and the none/zstd ranges do not overlap on any shape:
+
+        shape   marginal bytes saved   scan time vs none
+        rep                   +76.6%   0.92   (faster)
+        rand                   -1.7%   1.14   (slower -- incompressible)
+        mix                   +12.0%   0.92   (faster)
+
+    Warm cache, which understates the saving ON THE SHAPES THAT COMPRESS: no
+    physical read happens on either arm, so a cold run adds an I/O term proportional
+    to bytes read and `rep` and `mix` can only widen.
+
+    NOT SO ON `rand`, AND THE DIFFERENCE MATTERS. There zstd writes 148,076 MORE
+    bytes than none, so cold makes it worse on both terms at once -- more bytes to
+    read AND the same decompression CPU -- and C(cold) > 1.14. An earlier version of
+    this comment said a cold measurement "can only move further toward compression",
+    full stop. That is true only where compression reduces bytes, and stating it
+    unconditionally gave away the stronger argument: the incompressible shape
+    degrading cold is a SECOND, independent reason for the per-table override rather
+    than a global change. Reported by @OffgridwithJD.
+
+    This arm is a pin, not a discovery. It exists so that changing the default is a
+    deliberate act with a new measurement attached, rather than a line edit nobody
+    has to defend. Incompressible data is a real cost and the answer there is the
+    per-table override, not a different global default.
+    """
+    with pgc_conn.cursor() as cur:
+        cur.execute("SHOW pgcolumnar.compression")
+        method = cur.fetchone()[0]
+        cur.execute("SHOW pgcolumnar.compression_level")
+        level = cur.fetchone()[0]
+    expect.text(method, "zstd", "the block compression default is zstd (#890 phase 1)")
+    expect.num(int(level), 3, "and its level is 3")

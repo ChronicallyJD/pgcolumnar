@@ -655,3 +655,118 @@ def test_every_in_document_link_in_this_directory_reaches_a_heading(expect):
                     f"every in-document link in {doc.name} reaches a heading")
     expect.at_least(total_links, 15,
                     "premise: and it parsed links rather than finding none")
+
+
+# ---------------------------------------------------------------------------
+# Section 5's "what to add next" list must not name work that is already done.
+#
+# WHY. Section 5 is the one part of this document whose only reader is someone about
+# to BUILD something, and it is the only part with no mechanism. Sections 1a, 2 and 3
+# are all checked against the ids on disk; section 5 was prose. Entry 1 said "the
+# constant exists and nothing writes it" long after `query_error()` existed and
+# `test_failed_query_sentinel.py` had ten arms over it, so the next person to take the
+# list would have built something that was already there.
+#
+# THAT ALMOST HAPPENED FOR REAL, one document over. A bad enumeration of
+# `test/selftest/340` made an existing block look like a coverage gap, and the
+# duplicate was written and proven to discriminate before the duplication was noticed
+# (#432). A stale "what to add next" is the same defect with the wrong answer written
+# down in advance.
+#
+# WHAT IS CHECKABLE, and what is not. "Has this work been done" is not mechanical:
+# entry 1's work landed under four different test names, so asking whether the NAMED
+# test exists would have passed and said nothing. What is mechanical is the anchor:
+#
+#   * every entry names at least one mode id, so it is tied to the inventory at all
+#   * an un-struck entry's ids are in section 3 (not refused) and NOT in section 2
+#
+# An entry whose id has reached section 2 is done by the document's own accounting,
+# whatever it is called in the corpus. And an entry naming no id cannot be checked
+# against anything, which is how entry 1 stayed wrong.
+# ---------------------------------------------------------------------------
+
+_NEXT_ITEM = re.compile(r"^(\d+)\. (.*?)(?=^\d+\. |\Z)", re.M | re.S)
+
+
+def _next_steps_entries(text):
+    """-> [(number, struck, {mode ids})] for section 5's numbered list."""
+    body = ""
+    for chunk in re.split(r"^## ", text, flags=re.M):
+        if chunk.startswith("5."):
+            # DROP THE HEADING LINE. The section is "## 5. What to add next", and with
+            # the "## " split away the heading itself begins "5. " at the start of the
+            # string -- which the item pattern matches, inventing an entry 5 that is
+            # the title. It collided with the real entry 5 and reported 3 items in a
+            # two-item fixture, which is how it was caught.
+            body = chunk.split("\n", 1)[1] if "\n" in chunk else ""
+            break
+    out = []
+    for m in _NEXT_ITEM.finditer(body):
+        item = m.group(2)
+        out.append((int(m.group(1)), "~~" in item, set(MODE_ID.findall(item))))
+    return out
+
+
+def test_the_next_steps_list_is_anchored_to_the_inventory(expect):
+    """Every entry names a mode id, so the entry can be checked at all."""
+    entries = _next_steps_entries(MODES_DOC.read_text())
+    expect.at_least(len(entries), 4, "premise: the list was parsed, not missed")
+    unanchored = sorted(n for n, _struck, ids in entries if not ids)
+    expect.text(", ".join(str(n) for n in unanchored) or "none", "none",
+                "every entry in section 5 names at least one mode id")
+
+
+def test_no_open_next_step_names_work_the_document_calls_done(expect):
+    """An un-struck entry whose id has reached section 2 is stale.
+
+    Section 2 is "refused today". An entry still listed as work to do, naming an id
+    the document itself has moved into section 2, sends the next reader to build
+    something this document says exists.
+    """
+    refused, not_refused, _ = _named_modes_in(MODES_DOC.read_text())
+    entries = _next_steps_entries(MODES_DOC.read_text())
+    expect.at_least(len(refused), 20, "premise: section 2's ids were found")
+
+    stale = sorted(
+        "%d:%s" % (n, i)
+        for n, struck, ids in entries if not struck
+        for i in sorted(ids) if i in refused
+    )
+    expect.text(", ".join(stale) or "none", "none",
+                "no open entry names an id section 2 already claims as refused")
+
+
+def test_a_stale_next_step_is_caught_on_a_fixture(expect):
+    """The removal proof, on a document built to be wrong — and its control.
+
+    Without the control, a parser that finds no entries reports the same clean
+    answer as a correct list.
+    """
+    doc = (
+        "## 1a. Counting\n\n"
+        "## 2. Refused\n\n`one-two-three` is refused.\n\n"
+        "## 3. Not refused\n\n`four-five-six` is not.\n\n"
+        "## 5. What to add next, in order\n\n"
+        "1. `write_something` — closes `four-five-six`.\n"
+        "2. ~~`write_other` — closes `one-two-three`.~~ **Done.**\n"
+    )
+    entries = _next_steps_entries(doc)
+    expect.num(len(entries), 2, "premise: both fixture entries were parsed")
+    expect.text(repr([(n, st) for n, st, _ in entries]), "[(1, False), (2, True)]",
+                "and the strike-through is what marks one done")
+
+    refused, _, _ = _named_modes_in(doc)
+    stale = ["%d:%s" % (n, i) for n, st, ids in entries if not st
+             for i in sorted(ids) if i in refused]
+    expect.text(", ".join(stale) or "none", "none",
+                "control: the open entry names an UNrefused id, so it is not stale")
+
+    # Now move the open entry's id into section 2, which is what "done" looks like.
+    moved = doc.replace("`four-five-six` is not.", "moved away.").replace(
+        "`one-two-three` is refused.", "`one-two-three` and `four-five-six` are refused.")
+    refused2, _, _ = _named_modes_in(moved)
+    entries2 = _next_steps_entries(moved)
+    stale2 = ["%d:%s" % (n, i) for n, st, ids in entries2 if not st
+              for i in sorted(ids) if i in refused2]
+    expect.text(", ".join(stale2), "1:four-five-six",
+                "and an open entry whose id reached section 2 is named")

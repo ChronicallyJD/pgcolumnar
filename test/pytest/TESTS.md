@@ -69,6 +69,7 @@ behaviour, the source of that number is named.
 - [21. test_failed_query_sentinel.py: a failed query is not a comparison](#21-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
 - [22. test_writes_wrote_rows.py: a write that wrote nothing](#22-test_writes_wrote_rowspy-a-write-that-wrote-nothing)
 - [23. test_mutation_ledger.py: which checks have ever been red](#23-test_mutation_ledgerpy-which-checks-have-ever-been-red)
+- [24. test_loop_coverage_premise.py: a loop that never ran asserted nothing](#24-test_loop_coverage_premisepy-a-loop-that-never-ran-asserted-nothing)
 
 ## 1. How to read a test in here
 
@@ -764,6 +765,46 @@ a plausible wrong hash that neither the per-file sentinel nor the empty-manifest
 guard can see. It has not been observed. The boundary of this change is "the three
 observed variants are closed", not "the function is now infallible".
 
+### A helper that took a tree and ignored it
+
+`_sh(srcdir, expr)` read as "evaluate one `lib.sh` expression against a tree" — the
+docstring said so, nine call sites passed a fixture tree, and the body sourced the
+module-global `SRCDIR`, the real source tree, instead. Whatever those arms measured, it
+was not parameterised by the tree they were handed (#933).
+
+**Which reading was intended is a measurement, not a judgement.** Every caller passes a
+tree built by `_tree_with_module` or `_tree_with_source`, and none of those contains
+`test/lib.sh`:
+
+```
+fixture tree holds: ['Makefile', 'objstore', 'pgcolumnar.control']
+honouring srcdir:   rc=1, "No such file or directory" -- the source fails
+sourcing SRCDIR:    rc=0, the function under test runs
+```
+
+So the parameter could never have worked: honouring it would have made every one of
+those arms measure a failed `source` rather than the function. The arms mean the real
+tree, the parameter was noise, and it is gone. The expressions that DO need the fixture
+interpolate it themselves, which is why dropping it changes no behaviour.
+
+| test | asserts |
+| --- | --- |
+| `test_the_unread_parameter_scan_finds_one` | the scan fires on the shape `_sh` had |
+| `test_the_unread_parameter_scan_spares_fixtures_and_hooks` | five shapes it must not flag |
+| `test_no_helper_in_this_corpus_takes_a_parameter_it_never_reads` | the population, corpus-wide: one before, none now |
+
+**The class, not the instance.** The scan is corpus-wide because the defect was here and
+the class is not.
+
+**Two exclusions, both real rather than hatches.** A **test** function's parameters are
+pytest fixtures: requesting one has an effect whether or not the body reads it, and three
+in this corpus are legitimately unread. A **hook**'s signature is pytest's API — arguments
+arrive by name — so declaring one you do not read is how a hook says which it wants.
+Three of the four the scan found before this change were hooks:
+`pytest_collection_modifyitems(config)`, `pytest_xdist_node_collection_finished(node)`
+and `pytest_sessionfinish(exitstatus)`. Only `_sh` was a defect, so the budget was 1 and
+is now 0.
+
 ## 6. test_docs_cover_the_corpus.py: this document, checked
 
 **THE SWEEP GOES BOTH WAYS NOW (#908).** `undocumented()` computes tests on disk
@@ -840,6 +881,27 @@ many times.
 | `test_the_anchor_rule_drops_punctuation_and_keeps_underscores` | GitHub's derivation, on the heading the defect was found in |
 | `test_an_anchor_that_strips_the_underscores_is_caught` | the exact broken link that shipped, with a control |
 | `test_every_in_document_link_in_this_directory_reaches_a_heading` | every contents-list link resolves, with a coverage premise |
+| `test_the_next_steps_list_is_anchored_to_the_inventory` | every section 5 entry names a mode id, so the entry can be checked at all |
+| `test_no_open_next_step_names_work_the_document_calls_done` | an un-struck entry whose id reached section 2 is stale work to do |
+| `test_a_stale_next_step_is_caught_on_a_fixture` | **removal proof**: the shape, planted, with the control beside it |
+
+
+**Section 5 was the last unchecked part of VACUITY_MODES.md, and it was wrong (#432).**
+1a, 2 and 3 are all compared against the ids on disk; "what to add next" was prose.
+Entry 1 still said *"the constant exists and nothing writes it"* long after
+`query_error()` existed and `test_failed_query_sentinel.py` had ten arms over it — the
+most expensive place in the document for a stale sentence, because its only reader is
+someone about to build something. The near-miss one document over is the argument: a
+bad enumeration of `test/selftest/340` made an existing block look like a gap, and the
+duplicate was written and proven to discriminate before anyone noticed.
+
+**What is checkable is the anchor, not the work.** Entry 1's work landed under four
+test names, none of them the one the entry proposed, so asking whether the NAMED test
+exists would have passed and said nothing. So the arms check that every entry names a
+mode id, and that no un-struck entry names an id section 2 already claims.
+
+With every entry now struck, the second arm has nothing to refuse on the real
+document. That is what the fixture arm is for.
 
 The five fixture arms exist because everything above them passes on a healthy tree,
 which is exactly what a guard that does nothing also does. They run the identical
@@ -879,6 +941,7 @@ written.
 | --- | --- |
 | `test_cluster_fixture_gives_a_typed_connection` | `count(*)` arrives as a Python `int`, and its type is `int` |
 | `test_the_extension_is_installed_and_columnar` | the fixture's cluster has `pgcolumnar` at the expected version |
+| `test_the_block_compression_default_is_pinned_to_its_measurement` | `zstd:3` is still the default, pinned to #890 phase 1: the cascade runs first, so zstd works on already-reduced bytes and is +76.6% smaller at 0.92x the scan time on `rep` and +12.0% at 0.92x on `mix`. A pin, so changing it is deliberate |
 | `test_a_columnar_table_round_trips_with_real_types` | `numeric` is `Decimal`, `float8` is `float`, `bytea` is `bytes`, an array is a `list` |
 | `test_the_plan_shows_a_columnar_scan` | the plan arrives as parsed Python, and the scan ran |
 | `test_the_provider_name_does_not_identify_a_scan` | **pins a trap**; see below |
@@ -1340,6 +1403,7 @@ fixtures are read off `conftest.py` rather than named in the classifier.
 | `test_a_cluster_test_still_needs_the_driver` | **control**: deferring made the IMPORT lazy, not the database optional |
 | `test_conftest_imports_no_database_driver_at_module_scope` | the regression named in one line, for whoever edits conftest next |
 | `test_the_declaration_is_exactly_the_database_free_half` | `NO_CLUSTER` equals the property, both ways, so an undeclared database-free file is named |
+| `test_the_declaration_names_each_file_once` | the list's cardinality, which `membership_report`'s set comparison cannot see. Measured: pytest deduplicates the paths, so the cost is the job's own printed file count, not a double run |
 | `test_the_partition_accounts_for_every_file_in_the_corpus` | **premise**: every file lands in exactly one bucket, and neither bucket is the whole corpus |
 | `test_the_cluster_fixtures_are_read_off_conftest_rather_than_named_here` | the roots of the property are derived from `conftest.py`, not typed |
 | `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control, over a fixture corpus |
@@ -2037,6 +2101,21 @@ that the mutation kills that check. A run with more than one failing check is
 refused with the count, and a single failure still carries the mutation on the
 check that reddened.
 
+### `test_a_reconciling_log_with_a_red_is_not_evidence_on_its_own`
+
+`merge` already refuses a log that does not **reconcile**, and reconciliation is not
+the property that matters: both logs that poisoned this ledger on the day it landed
+reconciled. One was 827 records against `checks run: 827`, with fifteen checks red
+because the tree had been copied without `.git`; the other was a single `FAIL` from
+an unfinished change.
+
+An environment red and a real regression are identical in the log, so the tool cannot
+tell them apart and makes the caller say which it is: `--mutation NAME` for a
+deliberate break, `--reds-are-real` for a genuine observation. Refusing reds outright
+was rejected — a real CI red is the most valuable row the ledger holds and has no
+mutation to name. An all-`PASS` log still merges with no flag, which is the control.
+See #946.
+
 ### `test_two_runs_of_a_check_are_not_a_duplicate_of_it`
 
 Merging logs first cannot tell *the same check in two runs* from *the same name twice in
@@ -2071,3 +2150,55 @@ If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so
 gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
 which falls as suites are seeded.
 
+
+## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
+
+**Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5
+is two shapes, and the layer already refused one of them without anyone recording that
+it did.
+
+**The half already refused.** When a loop's body holds the test's ONLY counted
+assertions, a zero-trip loop leaves the count at 0 and `pytest_runtest_call` raises
+`VacuityError`. Measured on a planted test rather than read off the hook:
+
+```
+only assertion inside a zero-trip loop   VacuityError: made no counted assertion
+the same loop with one row               1 passed
+```
+
+**The half that was open.** When the test *also* asserts outside the loop, the count is
+non-zero, the test passes, and the loop's assertions simply never ran. Nothing noticed.
+That is the shape a query returning no rows produces, and the shape a glob matching
+nothing produces.
+
+**The population, measured before the arm was written:**
+
+| shape | loops | state |
+| --- | ---: | --- |
+| non-empty by construction (literal, `range`, local literal) | 20 | cannot be zero-trip |
+| derived, loop holds the only assertions | 0 | already refused |
+| derived, **with** assertions outside the loop | 2 | at risk, now guarded |
+
+Both at-risk loops already carried a premise, so this arm is **green on arrival**. That
+is the point rather than a weakness: the property was true of the corpus and nothing was
+holding it there, so what this catches is the third one. It is not insurance against an
+imagined shape — it has a population of two and locks it in.
+
+| test | asserts |
+| --- | --- |
+| `test_every_at_risk_loop_carries_a_coverage_premise` | the corpus itself: every derived loop carrying an assertion has a cardinality premise |
+| `test_the_sweep_finds_the_loops_it_is_meant_to_police` | **premise**: the sweep classified loops, because one that parses nothing reports no offenders either |
+| `test_a_loop_with_no_premise_is_caught` | **removal proof**: the real shape with the premise removed, with the clean control beside it |
+| `test_a_bounded_loop_needs_no_premise` | a literal, a `range` and a local dict's `.items()` are all exempt, because demanding a premise there would be noise a reader edits away |
+| `test_the_layer_already_refuses_a_loop_holding_every_assertion` | the measured half, so this file does not claim the whole mode — and that the sweep deliberately skips that shape rather than double-reporting it |
+
+### Why the rule is looser than the property, and what is left
+
+The honest requirement is *a premise bounding the cardinality of **this** iterable*. What
+is enforced is *a counted assertion outside the loop that takes `len(...)` of something*.
+
+The two differ, and the reason is dataflow. `test_harness_deps.py`'s loop iterates
+`sorted(found)` while its premise bounds `len(files)` — `found` is built from `files` in
+a preceding loop. A rule that demanded the names match would reject correct code, which
+is how a guard gets switched off. **So the residual is a loop whose premise bounds the
+wrong collection**, which a reviewer catches and a sweep does not. 3.5 names it.

@@ -76,6 +76,8 @@ NO_CLUSTER = [
     # hands cluster-bound file names to pytest, so it needs what they need.
     "test_harness_deps_classifier.py",
     "test_writes_wrote_rows.py",
+    # An AST sweep plus `inspect`, so it needs neither a cluster nor the driver.
+    "test_loop_coverage_premise.py",
     # Landed on main in #930 while this branch was in review, and the arm below named
     # it: cluster-free, not driver-dependent, so the job can run it and the
     # declaration has to say so. The third time this arm has caught a merge-order
@@ -530,6 +532,39 @@ def membership_report(directory=None, declared=None):
             for n in sorted((set(declared) & present) & driver_bound)]
     bad += ["undeclared:" + n for n in sorted(runnable - set(declared))]
     return "[]" if not bad else "[%d: %s]" % (len(bad), " ".join(bad))
+
+
+def test_the_declaration_names_each_file_once(expect):
+    """`membership_report` compares SETS, so it cannot see a name listed twice.
+
+    The list is the artifact, not the set: CI builds its file list with
+    `" ".join(NO_CLUSTER)`, and the job prints how many files it is running. A
+    duplicate makes that printed count one too high.
+
+    MEASURED, because the first version of this docstring also claimed the file would
+    RUN TWICE and that is false: 12 entries and 13 entries both give `215 passed`,
+    because pytest deduplicates identical paths on its command line. So the cost is a
+    wrong number in the job's own output, not wasted work -- which still matters here,
+    since that printed count is the only place a reader learns how wide the
+    database-free job is.
+
+    Found by a count that did not reconcile: the declaration said 13 and
+    `job_runnable` said 12 while both set differences were empty, which is only
+    possible if a name appears twice.
+
+    A set comparison hiding a duplicate is the same shape as a check-name collision
+    folding two ledger rows into one: whenever the mechanism compares sets, the
+    cardinality needs its own arm.
+    """
+    seen, dupes = set(), []
+    for name in NO_CLUSTER:
+        if name in seen:
+            dupes.append(name)
+        seen.add(name)
+    expect.text(", ".join(sorted(set(dupes))) or "none", "none",
+                "no file is declared twice in NO_CLUSTER")
+    expect.num(len(NO_CLUSTER), len(seen),
+               "and the list's length is its number of distinct names")
 
 
 def _main(argv):

@@ -407,6 +407,95 @@ true until the next version shipped.
 
 ### Fixed
 
+- A loop that never ran asserted nothing, and half of that was already refused by a
+  mechanism nobody had recorded covered it (#432).
+
+  `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5 is two shapes.
+
+  **Already refused.** When a loop's body holds a test's ONLY counted assertions, a
+  zero-trip loop leaves the count at 0 and `pytest_runtest_call` raises `VacuityError`.
+  Measured on a planted test rather than read off the hook: the zero-trip case fails
+  with "made no counted assertion" and the same loop with one row passes.
+
+  **Was open.** When the test ALSO asserts outside the loop, the count is non-zero, the
+  test passes, and the loop's assertions simply never ran. That is the shape a query
+  returning no rows produces, and the shape a glob matching nothing produces.
+
+  `test_loop_coverage_premise.py` requires a cardinality premise for exactly that shape.
+  THE POPULATION, measured over the whole corpus before the arm was written: 20 loops
+  non-empty by construction and so unable to be zero-trip, 0 in the already-refused
+  shape, and **2 at risk** -- both of which already carried a premise. The arm is green
+  on arrival, which is the point rather than a weakness: the property was true and
+  nothing was holding it there, so what this catches is the third one.
+
+  **IT NARROWS RATHER THAN CLOSES, and 3.5 names the residual.** The honest requirement
+  is a premise bounding the cardinality of THIS iterable; what is enforced is a counted
+  assertion outside the loop taking `len(...)` of something. `test_harness_deps.py`'s
+  loop iterates `sorted(found)` while its premise bounds `len(files)`, because `found` is
+  built from `files` in a preceding loop -- so a rule demanding the names match would
+  reject correct code, which is how a guard gets switched off. The residual is a loop
+  whose premise bounds the wrong collection: a reviewer catches it, a sweep does not.
+
+  Section 5 gains entry 6, struck and anchored to its mode id, which is the first use of
+  the rule the previous commit added.
+
+- Section 5 of VACUITY_MODES.md, the "what to add next" list, is checked (#432).
+
+  1a, 2 and 3 are all compared against the mode ids on disk. Section 5 was prose, and
+  it was **wrong**: entry 1 still said "the constant exists and nothing writes it" long
+  after `query_error()` existed and `test_failed_query_sentinel.py` carried ten arms
+  over it, including the producer's uniqueness and the constant's non-uniqueness that
+  is the reason the producer exists.
+
+  **That is the most expensive place in the document for a stale sentence**, because
+  its only reader is someone about to build something. The near-miss one document over
+  is what it costs: a bad enumeration of `test/selftest/340` made an existing block
+  look like a coverage gap, and the duplicate was written and proven to discriminate
+  before the duplication was noticed.
+
+  **What is checkable is the anchor, not the work.** Entry 1's work landed under four
+  test names, none of them the one the entry proposed, so asking whether the NAMED test
+  exists would have passed and said nothing. Two arms hold the list instead:
+
+  - every entry names at least one mode id, so it is tied to the inventory at all.
+    Entry 1 named none, which is exactly how it stayed wrong.
+  - no UN-STRUCK entry names an id section 2 already claims as refused. An entry whose
+    id has reached section 2 is done by the document's own accounting, whatever the
+    test ended up being called.
+
+  Entry 1 is struck and anchored to `error-swallowed-to-empty`, and it records what the
+  entry got wrong rather than replacing it: both halves of "the constant exists and
+  nothing writes it" were false -- two sites already minted sentinels by hand, and the
+  missing thing was the REFUSAL in four of the five comparisons.
+
+  **Fixing it made the second arm vacuous on this document**, because with every entry
+  struck there is nothing left to refuse. The planted fixture beside it is therefore
+  the whole of its evidence, and the document says so rather than leaving it implied: a
+  two-entry fixture where moving the open entry's id into section 2 must be named, with
+  the clean control beside it.
+
+  The totals do not move -- 28 refused, 44 not refused, 72 named -- because the mode was
+  already counted as refused. Only the list that tells the next person what to do was
+  wrong.
+
+  **And 3.6 now records measured populations, so the next entry is chosen on evidence.**
+  Section 5's new rule is that an entry must name a mode id, which makes WHICH id worth
+  measuring. Four of 3.6's were counted by AST scan over the whole corpus:
+  `truthy-cursor-from-execute` has 7 sites and **all are benign** -- every one is
+  `x = cur.execute(...)`, idiomatic in psycopg3, and **zero** branch on it, which is the
+  dangerous form; `empty-query-string-succeeds` has 0; the multistatement mode has 1, a
+  setup that fetches nothing with a `count(*)` premise right after it; and the
+  server-cursor rowcount mode has 2, both legitimate. So all four are PROSPECTIVE, and a
+  guard for any of them would be insurance rather than a closure. Recorded because a
+  refusal with no population has not refused anything, and 1a counts section 2 as
+  "refused today".
+
+  One instrument defect of mine, caught by that fixture: the parser matched the
+  SECTION HEADING as an entry. `re.split(r"^## ")` leaves a chunk beginning "5. What to
+  add next", which the numbered-item pattern also matches -- inventing an entry 5 that
+  is the title and colliding with the real entry 5. The fixture reported 3 entries in a
+  two-entry document, which is how it was found.
+
 - A count `grep` never produced no longer reads as "present" (#929).
 
   #922 replaced roughly 28 `producer | grep -q PAT` tests with
@@ -732,6 +821,35 @@ true until the next version shipped.
   pgc_summary", which conflated the two populations: twelve never call it, and ten of
   those keep no tally. Both halves were true of something; neither was true of what it
   said.
+- A test helper no longer takes a tree it ignores (#933).
+
+  `_sh(srcdir, expr)` in `test/pytest/test_build_refusal.py` read as "evaluate one
+  `lib.sh` expression against a tree": the docstring said so, nine call sites passed a
+  fixture tree, and the body sourced the module-global `SRCDIR` -- the real source tree --
+  instead. Whatever those arms measured, it was not parameterised by the tree they were
+  handed.
+
+  WHICH READING WAS INTENDED IS A MEASUREMENT. Every caller passes a tree built by
+  `_tree_with_module` or `_tree_with_source`, and none contains `test/lib.sh`:
+
+      fixture tree holds: ['Makefile', 'objstore', 'pgcolumnar.control']
+      honouring srcdir:   rc=1, "No such file or directory" -- the source fails
+      sourcing SRCDIR:    rc=0, the function under test runs
+
+  So the parameter could never have worked -- honouring it would have made every one of
+  those arms measure a failed `source` rather than the function under test. The arms mean
+  the real tree, so the parameter was noise that made nine call sites read as something
+  they were not. It is gone, and behaviour is unchanged: the expressions that need the
+  fixture interpolate it themselves.
+
+  A corpus-wide AST scan now requires that no helper takes a parameter it never reads, so
+  the class is closed rather than the instance. Two exclusions, both real: a TEST
+  function's parameters are pytest fixtures, and requesting one has an effect whether or
+  not the body reads it; and a HOOK's signature is pytest's API, where arguments arrive by
+  name, so declaring one you do not read is how a hook says which it wants. Three of the
+  four the scan found were hooks -- `pytest_collection_modifyitems(config)`,
+  `pytest_xdist_node_collection_finished(node)`, `pytest_sessionfinish(exitstatus)` -- so
+  only `_sh` was a defect and the budget was 1, now 0.
 
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
