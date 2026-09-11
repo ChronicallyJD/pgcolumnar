@@ -25,8 +25,62 @@
 set -euo pipefail
 
 TITLE="${PGC_NIGHTLY_REPORT_TITLE:-nightly deep gate is red}"
-verdict="${1:?usage: nightly-report.sh <failure|success> [failed-job ...]}"
-shift || true
+
+# THE VERDICT IS DERIVED HERE, FROM THE `needs` CONTEXT, AND THAT IS THE POINT.
+#
+# The first version computed it in the workflow from four named environment
+# variables, which made TWO lists: `needs: [...]`, guarded by a set-equality arm
+# in selftest 450, and the env block, guarded by nothing. A contributor adding a
+# gate was COMPELLED by the arm to update the guarded list and told nothing about
+# the one the verdict actually came from -- so the new gate could burn while this
+# reported green. #973 reintroduced inside the fix for #973, found by
+# @OffgridwithJD, who added a fifth job to a copy of the branch and got a fully
+# green tree with a nightly whose failure the reporter could not see.
+#
+# `toJSON(needs)` carries every entry, so there is one list and nothing to keep in
+# agreement -- which beats a guard asserting that two lists agree.
+#
+# AND IT MAKES THE DECISION TESTABLE. The workflow can only be read; this can be
+# DRIVEN, so selftest 450 feeds it tuples and the fire drill exercises the real
+# decision path instead of overriding the answer.
+verdict_from_needs() {	# verdict_from_needs <json> -> failure|success
+	local json="$1" results r
+	# `skipped` is not a failure: a fork run, and a fire drill, skip every gate.
+	results="$(printf '%s' "$json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if not isinstance(d, dict) or not d:
+    sys.exit(3)
+for v in d.values():
+    print((v or {}).get("result", "missing"))
+')" || return 3
+	[ -n "$results" ] || return 3
+	for r in $results; do
+		case "$r" in
+			failure|cancelled|timed_out) echo failure; return 0 ;;
+			success|skipped) ;;
+			# A result this does not know is NOT a pass. It means the platform
+			# grew a state while this did not, and treating it as green restores
+			# the silence #973 is about.
+			*) echo failure; return 0 ;;
+		esac
+	done
+	echo success
+}
+
+if [ "${1:-}" = "--from-needs" ]; then
+	# AN EMPTY OR UNPARSEABLE CONTEXT IS REFUSED, not defaulted. `needs` empty
+	# means the job list changed shape; reporting green on that is the failure
+	# mode this whole file exists to remove.
+	if ! verdict="$(verdict_from_needs "${2:?usage: --from-needs <toJSON(needs)>}")"; then
+		echo "nightly-report: the needs context was empty or unparseable" >&2
+		exit 3
+	fi
+	shift 2
+else
+	verdict="${1:?usage: nightly-report.sh <failure|success|--from-needs JSON> [job ...]}"
+	shift || true
+fi
 failed=("$@")
 
 run_url="${PGC_NIGHTLY_RUN_URL:-${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}}"
@@ -80,7 +134,15 @@ fi
 # EXACT TITLE MATCH, not a search-relevance match. `gh issue list --search` is a
 # full-text query and would find any issue mentioning these words -- including
 # the ones the two of us have filed ABOUT this mechanism.
-existing="$(gh issue list --state open --limit 100 --json number,title \
+# NARROWED SERVER-SIDE, THEN MATCHED EXACTLY HERE. A bare `--limit 100` silently
+# misses the target once the tracker holds more than a hundred open issues, the
+# lookup returns empty, and every red opens a NEW issue -- which is precisely "a
+# notifier people filter", the thing this design rests on not being
+# (@OffgridwithJD). The search narrows the window; the exact match is still done
+# here, because `--search` is full-text and would also find the issues the two of
+# us have filed ABOUT this mechanism.
+existing="$(gh issue list --state open --limit 100 --search "\"$TITLE\" in:title" \
+	--json number,title \
 	--jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")"
 
 if [ "$verdict" = failure ]; then

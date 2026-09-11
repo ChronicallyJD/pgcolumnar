@@ -630,36 +630,48 @@ jobs:
       - name: open, update or close the nightly's issue
         env:
           GH_TOKEN: ${{ github.token }}
-          SUITES: ${{ needs.suites.result }}
-          SANITIZER: ${{ needs.sanitizer.result }}
-          COVERAGE: ${{ needs.coverage.result }}
-          UPGRADE: ${{ needs.upgrade-guard.result }}
+          # ONE LIST, NOT TWO. An earlier version named the four results in four
+          # environment variables, which meant `needs:` was guarded by selftest 450
+          # and the verdict was computed from a second list guarded by nothing --
+          # so a contributor adding a gate was compelled to update the guarded list
+          # and told nothing about the one that decided the verdict
+          # (@OffgridwithJD, who added a fifth job and got a fully green tree with
+          # a nightly whose failure this could not see).
+          #
+          # toJSON(needs) carries every entry, so there is nothing to keep in
+          # agreement.
+          NEEDS_JSON: ${{ toJSON(needs) }}
           DRILL: ${{ github.event.inputs.fire_drill }}
         run: |
           set -euo pipefail
-          verdict=success
-          for r in "$SUITES" "$SANITIZER" "$COVERAGE" "$UPGRADE"; do
-            # `skipped` is not a failure: a fork run skips every gated job.
-            case "$r" in failure|cancelled|timed_out) verdict=failure ;; esac
-          done
-          # A FIRE DRILL GOES THROUGH THIS SAME PATH, differing only in where the
-          # verdict came from. A drill that posts by a separate route proves the
-          # route, not the mechanism -- and a notifier never seen to fire is
-          # indistinguishable from none, which is what #973 is about.
-          if [ "${DRILL:-false}" = "true" ]; then verdict=failure; fi
-          echo "suites=$SUITES sanitizer=$SANITIZER coverage=$COVERAGE upgrade-guard=$UPGRADE -> $verdict"
+          # THE DRILL SUBSTITUTES THE INPUT, NOT THE ANSWER. An earlier version set
+          # verdict=failure directly, which meant the drill proved delivery and
+          # never touched the decision -- and the decision is the half that can
+          # fail the #973 way. It now feeds a synthetic context through the same
+          # derivation every real night uses.
+          # THE REAL CONTEXT IS PRINTED FIRST, ALWAYS, INCLUDING ON A DRILL.
+          # The whole fix rests on toJSON(needs) carrying every entry, and that was
+          # an assumption about the platform rather than something anyone had seen.
+          # Printing it makes every run -- including the cheap drill -- an
+          # observation of it: a drill shows all four gates as `skipped`, so a gate
+          # missing from this line is visible without waiting for a real red.
+          echo "needs context as given: $NEEDS_JSON"
+          needs_json="$NEEDS_JSON"
+          if [ "${DRILL:-false}" = "true" ]; then
+            needs_json='{"fire-drill":{"result":"failure"}}'
+            echo "fire drill: substituting a failing context through the same derivation"
+          fi
+          echo "verdict computed from: $needs_json"
 
           names=()
-          if [ "$verdict" = failure ]; then
-            while IFS= read -r n; do [ -n "$n" ] && names+=("$n"); done < <(
-              # SELECT WHAT FAILED, NOT WHAT DID NOT SUCCEED. The first version filtered
-              # negatively and the fire drill caught it at once: this job is still RUNNING
-              # when it asks, so it does not match "success" and listed ITSELF as a failing
-              # job. On a real red the issue would have named the reporter beside the genuine
-              # failures. A positive list cannot admit a state nobody thought of.
-              gh run view "$GITHUB_RUN_ID" --json jobs --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name' 2>/dev/null || true)
-            if [ "${DRILL:-false}" = "true" ] && [ "${#names[@]}" -eq 0 ]; then
-              names+=("fire drill: no job actually failed")
-            fi
-          fi
-          .github/scripts/nightly-report.sh "$verdict" ${names+"${names[@]}"}
+          while IFS= read -r n; do [ -n "$n" ] && names+=("$n"); done < <(
+            # SELECT WHAT FAILED, NOT WHAT DID NOT SUCCEED. The first version
+            # filtered negatively and the first fire drill caught it: this job is
+            # still RUNNING when it asks, so it did not match "success" and listed
+            # ITSELF as a failing job. A positive list cannot admit a state nobody
+            # enumerated -- and where it OMITS one (neutral, action_required,
+            # stale), the reporter says no job name was reported rather than
+            # printing an empty list.
+            gh run view "$GITHUB_RUN_ID" --json jobs --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | .name' 2>/dev/null || true)
+
+          .github/scripts/nightly-report.sh --from-needs "$needs_json" ${names+"${names[@]}"}

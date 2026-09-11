@@ -43,6 +43,76 @@ check "the reporter waits on EVERY other nightly job (#973)" \
 	"$(printf '%s' "$_rn_jobs" | md5sum | cut -c1-12)" \
 	"$(printf '%s' "$_rn_needs" | md5sum | cut -c1-12)"
 
+# ---- ONE LIST, and the verdict driven rather than read ---------------------
+#
+# The first version computed the verdict in the workflow from four named
+# environment variables. That made two lists: `needs:`, guarded by the arm above,
+# and the env block, guarded by nothing -- so a contributor adding a gate was
+# COMPELLED to update the guarded one and told nothing about the one that decided
+# the verdict. @OffgridwithJD added a fifth job to a copy of this branch,
+# registered it in `needs` as the arm above demands and named it in testing.md as
+# 240 demands, and got a fully green tree with a nightly gate whose failure the
+# reporter could not see. #973 reintroduced inside the fix for #973.
+#
+# `toJSON(needs)` carries every entry, so there is nothing to keep in agreement.
+# The arms below drive the derivation, which the old shape could only be read.
+check "the verdict comes from the whole needs context, not a second list" \
+	"$(grep -c 'NEEDS_JSON: \${{ toJSON(needs) }}' "$_rn_wf")" "1"
+# A ZERO-COUNT ARM CARRIES ITS OWN POSITIVE CASE. A pattern that matches nothing
+# and a tree that contains nothing both report 0, and only one of those is the
+# claim. This reintroduces the old shape into a copy and requires the pattern to
+# see it -- which is not hypothetical care: probing this very file with an
+# UNESCAPED `${{` read 0 against a line that plainly contains it, because `$`
+# before `{` is not literal to GNU grep. That one reddened. In a zero-count arm
+# the same slip passes.
+_rn_probe="$(mktemp)"; cp "$_rn_wf" "$_rn_probe"
+printf '          SUITES: ${{ needs.suites.result }}\n' >> "$_rn_probe"
+check "premise: the per-job-variable pattern sees that shape when it is present" \
+	"$(grep -cE '^ +[A-Z]+: \$\{\{ needs\.[a-z-]+\.result \}\}' "$_rn_probe")" "1"
+check "and no per-job result variable survives to drift from the context" \
+	"$(grep -cE '^ +[A-Z]+: \$\{\{ needs\.[a-z-]+\.result \}\}' "$_rn_wf")" "0"
+rm -f "$_rn_probe"
+
+_rn_v() {	# _rn_v JSON -> the derived verdict
+	PGC_NIGHTLY_REPORT_DRYRUN=1 bash "$_rn_sh" --from-needs "$1" 2>&1 |
+		sed -n 's/^verdict: //p'
+}
+check "every gate green is a green verdict" \
+	"$(_rn_v '{"a":{"result":"success"},"b":{"result":"success"}}')" "success"
+check "one gate failing is a red verdict" \
+	"$(_rn_v '{"a":{"result":"success"},"b":{"result":"failure"}}')" "failure"
+check "a cancelled gate is a red verdict, not a shrug" \
+	"$(_rn_v '{"a":{"result":"success"},"b":{"result":"cancelled"}}')" "failure"
+check "all skipped is green, which is a fork run and a fire drill" \
+	"$(_rn_v '{"a":{"result":"skipped"},"b":{"result":"skipped"}}')" "success"
+
+# THE ARM THAT MAKES THE ONE-LIST CLAIM REAL. A job this file has never heard of
+# is covered the day it is added, because the derivation reads the context rather
+# than a list anyone maintains. Under the old shape this could not be expressed:
+# the verdict came from four names and a fifth was invisible to it.
+check "a gate nobody listed here still decides the verdict (#973)" \
+	"$(_rn_v '{"a":{"result":"success"},"b":{"result":"success"},"brand-new-gate":{"result":"failure"}}')" \
+	"failure"
+
+# A RESULT THE SCRIPT DOES NOT KNOW IS NOT A PASS. The platform growing a state
+# while this did not is exactly how a reporter goes quiet.
+check "an unrecognised result is refused rather than treated as green" \
+	"$(_rn_v '{"a":{"result":"brand_new_state"}}')" "failure"
+
+# An empty context means the job list changed shape. Reporting green on that is
+# the failure this whole file exists to remove.
+PGC_NIGHTLY_REPORT_DRYRUN=1 bash "$_rn_sh" --from-needs '{}' >/dev/null 2>&1 && _rn_erc=0 || _rn_erc=$?
+check "an empty needs context is refused, not defaulted to green" \
+	"$_rn_erc" "3"
+
+# ---- the issue lookup must not go blind on a busy tracker ------------------
+#
+# A bare `--limit 100` silently misses the target once more than a hundred issues
+# are open: the lookup returns empty and every red opens a NEW issue, which is the
+# "notifier people filter" this design rests on not being (@OffgridwithJD).
+check "the issue lookup narrows server-side rather than paging blindly" \
+	"$(grep -c 'in:title' "$_rn_sh")" "1"
+
 # It must run on failure AND on success, or the close path never happens.
 check "the reporter runs on every outcome, not only on failure" \
 	"$(grep -c '^    if: always() &&' "$_rn_wf")" "1"
@@ -88,4 +158,5 @@ _rn_bare="$(PGC_NIGHTLY_REPORT_DRYRUN=1 bash "$_rn_sh" failure 2>&1)"
 check "a failure naming no job says so rather than printing an empty list" \
 	"$(printf '%s' "$_rn_bare" | grep -c 'No job name was reported')" "1"
 
-unset _rn_wf _rn_sh _rn_jobs _rn_n _rn_needs _rn_fail _rn_ok _rn_rc _rn_bare
+unset _rn_wf _rn_sh _rn_jobs _rn_n _rn_needs _rn_fail _rn_ok _rn_rc _rn_bare _rn_erc _rn_probe
+unset -f _rn_v
