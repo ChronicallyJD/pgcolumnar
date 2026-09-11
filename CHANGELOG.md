@@ -425,6 +425,15 @@ true until the next version shipped.
 
 ### Fixed
 
+- The sentinel sweep no longer excludes an assertion by accident of naming (#938).
+
+  `_comparisons()` selected on the first two parameter names, so `wrote(cur, want,
+  name)` sat outside because its first parameter is not called `got`. That happens
+  to be the right answer for a cursor, and it would also have been the answer for a
+  future comparison whose first parameter was `left`. Exclusion is now a positive
+  match on the kind of the left operand, and `inputs == selected + excluded` fails
+  when a method matches neither rule. A list of method names is not the fix.
+
 - A loop that never ran asserted nothing, and half of that was already refused by a
   mechanism nobody had recorded covered it (#432).
 

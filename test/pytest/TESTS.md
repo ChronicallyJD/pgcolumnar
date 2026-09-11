@@ -1864,10 +1864,23 @@ why new code should use it. The SQL-side sentinel in `test_hilbert_locality.py`
 cannot use it — it is produced by `coalesce(...)` inside the query — and does not need
 to, for the same reason.
 
+**The exclusion is derived from the signature too (#938).** Selection was the only
+rule, so `wrote(cur, want, name)` sat outside because its first parameter is not
+called `got`. That is the right answer for a cursor, and it would also have been the
+answer for a comparison whose first parameter was `left`. Exclusion is now a
+positive match on the kind of the left operand (`cur`, `result`, `plan`, `exc`,
+`reason`), and `inputs == selected + excluded` fails when a method matches neither
+rule. A declared list of method names is not the fix: a new method whose first
+parameter is `cur` is excluded for the same reason `wrote` is.
+
+
 | test | what it asserts | how it could fail |
 | --- | --- | --- |
 | `test_the_comparison_surface_is_what_this_file_thinks_it_is` | the derivation finds the layer's `(got, want)` assertions | a renamed or removed assertion makes the arm below vacuous |
 | `test_the_shape_table_covers_every_comparison_the_layer_offers` | every derived comparison has a declared valid pair | an assertion added to the layer is silently outside the arm below |
+| `test_every_public_assertion_is_selected_or_excluded` | every public Expect method is selected or excluded, with no residue | a method whose first parameter is not `got` lands in neither bucket |
+| `test_wrote_is_excluded_because_its_left_operand_is_a_cursor` | `wrote` is out because the left operand is a cursor | a name-list would exclude it for being called `wrote` |
+| `test_a_caller_supplied_value_not_named_got_fails_the_partition` | a value comparison named `left` is residue, not silently excluded | the hole #938 names: a future assertion not called `got` |
 | `test_every_comparison_refuses_a_failed_query_on_either_side` | each comparison refuses a sentinel on the left and on the right | a comparison that compares instead of refusing; the arm distinguishes "refused" from "failed" |
 | `test_row_set_refuses_before_it_maps_rather_than_after` | `row_set` refuses a sentinel that arrived as a cell | `row_set` reprs its rows before delegating, so a refusal only in `rows` cannot see it |
 | `test_the_producer_is_unique_per_occurrence` | fifty calls are fifty distinct values, all carrying the prefix | a producer that returns a constant, which is what the comment used to claim |
