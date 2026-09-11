@@ -1517,10 +1517,9 @@ performs the setup inside the block:
 - **a compound statement.** A `for` over the setup and the statement under test is
   one statement holding two; an `if`, a `with` or a `try` nests the same way.
 
-Measured against the shipped scan, both report `1 passed`, exit 0, and **zero
-offences**. `test_a_helper_hiding_the_setup_is_not_refused` and
-`test_a_compound_statement_hiding_the_setup_is_not_refused` assert exactly that, so
-the residual is a measurement rather than a sentence. Counting statements
+Both were measured reporting `1 passed`, exit 0 and **zero offences**, with the setup
+raising and the statement under test never running. **Both are now refused**, and the
+arms that recorded them as residuals assert the refusal instead. Counting statements
 recursively would catch both and would also refuse a legitimate single-statement
 loop; what would close the mode is a claim about WHICH statement raised, and
 `VACUITY_MODES.md` section 5 carries it as the next entry.
@@ -1588,10 +1587,74 @@ one condition faithfully, and require the copy to go blind.
 | `test_sqlstate_refuses_an_empty_set_of_codes` | and an empty tuple is satisfied by nothing, so the hatch is not the hole |
 | `test_the_raises_scan_leaves_the_unrunnable_state_alone` | a documented hatch the corpus never exercises: `cannot_run` still prints `UNRUN`, counts it, and exits 67 with this scan loaded |
 | `test_the_raises_scan_does_not_touch_a_recorder_made_in_the_body` | a test that fetches `expect` itself still satisfies the layer, because this scan runs at collection time |
-| `test_a_helper_hiding_the_setup_is_not_refused` | **residual 1 of 2, pinned.** One statement, a narrow class, a pinned SQLSTATE, and the setup inside the helper still raised: `1 passed`, no offence |
-| `test_a_compound_statement_hiding_the_setup_is_not_refused` | **residual 2 of 2, pinned.** A `for` holding the setup and the statement under test is one top-level statement: `1 passed`, no offence |
+| `test_a_helper_hiding_the_setup_is_refused` | a call to a function **defined in the same file** cannot say which statement raised |
+| `test_a_compound_statement_hiding_the_setup_is_refused` | a `for` holding the setup and the statement under test is one top-level statement, and refused |
+| `test_a_helper_hidden_in_an_assignment_is_refused_too` | the rule looks anywhere in the statement: `x = _helper()` hides the setup as well as a bare call |
+| `test_every_compound_statement_is_refused_not_only_a_loop` | `if`, `while`, `with` and `try` nest the same way, so all nine compound kinds are refused |
+| `test_a_raises_block_calling_an_imported_function_is_accepted` | the budget: four of the five blocks in this corpus call an imported function |
+| `test_a_raises_block_calling_a_method_is_accepted` | the fifth block's shape, accepted, with the residual it leaves stated |
 | `test_a_conftest_cannot_switch_the_broad_family_list_off` | the rule's own family list is not writable from the corpus it polices |
 | `test_a_bare_sqlstate_expression_does_not_pin_anything` | `exc.value.sqlstate` as a statement of its own asserts nothing, so mentioning the field is not pinning it |
+
+### How `raises-catches-setup` narrowed, and what is left
+
+The count rule refuses a block holding more than one top-level statement. Two shapes
+are **one** statement and still hide the setup inside the block, so the count saw
+nothing:
+
+```python
+with pytest.raises(psycopg.errors.UndefinedObject) as exc:
+    _setup_then_run(conn)                       # a helper call: one statement
+
+with pytest.raises(psycopg.errors.UndefinedObject) as exc:
+    for stmt in (setup_sql, sql_under_test):    # a compound: one statement
+        conn.execute(stmt)                      # holding two
+```
+
+The fix is **not** a recursive count — that would also refuse a legitimate
+single-statement loop. It is a claim about which statement raised, in two rules:
+
+- **No compound statement.** All nine kinds Python has, looked up by name rather than
+  written out so a missing `TryStar` or `Match` is not a NameError at import.
+- **No call to a function defined in the same file**, anywhere in the statement — a
+  helper hides as well in `x = _helper()` as in a bare call. A call to an **imported**
+  function or to a **method** is the thing under test and stays allowed.
+
+**The rule turns on where the function is defined, not on the statement being a call**,
+and that is what makes the budget zero. Measured over the corpus: five
+`pytest.raises` blocks, four calling `build_and_install` (imported) and one calling a
+method, and the scan reports **no offence** on any of them.
+
+### What is still reachable, measured
+
+The mode stays in `VACUITY_MODES.md` section 3, and the refused count did not move,
+because two ordinary spellings still reach it:
+
+| shape | verdict |
+| --- | --- |
+| a `for` loop over two statements | refused |
+| the same two as a **list comprehension** | allowed |
+| the same two as a **tuple of calls** | allowed |
+| a helper defined in **another file** | allowed |
+| an honest one-statement helper defined in **this** file | refused — a false positive |
+
+A comprehension and a tuple are **expressions**, not compound statements, so a rule
+about statement kinds cannot see them. And `local_defs` is built from one file, so
+moving the helper one file over defeats it. Neither is a contrivance; both are ordinary
+Python. The last row is the rule's cost rather than a gap — an honest single-statement
+local helper is refused, and the author must inline it.
+
+A method that performs setup and then the statement is invisible for the same reason,
+and no static rule can see inside it.
+
+**The arm that should have caught the overclaim did not.**
+`test_the_mode_this_layer_only_narrows_is_still_listed_as_open` required the mode to be
+named in section 3 — and section 3 keeps a back-reference for every mode that *moves*
+("`X` is now closed"), so the id is present in section 3 whichever state the document
+claims. A first version of this work wrote the closure into section 3, added the row to
+section 2, moved the count to 29, and that arm passed. It now also requires the mode to
+be named outside a closure back-reference and to be absent from section 2; all three
+shapes of the overclaim redden it. Residuals named by @jdatcmd on review.
 | `test_a_sqlstate_assigned_and_never_read_does_not_pin_anything` | the same hole one step on: bound to a name nothing uses |
 | `test_one_hop_through_a_local_name_is_an_honest_pin` | the cost side — `code = exc.value.sqlstate` then `expect.text(code, ...)` stays collectable |
 | `test_the_keyword_form_is_checked_by_both_rules` | `pytest.raises(expected_exception=...)` is not an exemption from either rule |

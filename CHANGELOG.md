@@ -390,6 +390,49 @@ true until the next version shipped.
   counts the paragraph that documents the idiom, which is how a guard comes to flag its
   own explanation.
 
+- `test/harness_selftest.sh` can no longer exit 0 having evaluated nothing (#934).
+
+  Handed a `pg_config` the box does not have, it printed four lines, never reached its
+  summary, and **exited 0**. Measured on main:
+
+      /usr/local/pg18a/bin/pg_config    rc=0  1246 lines  checks run: 610
+      /usr/local/pgNOPE/bin/pg_config   rc=0     4 lines  no summary at all
+
+  A caller cannot tell the second from the first. It is not hypothetical: it cost a
+  whole mutation round, because the control and the mutated arm both reported rc=0 with
+  zero FAIL lines -- which reads exactly like "the mutation changed nothing", the
+  conclusion the run existed to test. The log being 4 lines instead of 1246 was the only
+  thing that gave it away. The default argument is `/usr/local/pg17/bin/pg_config`, which
+  the audit container does not have, so the wrong invocation is the easy one to make.
+
+  TWO CAUSES, and the second is the one that generalises. `_bindir` was assigned from a
+  command that had failed, so every later PATH was wrong; and part 010, which is
+  SOURCED, then took its own skip path and called `exit 0` -- which exits the DRIVER
+  rather than the part.
+
+  The driver now refuses the argument before sourcing anything, on two predicates
+  because one is not enough: a `pg_config` can exist and be executable and still answer
+  nothing, which is the shape that produced the empty `_bindir`. Both of part 010's skip
+  paths now exit 66, the status `lib.sh` calls `PGC_EXIT_SKIPPED`, paired with the
+  `SKIPPED (ran no checks)` line the runners already require beside it.
+
+  `test/selftest/430-the-self-test-must-not-report.sh` holds the arms, including a
+  heredoc-aware sweep requiring that **no** part exits 0 -- closing the class rather
+  than the two instances. The sweep has to be heredoc-aware because the parts generate
+  fixture scripts that legitimately end in `exit 0`: it sees 2 sites before this change
+  and 0 after, where a flat `grep -c 'exit 0'` sees 13 before and 24 after -- the flat
+  count moves because the new part's own fixtures add ten, for a reason that has nothing
+  to do with the defect. It sees `exit 0` and a bare `exit`; it cannot decide `exit $?`
+  or `exit "$rc"`, and each of those is zero in the tree today.
+
+  After: `rc=2` and a named refusal for a missing `pg_config`, for a path that is not a
+  directory, and for one that answers nothing; `604 passed + 0 failed + 0 unrunnable`
+  with a real one.
+
+  The part's own comment at line 3 already said why this mattered -- "a quiet skip means
+  the guard stops being tested that run without anyone noticing" -- four lines above the
+  first `exit 0`.
+
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
 
