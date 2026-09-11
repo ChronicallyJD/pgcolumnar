@@ -134,15 +134,26 @@ fi
 # EXACT TITLE MATCH, not a search-relevance match. `gh issue list --search` is a
 # full-text query and would find any issue mentioning these words -- including
 # the ones the two of us have filed ABOUT this mechanism.
-# NARROWED SERVER-SIDE, THEN MATCHED EXACTLY HERE. A bare `--limit 100` silently
-# misses the target once the tracker holds more than a hundred open issues, the
-# lookup returns empty, and every red opens a NEW issue -- which is precisely "a
-# notifier people filter", the thing this design rests on not being
-# (@OffgridwithJD). The search narrows the window; the exact match is still done
-# here, because `--search` is full-text and would also find the issues the two of
-# us have filed ABOUT this mechanism.
-existing="$(gh issue list --state open --limit 100 --search "\"$TITLE\" in:title" \
-	--json number,title \
+# A HIGH LIMIT ON THE PLAIN LIST, NOT A SEARCH, AND BOTH HALVES OF THAT WERE
+# MEASURED RATHER THAN CHOSEN.
+#
+# `--limit 100` alone silently misses the target once more than a hundred issues
+# are open: the lookup returns empty and every red opens a NEW issue, which is
+# precisely "a notifier people filter" -- the thing this design rests on not being
+# (@OffgridwithJD).
+#
+# `--search` fixes that and introduces a worse one. GitHub's search index is
+# EVENTUALLY CONSISTENT: measured here, immediately after closing an issue the
+# search still reported it open, and caught up seconds later. A lag in the other
+# direction misses a freshly-opened issue and opens a duplicate -- the same
+# failure, arriving by a different route, and this mechanism can run twice in
+# quick succession because `concurrency: nightly` queues rather than cancels.
+#
+# `gh issue list` without `--search` reads the REST collection, which is strongly
+# consistent, and gh paginates past 100 on its own. So a high limit has neither
+# problem. The exact match stays client-side: `--search` would also have matched
+# the issues the two of us have filed ABOUT this mechanism.
+existing="$(gh issue list --state open --limit 1000 --json number,title \
 	--jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")"
 
 if [ "$verdict" = failure ]; then

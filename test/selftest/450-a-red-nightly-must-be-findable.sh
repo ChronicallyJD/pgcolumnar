@@ -127,11 +127,19 @@ check "and that marker reaches the job list the reporter prints" \
 
 # ---- the issue lookup must not go blind on a busy tracker ------------------
 #
-# A bare `--limit 100` silently misses the target once more than a hundred issues
-# are open: the lookup returns empty and every red opens a NEW issue, which is the
-# "notifier people filter" this design rests on not being (@OffgridwithJD).
-check "the issue lookup narrows server-side rather than paging blindly" \
-	"$(grep -c 'in:title' "$_rn_sh")" "1"
+# `--limit 100` silently misses the target once more than a hundred issues are
+# open: the lookup returns empty and every red opens a NEW issue, the "notifier
+# people filter" this design rests on not being (@OffgridwithJD).
+#
+# AND `--search` IS THE WRONG FIX, measured rather than reasoned: GitHub's search
+# index is eventually consistent, and immediately after a close it still reported
+# the issue open. A lag the other way misses a freshly-opened issue and opens a
+# duplicate -- the same failure by another route. The plain list reads the REST
+# collection, which is strongly consistent, and gh paginates past 100 itself.
+check "the issue lookup reads past the first hundred open issues" \
+	"$(grep -c 'gh issue list --state open --limit 1000' "$_rn_sh")" "1"
+check "and does not use the eventually-consistent search index" \
+	"$(grep -c 'in:title' "$_rn_sh")" "0"
 
 # It must run on failure AND on success, or the close path never happens.
 check "the reporter runs on every outcome, not only on failure" \
