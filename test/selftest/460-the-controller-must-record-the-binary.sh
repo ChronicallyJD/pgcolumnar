@@ -45,11 +45,59 @@ check "premise: this part was given an executable pg_config to read the prefix f
 # The subshell block, from `if (` to `); then`. A LITERAL TAB, not `\t`: GNU grep's
 # BRE does not read `\t` as a tab, and the first version of this premise counted 0
 # and would have let the arms below run against an empty block.
+# ANCHORED ON THE STAMP WRITE, NOT ON FILE POSITION. The first version took the
+# FIRST one-tab `if (` in the controller. There is exactly one today -- so it was
+# unambiguous, and the premises below would have caught it if it stopped being so
+# (the extracted block would hold zero or two stamp writes). @jdatcmd raised that
+# while approving #961: it is the premises doing the work rather than the anchor.
+#
+# So the anchor now finds the stamp write and walks BACK to the `if (` that encloses
+# it, then forward to the first terminator at or after it. A second subshell added
+# anywhere in the file cannot move the range, because the range is defined by the
+# line it is about.
+#
+# `start` BEING UNSET WHEN NOTHING ENCLOSES THE WRITE IS LOAD-BEARING, not an
+# oversight to tidy up. A backward walk has to decide what to do when it runs off
+# the top, and one of the three possibilities satisfies every guard below:
+#
+#     walks to line 1, emitting everything above   a block that parses and is WRONG
+#     emits the write alone                        ONE stamp write, so both premises
+#                                                  PASS on a block that is not the
+#                                                  call site
+#     emits nothing                                the premises catch it
+#
+# This takes the third because `open` is never assigned, `!start` is true for an
+# unassigned awk variable, and the guard exits before the print loop. Defaulting
+# `start` to 1 would look like a tidy-up and would buy the first case. Measured on a
+# fixture with two lines above the write and no enclosing `if (`: zero lines out.
 _c961_block="$(awk -v t="$_c961_tab" '
-	$0 == t "if (" {f=1} f {print} f && $0 == t "); then" {exit}' "$_c961_rav")"
+	{ line[NR] = $0 }
+	$0 == t "if (" { open = NR }
+	/pgc_write_source_stamp/ && !stamp { stamp = NR; start = open }
+	END {
+		if (!start || !stamp) exit
+		for (i = start; i <= NR; i++) {
+			print line[i]
+			if (i >= stamp && line[i] == t "); then") exit
+		}
+	}' "$_c961_rav")"
 
+check "premise: the extraction produced a block at all" \
+	"$([ -n "$_c961_block" ] && echo yes || echo empty)" "yes"
 check "premise: the controller's stamp block was extracted exactly once" \
 	"$(printf '%s\n' "$_c961_block" | grep -c "^${_c961_tab}if ($")" "1"
+# AND NO SUBSHELL OPENS BETWEEN THE OPENER AND THE WRITE, at any depth. The anchor
+# matches `if (` at ONE tab, so a write nested inside a DEEPER subshell leaves `open`
+# pointing at the outer block -- and that block holds exactly one one-tab `if (` and
+# exactly one stamp write, so every premise above it passes on a block WIDER than the
+# call site. Measured on a fixture with the write in a two-tab subshell inside a
+# one-tab one: 8 lines out, 1 one-tab `if (`, 1 write, all premises green.
+#
+# Counting `if (` at ANY indent is what distinguishes them: the real block has one,
+# the nested shape has two. Cheaper than teaching the anchor to track depth, and it
+# fails closed -- a shape this does not understand is refused rather than driven.
+check "premise: nothing opens a deeper subshell inside the extracted block" \
+	"$(printf '%s\n' "$_c961_block" | grep -cE '^[[:space:]]*if \($')" "1"
 check "premise: and it holds exactly one stamp write" \
 	"$(printf '%s\n' "$_c961_block" | grep -c 'pgc_write_source_stamp')" "1"
 
