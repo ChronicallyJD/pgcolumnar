@@ -186,33 +186,48 @@ Still open in this family:
 `DatabaseError`, `Exception` or `BaseException` does not collect unless the block
 binds the exception and the body pins its SQLSTATE. See section 2.
 
-- `raises-catches-setup` — **still open, and the statement rule only narrows it.**
-  The scan refuses a `pytest.raises` block holding more than one TOP-LEVEL
-  statement, so the spelling where the setup sits on the line above the statement
-  under test is gone. Two shapes walk straight past a count of top-level
-  statements, and each is one statement that performs the setup inside the block:
+- `raises-catches-setup` — **narrowed again, and still not closed.** The statement COUNT
+  rule refused a block holding more than one top-level statement, and two shapes are ONE
+  statement that still performs the setup inside the block:
 
       with pytest.raises(psycopg.errors.UndefinedObject) as exc:
           _setup_then_run(conn)          # a HELPER CALL: one statement
-      expect.sqlstate(exc.value, "42704", "the ALTER was refused")
 
       with pytest.raises(psycopg.errors.UndefinedObject) as exc:
           for stmt in (setup_sql, sql_under_test):   # a COMPOUND STATEMENT: one
               conn.execute(stmt)                     # statement holding two
-      expect.sqlstate(exc.value, "42704", "the ALTER was refused")
 
-  Measured against the shipped scan: both report `1 passed`, exit 0, **zero
-  offences**, with the setup raising and the statement under test never running.
-  An `if`, a `with` or a `try` nests the same way. Counting statements RECURSIVELY
-  would catch these and would also refuse a legitimate single-statement loop, so
-  the fix is not a deeper count — it is a claim about WHICH statement raised: a
-  position, or a helper that runs exactly one statement and owns the assertion.
+  Both were measured against the shipped scan reporting `1 passed`, exit 0, **zero
+  offences**, with the setup raising and the statement under test never running. Both are
+  refused now, by two rules: no compound statement (all nine kinds Python has, looked up
+  by name so a missing `TryStar` or `Match` cannot silently narrow the rule), and no call
+  to a function DEFINED IN THE SAME FILE, anywhere in the statement.
 
-  `test_a_helper_hiding_the_setup_is_not_refused` and
-  `test_a_compound_statement_hiding_the_setup_is_not_refused` in
-  `test_raises_sqlstate.py` assert the scan reports nothing on these two shapes, so
-  the gap is a measurement rather than a sentence, and `test_raises_sqlstate.py` requires both
-  arms plus this entry to still exist.
+  WHAT REMAINS, measured rather than reasoned, which is why this entry stays in section 3
+  and the refused count did not move:
+
+      a `for` loop over two statements                     REFUSED
+      the same two statements as a list comprehension      allowed
+      the same two as a tuple of calls                     allowed
+      a helper defined in ANOTHER file                      allowed
+      an honest one-statement helper defined in THIS file   REFUSED (a false positive)
+
+  A comprehension and a tuple are EXPRESSIONS rather than compound statements, so a rule
+  about statement kinds cannot see them; and `local_defs` is built from one file, so
+  moving the helper one file over defeats it. Both are ordinary Python, not contrivances.
+  The last row is the rule's cost rather than a gap: an honest single-statement local
+  helper is refused, and the author must inline it.
+
+  THE FIX IS NOT A DEEPER COUNT, for the reason this entry always gave: counting
+  recursively would also refuse a legitimate single-statement loop. What would close it
+  is a claim about which statement raised that does not depend on the SHAPE of the
+  statement -- a helper that runs exactly one statement and owns the assertion. Measured,
+  the corpus has no SQL-raising `pytest.raises` block at all, so that helper would have
+  no call sites today and would be an instrument with nothing exercising it.
+
+  The two arms that used to assert these shapes were NOT refused now assert that they
+  are, so the narrowing is a measurement rather than a sentence. Residuals named by
+  @jdatcmd on review. See TESTS.md section 20.
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
   `zero-on-both-arms`, `tuple-assert-always-true`, `approx-of-nothing`
 - `same-broken-helper-both-sides`, `truthy-error-string`, `assert-not-unset-error`,
@@ -361,9 +376,10 @@ Each entry names the red test to write first.
    It closes `raises-too-broad` and narrows `raises-catches-setup`, which stays
    open in 3.4 with the two shapes it cannot see named there. What would close the
    sibling is the next entry:
-5. `test_layer_requires_the_raiser_to_be_the_statement_under_test` — closes
-   `raises-catches-setup`. It needs a claim about WHICH statement raised, not a
-   deeper statement count; 3.4 says why a recursive count is the wrong fix.
+5. ~~`test_layer_requires_the_raiser_to_be_the_statement_under_test` — closes
+   `raises-catches-setup`.~~ **Done, and it NARROWS rather than closes** — 3.4 lists what
+   remains, measured: a comprehension or a tuple instead of a `for`, and a helper defined
+   in another file. Both are ordinary Python. The refused count therefore did not move.
 
 The three that turned a whole run green rather than one test are done. What remains
 is per-assertion work, so the ordering matters less: take the sentinel first, since
