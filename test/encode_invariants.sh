@@ -238,8 +238,16 @@ check "no vector selects FSST at or below the distinct cap, so skipping its buil
 #     rand                   -1.7%   1.14  (slower -- incompressible)
 #     mix                   +12.0%   0.92  (faster)
 #
-# Warm cache, which UNDERSTATES the saving because no physical read happens on
-# either arm. A pin, not a discovery: changing this default should be a deliberate
+#
+# WARM CACHE, which understates the saving ON THE SHAPES THAT COMPRESS: no physical
+# read happens on either arm, so a cold run adds an I/O term proportional to bytes
+# read and rep and mix can only widen.
+#
+# NOT SO ON rand. There zstd writes 148,076 MORE bytes than none, so cold makes it
+# worse on both terms at once -- more bytes to read AND the same decompression CPU.
+# The incompressible shape degrading cold is a SECOND, independent reason for the
+# per-table override rather than a global change.
+# A pin, not a discovery: changing this default should be a deliberate
 # act with a new measurement attached. Incompressible data is a real cost and the
 # answer there is the per-table override, not a different global default.
 check "the block compression default is zstd, pinned to #890 phase 1" \

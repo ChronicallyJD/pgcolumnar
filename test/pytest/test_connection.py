@@ -308,8 +308,18 @@ def test_the_block_compression_default_is_pinned_to_its_measurement(pgc_conn, ex
         rand                   -1.7%   1.14   (slower -- incompressible)
         mix                   +12.0%   0.92   (faster)
 
-    Warm cache, which UNDERSTATES the saving because no physical read happens on
-    either arm, so a cold measurement can only move further toward compression.
+    Warm cache, which understates the saving ON THE SHAPES THAT COMPRESS: no
+    physical read happens on either arm, so a cold run adds an I/O term proportional
+    to bytes read and `rep` and `mix` can only widen.
+
+    NOT SO ON `rand`, AND THE DIFFERENCE MATTERS. There zstd writes 148,076 MORE
+    bytes than none, so cold makes it worse on both terms at once -- more bytes to
+    read AND the same decompression CPU -- and C(cold) > 1.14. An earlier version of
+    this comment said a cold measurement "can only move further toward compression",
+    full stop. That is true only where compression reduces bytes, and stating it
+    unconditionally gave away the stronger argument: the incompressible shape
+    degrading cold is a SECOND, independent reason for the per-table override rather
+    than a global change. Reported by @OffgridwithJD.
 
     This arm is a pin, not a discovery. It exists so that changing the default is a
     deliberate act with a new measurement attached, rather than a line edit nobody
