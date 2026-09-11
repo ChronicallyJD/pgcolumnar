@@ -15,7 +15,10 @@
 
 set -euo pipefail
 
-. "$(dirname "${BASH_SOURCE[0]}")/portlib.sh"
+# lib.sh for the check vocabulary (#965). It sources portlib.sh itself
+# (lib.sh:110), so this is a superset of what was here. Its top level is
+# assignments and function definitions only, so sourcing it starts nothing.
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PG_CONFIG="${1:-/usr/local/pg17/bin/pg_config}"
 BINDIR="$("$PG_CONFIG" --bindir)"
@@ -99,12 +102,40 @@ ORPHANS="$(run_pg "$PSQL -c \"SELECT count(*) FROM pgcolumnar.row_group;\"")"
 
 # ---- check -----------------------------------------------------------------
 fail=0
+# RECORDS RATHER THAN ONLY PRINTING (#965). This suite emitted nine human PASS
+# lines and no RESULT records, so every mechanism built on the record vocabulary --
+# the ledger, the census, checks_never_observed_red, the red-observation record,
+# duplicate-name detection -- was blind to all nine. Measured: 0 RESULT lines.
+#
+# `pgc_record` takes the DISPLAY whole, so the human output below is byte-for-byte
+# what it was. `fail` is still set, so this suite's own exit logic is untouched --
+# the verdict line it prints is load-bearing until `checks run:` reconciles, and
+# removing it in the same step would make the suite report less than it did before.
+#
+# NOT lib.sh's own `check`: that composes its own display and would drop the
+# `: $got` suffix these lines carry, which is the measured value rather than a
+# label. The name and the value are both wanted.
+#
+# AND THE `checks run:` LINE BELOW IS READ BY NOTHING YET, which is worth saying
+# so the next conversion does not add it believing it wired something up
+# (@jdatcmd, #969 review). The matrix decides whether to reconcile a suite by
+# looking for the ACCOUNTING line -- `run_all_versions.sh` calls
+# `pgc_log_shows_accounting`, which greps for
+# `accounting: N passed + N failed + N unrunnable + N skipped = N` -- and this
+# suite emits none, because it emits no accounting line. Measured: 0 accounting
+# lines here against 1 in any suite that does.
+#
+# The line is still correct and still wanted: it is the total the records
+# reconcile against, and `pgc_reconcile_records` returns 0 on this log when driven
+# directly. So the remaining step is a gate flip rather than new work -- once
+# whatever replaces the verdict line emits the accounting line, reconciliation
+# starts working for all ten of these suites with no further change to them.
 check() {
 	local name="$1" got="$2" want="$3"
 	if [ "$got" = "$want" ]; then
-		echo "PASS  $name: $got"
+		pgc_record PASS "$name" "PASS  $name: $got"
 	else
-		echo "FAIL  $name: got [$got] want [$want]"
+		pgc_record FAIL "$name" "FAIL  $name: got [$got] want [$want]"
 		fail=1
 	fi
 }
@@ -125,8 +156,10 @@ check "native catalog tables" "$NATIVE_TABLES" "4"
 
 echo
 if [ "$fail" = "0" ]; then
+	echo "checks run: $PGC_CHECKS"
 	echo "SMOKE TEST PASSED"
 else
+	echo "checks run: $PGC_CHECKS"
 	echo "SMOKE TEST FAILED"
 	echo "---- server log tail ----"
 	run_pg "tail -30 '$LOGFILE'" || true
