@@ -118,10 +118,14 @@ assert_plan() {
 	# index scan so the plan shape can be asserted.
 	plan="$(run_pg "$PSQL -c \"SET enable_seqscan=off; SET pgcolumnar.enable_custom_scan=off; EXPLAIN (COSTS OFF) $sql\"")"
 	if grep -q "$want" <<<"$plan" && ! grep -q "$notwant" <<<"$plan"; then
-		echo "PASS  $name: $(echo "$plan" | grep -E 'Scan' | head -1 | sed 's/^ *//')"
+		pgc_record PASS "$name" "PASS  $name: $(echo "$plan" | grep -E 'Scan' | head -1 | sed 's/^ *//')"
 	else
-		echo "FAIL  $name: plan was:"
-		echo "$plan" | sed 's/^/        /'
+		# The plan dump is part of the display, so the record line lands after the
+		# whole thing rather than between the header and the dump. A red run's output
+		# stays byte-identical that way, which is the property the green runs already
+		# have.
+		pgc_record FAIL "$name" "FAIL  $name: plan was:
+$(echo "$plan" | sed 's/^/        /')"
 		fail=1
 	fi
 }
@@ -130,10 +134,10 @@ assert_plan() {
 expect_fail() {
 	local name="$1" sql="$2"
 	if run_pg "$PSQL -c \"$sql\"" >/dev/null 2>&1; then
-		echo "FAIL  $name: expected error, got success"
+		pgc_record FAIL "$name" "FAIL  $name: expected error, got success"
 		fail=1
 	else
-		echo "PASS  $name: rejected"
+		pgc_record PASS "$name" "PASS  $name: rejected"
 	fi
 }
 
@@ -246,9 +250,10 @@ q "CREATE INDEX ios_a_idx ON ios (a);" >/dev/null
 # The custom scan is turned off so the planner picks the index scan (see assert_plan).
 iosoff_plan="$(run_pg "$PSQL -c \"SET pgcolumnar.enable_index_only_scan=off; SET enable_seqscan=off; SET pgcolumnar.enable_custom_scan=off; EXPLAIN (COSTS OFF) SELECT a FROM ios WHERE a = 100;\"")"
 if grep -q "Index Scan" <<<"$iosoff_plan" && ! grep -q "Index Only Scan" <<<"$iosoff_plan"; then
-	echo "PASS  IOS off: plain index scan"
+	pgc_record PASS "IOS off: plain index scan" "PASS  IOS off: plain index scan"
 else
-	echo "FAIL  IOS off: plain index scan: plan was:"; echo "$iosoff_plan" | sed 's/^/        /'; fail=1
+	pgc_record FAIL "IOS off: plain index scan" "FAIL  IOS off: plain index scan: plan was:
+$(echo "$iosoff_plan" | sed 's/^/        /')"; fail=1
 fi
 check "covering value"    "$(q 'SET enable_seqscan=off; SELECT a FROM ios WHERE a = 100;')" "100"
 # a full-table scan is still available when index/bitmap scans are disabled.
@@ -258,9 +263,9 @@ assert_plan_seq() {
 	local plan
 	plan="$(run_pg "$PSQL -c \"SET enable_indexscan=off; SET enable_bitmapscan=off; EXPLAIN (COSTS OFF) SELECT * FROM ios WHERE a = 100;\"")"
 	if grep -qE "Seq Scan|Custom Scan \(PgColumnarScan\)" <<<"$plan"; then
-		echo "PASS  full-table scan available"
+		pgc_record PASS "full-table scan available" "PASS  full-table scan available"
 	else
-		echo "FAIL  full-table scan available: $plan"; fail=1
+		pgc_record FAIL "full-table scan available" "FAIL  full-table scan available: $plan"; fail=1
 	fi
 }
 assert_plan_seq

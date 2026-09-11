@@ -116,10 +116,10 @@ assert_plan() {
 	local plan
 	plan="$(run_pg "$PSQL -c \"$sql\"")"
 	if grep -q "$want" <<<"$plan" && { [ -z "$notwant" ] || ! grep -q "$notwant" <<<"$plan"; }; then
-		echo "PASS  $name"
+		pgc_record PASS "$name" "PASS  $name"
 	else
-		echo "FAIL  $name: plan was:"
-		echo "$plan" | sed 's/^/        /'
+		pgc_record FAIL "$name" "FAIL  $name: plan was:
+$(echo "$plan" | sed 's/^/        /')"
 		fail=1
 	fi
 }

@@ -1492,6 +1492,59 @@ true until the next version shipped.
   differ between majors in at least one suite, the ledger has no major dimension, and
   a gate seeded from one major would refuse runs on another.
 
+- The last fifty-eight checks in those ten suites record too, so all ten are now
+  complete (#965).
+
+  The previous change converted each suite's own `check` helper and recorded 236 of
+  the 293. The rest went through four further helpers with four different displays,
+  which is why they needed a second pass rather than the same substitution:
+
+  | suite | helper | checks |
+  | --- | --- | --- |
+  | `phase6` | `eq_on_off` | 39 |
+  | `phase4` | `expect_fail` 5, `assert_plan` 2, `assert_plan_seq` 1, one written inline | 9 |
+  | `audit` | `expect_error` | 5 |
+  | `phase5` | `assert_plan` | 5 |
+
+  Measured on PG18, each suite's records now equal both its own human check lines and
+  its `checks run:` total, and every human line is byte-for-byte what it was:
+
+      suite    records before -> after   checks run:   human lines
+      audit                26 ->  31             31            31
+      phase4               29 ->  38             38            38
+      phase5               31 ->  36             36            36
+      phase6                4 ->  43             43            43
+
+  `phase6`'s `eq_on_off` has three outcomes and two of them `return` early. Each one
+  records, because a `return` that skips the record leaves the check counted nowhere,
+  which is the state this conversion exists to end.
+
+  Two displays span more than one line -- `assert_plan` in both `phase4` and `phase5`
+  prints the whole plan under a header when it fails. The dump is passed as part of
+  the display rather than echoed after the record, so a failing run's output is also
+  byte-identical instead of having a record line wedged between the header and the
+  plan.
+
+  It also makes a version-gated arm visible to the ledger. `audit.sh` gates its
+  partitioned-parent arm on `server_version_num >= 170000`, because PG16 and earlier
+  refuse `PARTITION BY ... USING pgcolumnar`, and the gated branch printed a bare
+  note and recorded nothing. So on PG16 the ledger received three fewer rows for
+  `audit` with nothing saying why. It now records a SKIP with its reason, the way
+  `unique_conc.sh` already does for its own version gate, and PG16's human output
+  gains that SKIP line in place of the note.
+
+  One SKIP for the block, not one per gated check. Naming each of the four checks in
+  a branch that never runs them would make the count the same on every major, and
+  would also put four check names somewhere nothing exercises them, where they would
+  drift. Comparing counts across majors needs a major dimension in the ledger, which
+  belongs to #432.
+
+  Every count here is a PG18 number. On PG16 the same suites give 28 records for
+  `audit` rather than 31, because that gated arm holds three `check` calls and the
+  `expect_error` above, and one of those records is now the SKIP standing in for all
+  four. The per-major table is in #965, which is where the remainder should be read
+  from rather than from either run alone.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
