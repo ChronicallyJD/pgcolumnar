@@ -198,11 +198,11 @@ def test_a_caller_supplied_value_not_named_got_fails_the_partition(expect):
     """
     class Probe:
         def num(self, got, want, name):
-            pass
+            return (got, want, name)
         def wrote(self, cur, want, name):
-            pass
+            return (cur, want, name)
         def eq(self, left, want, name):
-            pass
+            return (left, want, name)
 
     selected, excluded, residue = _partition(Probe)
     residue_names = [n for n, _ in residue]
