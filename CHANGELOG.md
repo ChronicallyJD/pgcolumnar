@@ -647,6 +647,58 @@ true until the next version shipped.
   `checks run:` line, a floor on it so an aborted run cannot pass, zero `FAIL`
   lines, and rc=0. The absence of a `FAIL` line is not enough, because an aborted
   run has none either -- the same shape as a pending-count that cannot see a job
+
+  **`test/selftest/350` goes from 50 checks to 5, and two of its rules moved rather
+  than being deleted.** Forty-six of the fifty had a subject on the other side of the
+  boundary: they globbed `test/pytest/*.py` and parsed Python out of it, or swept the
+  markdown in that directory. The pytest corpus asserts all three properties natively
+  in `test_docs_cover_the_corpus.py`, where the subject is, so the shell copy could
+  only ever agree with it.
+
+  Two of the three rules were implemented on BOTH sides and self-tested only on the
+  shell side -- the side that cannot run the corpus it counts. Deleting those
+  fixtures would have left the Python implementation with no fixtures at all, so they
+  went with them:
+
+  - the mode-counting rule's edges: an id of fewer than three words, an id named
+    twice, stopping at the next heading, section 3's back-references, and the row
+    reader taking the value cell rather than a digit inside its label
+  - the contents-list anchor rule: GitHub's derivation, the broken link that shipped,
+    and a control beside it
+
+  `_named_modes_in(text)` and `_stated_row(text, label)` are new seams, so a fixture
+  can reach the rules at all. The row reader's fixture makes the label digit and the
+  value DIFFER -- label "section 2", value 9 -- because `350`'s own fixture had both
+  as 2 and could not see the bug it was written for.
+
+  **What stays in 350 is its arms over `ci.yml`**, whose subject is neither harness.
+  A shell part may read the workflow for the same reason it may read the Makefile, and
+  no pytest arm can assert that the gate runs pytest without assuming the thing in
+  question. One arm is added while the part's subject is being settled: the job must
+  ASSERT `psycopg` is absent rather than assume it.
+
+  ### The stale justification, in triplicate
+
+  TESTS.md section 6 said "Nothing runs pytest. Not `run_all_versions.sh`, not any
+  workflow under `.github/`", and concluded that the `.sh` half was therefore the
+  enforcement. CI has a `pytest-guards` job: it installs pytest pinned from
+  `requirements-test.txt`, asserts `psycopg` is absent, derives the file list from
+  `NO_CLUSTER`, and runs it.
+
+  That claim was load-bearing in THREE places at once -- TESTS.md section 6,
+  `selftest/360` and `selftest/380` -- each asserting the behavioural half could not
+  run in CI. Nothing was wrong in any of them; the reason was, three times, and **no
+  arm reddens on a stale justification.** All three are corrected.
+
+  ### Where the two harnesses now stand
+
+  Shell parts holding a reference to anything under `test/pytest/`: **one**, and it is
+  deliberate. `selftest/360` reads `pgc_vacuity.py` to compare the three values the
+  two harnesses both write down -- the INCOMPLETE exit code, the closed list of
+  unrunnable reasons, and the line an unrunnable check prints. That is CONTEXT.md's
+  permitted cross-reference: a property that IS the relationship, so it cannot be
+  stated from one side. The inventory said seven; the measured answer was three plus a
+  deleted fourth; the end state is one.
   which never started.
 
 

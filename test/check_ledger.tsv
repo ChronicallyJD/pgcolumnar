@@ -408,59 +408,11 @@ harness_selftest	340-the-binary-must-be-built-from	the stamp writer reports fail
 harness_selftest	340-the-binary-must-be-built-from	the writer writes the file the reader looks for	never	-
 harness_selftest	340-the-binary-must-be-built-from	two installations of one major get different stamp paths	never	-
 harness_selftest	340-the-binary-must-be-built-from	two unreadable pg_configs do not alias onto one stamp	never	-
-harness_selftest	350-the-pytest-corpus-must-be	README.md quotes the number of modes the inventory names as refused	never	-
-harness_selftest	350-the-pytest-corpus-must-be	TESTS.md states no totals line for a merge to get wrong	never	-
-harness_selftest	350-the-pytest-corpus-must-be	TESTS.md states the counted number as well	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a documented file that does not exist is named	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a documented test that does not exist is named, not passed over	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a name defined in two files is named, not passed over	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a prose total that disagrees with the ids is visible	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a stated total that disagrees with disk is visible	never	-
-harness_selftest	350-the-pytest-corpus-must-be	a stated total that disagrees with the ids is visible	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an absent prose total is empty rather than a stray number	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an absent total is empty rather than a number that happens to match	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an anchor that strips the underscores is named, not passed over	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an id named twice counts once	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an id of fewer than three words is not counted as a mode	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an unbackticked name in prose is not treated as a claim	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an undocumented file is caught along with the tests inside it	never	-
-harness_selftest	350-the-pytest-corpus-must-be	an undocumented test is named rather than passed over	never	-
 harness_selftest	350-the-pytest-corpus-must-be	and derives the pins from requirements-test.txt	never	-
 harness_selftest	350-the-pytest-corpus-must-be	and it derives the file list rather than repeating it	never	-
-harness_selftest	350-the-pytest-corpus-must-be	and the same comparison agrees on the fixture that is right	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: a document naming only what exists is clean	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: a fully documented corpus reports nothing missing	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: an anchor that keeps the underscores resolves	never	-
-harness_selftest	350-the-pytest-corpus-must-be	control: distinct names in the same corpus report no duplicate	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every in-document link in README.md reaches a heading	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every in-document link in TESTS.md reaches a heading	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every in-document link in VACUITY_MODES.md reaches a heading	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every test file and every test in the corpus is named in TESTS.md	never	-
-harness_selftest	350-the-pytest-corpus-must-be	every test the document names exists in the corpus	never	-
-harness_selftest	350-the-pytest-corpus-must-be	no test name is defined twice in the corpus	never	-
+harness_selftest	350-the-pytest-corpus-must-be	and the job asserts the driver is absent rather than assuming it	never	-
 harness_selftest	350-the-pytest-corpus-must-be	premise: the CI workflow is where this part thinks it is	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the corpus carries the documentation this part polices	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the counting rule finds modes at all	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the link sweep saw the directory's documents	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the mode inventory is where this part thinks it is	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the pytest corpus is where this part thinks it is	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the reader still finds a totals line when one is there	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the reverse sweep reads backticked names at all	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the sweep found the corpus rather than an empty glob	never	-
-harness_selftest	350-the-pytest-corpus-must-be	premise: the sweep reads the contents list's links	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 1a's document total is the sum of its two sections	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 1a's not-refused total is the count of ids in section 3	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 1a's refused total is the count of ids in section 2	never	-
-harness_selftest	350-the-pytest-corpus-must-be	section 2's opening states the counted number of refused modes	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the admitted gap is the run total minus what is written down	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the anchor rule drops punctuation and keeps underscores	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the closing paragraph states the counted number too	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the counter counts a fixture's section 2	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the counter counts a fixture's section 3	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the counter stops at the next heading	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the gate runs the harness guards	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the row's value is read, not a digit inside its label	never	-
-harness_selftest	350-the-pytest-corpus-must-be	the sweep counts the fixture's tests and files	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	a drifted exit code is visible rather than absorbed	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	a drifted print shape is visible	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	a reason dropped from one side only is visible	never	-

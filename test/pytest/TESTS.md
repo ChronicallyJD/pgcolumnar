@@ -831,6 +831,15 @@ many times.
 | `test_an_undocumented_file_is_caught_with_the_tests_inside_it` | how 29 tests went missing at once |
 | `test_a_document_with_no_totals_line_states_none` | absent totals report `None`, which must not read as "they match" |
 | `test_a_stated_total_that_disagrees_with_disk_is_visible` | the count arm's own red |
+| `test_the_counting_rule_counts_a_fixture_as_the_document_says` | the mode rule, on a fixture: deduplicated, and section 3 minus its back-references |
+| `test_an_id_of_fewer_than_three_words_is_not_a_mode` | the rule is three words, so `one-two` in prose is not a mode |
+| `test_the_counter_stops_at_the_next_heading` | section 2's count must not reach into section 4 |
+| `test_the_row_reader_takes_the_value_not_a_digit_in_the_label` | the labels contain digits; reading the first number returns the 2 from "section 2" |
+| `test_an_absent_row_is_none_rather_than_a_number_that_happens_to_match` | a missing row must not read as a row stating zero |
+| `test_a_stated_total_that_disagrees_with_the_ids_is_visible` | the inventory arm's own red, with the agreeing control beside it |
+| `test_the_anchor_rule_drops_punctuation_and_keeps_underscores` | GitHub's derivation, on the heading the defect was found in |
+| `test_an_anchor_that_strips_the_underscores_is_caught` | the exact broken link that shipped, with a control |
+| `test_every_in_document_link_in_this_directory_reaches_a_heading` | every contents-list link resolves, with a coverage premise |
 
 The five fixture arms exist because everything above them passes on a healthy tree,
 which is exactly what a guard that does nothing also does. They run the identical
@@ -838,20 +847,26 @@ functions over a corpus built to be wrong.
 
 ### The twin, and which half has teeth
 
-This is the pytest half. The other half is
-`test/selftest/350-the-pytest-corpus-must-be.sh`, and the two are **not**
-interchangeable:
+**This section said "Nothing runs pytest. Not `run_all_versions.sh`, not any
+workflow under `.github/`", and that is no longer true.** CI has a `pytest-guards`
+job: it installs pytest pinned from `requirements-test.txt`, asserts `psycopg` is
+absent, derives the file list from `NO_CLUSTER` in `test_harness_deps.py`, and runs
+it. This file is in that list. So a guard written only here DOES fire in the gate,
+and the argument that made the `.sh` half the enforcement has gone.
 
-- **The `.sh` half is the one that gates.** `harness_selftest` is registered in
-  `SUITES`, so it runs in the matrix and in CI.
-- **Nothing runs pytest.** Not `run_all_versions.sh`, not any workflow under
-  `.github/`. A guard written only here would never fire in the gate, and a guard
-  that does not run is a comment.
+That argument was load-bearing, and it was stale in three places at once — here,
+in `test/selftest/360`, and in `test/selftest/380` — each saying the behavioural
+half could not run in CI. **A stale justification for keeping coverage in the wrong
+place is harder to find than a missing check, because nothing reddens.** Nothing
+was wrong; the reason was.
 
-So the `.sh` copy is the enforcement and this one is what a person running the
-corpus by hand gets, with the offenders arriving as a Python list rather than as a
-string assembled by shell. Both are written in the same change, per the rule in
-section 9.
+So the duplication is being removed in the direction the two-harness rule requires
+(#432). `test/selftest/350`'s arms over this corpus and over this directory's
+documents are the ones that had to read across the boundary, and they are gone; the
+properties they held that this file did not yet test — the mode-counting rule's
+edges and the contents-list anchor rule — moved here, where their subject is. What
+stays in `350` is its arms over `ci.yml`, whose subject is the workflow rather than
+either harness.
 
 This guard reddened on its own arrival, which is the only reason it is known to
 work here: adding this file moved the corpus from `(54, 5)` to `(62, 6)` and the
