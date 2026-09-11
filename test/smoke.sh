@@ -115,6 +115,21 @@ fail=0
 # NOT lib.sh's own `check`: that composes its own display and would drop the
 # `: $got` suffix these lines carry, which is the measured value rather than a
 # label. The name and the value are both wanted.
+#
+# AND THE `checks run:` LINE BELOW IS READ BY NOTHING YET, which is worth saying
+# so the next conversion does not add it believing it wired something up
+# (@jdatcmd, #969 review). The matrix decides whether to reconcile a suite by
+# looking for the ACCOUNTING line -- `run_all_versions.sh` calls
+# `pgc_log_shows_accounting`, which greps for
+# `accounting: N passed + N failed + N unrunnable + N skipped = N` -- and this
+# suite emits none, because it does not call `pgc_summary`. Measured: 0 accounting
+# lines here against 1 in any suite that does.
+#
+# The line is still correct and still wanted: it is the total the records
+# reconcile against, and `pgc_reconcile_records` returns 0 on this log when driven
+# directly. So the remaining step is a gate flip rather than new work -- once
+# whatever replaces the verdict line emits the accounting line, reconciliation
+# starts working for all ten of these suites with no further change to them.
 check() {
 	local name="$1" got="$2" want="$3"
 	if [ "$got" = "$want" ]; then
