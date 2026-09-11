@@ -475,8 +475,20 @@ def test_this_module_keeps_no_private_fingerprint(expect):
 SRCDIR = pathlib.Path(__file__).resolve().parents[2]
 
 
-def _sh(srcdir, expr):
-    """Evaluate one lib.sh expression against a tree, and return its stdout."""
+def _sh(expr):
+    """Evaluate one `lib.sh` expression against THIS tree, and return its stdout.
+
+    THE TREE IS NOT A PARAMETER, and it used to look like one. This took `srcdir`,
+    every caller passed a fixture tree, and the body sourced the module-global
+    `SRCDIR` regardless -- so nine call sites read as "evaluate against this tree"
+    while the tree was discarded (#933).
+
+    It could not have been otherwise: the functions under test live in `lib.sh`, and
+    no fixture tree contains one. Measured -- honouring the parameter gives rc=1 and
+    `No such file or directory`, so every arm would have measured a failed `source`
+    instead of the function. The expressions that DO need the fixture interpolate it
+    themselves, which is why dropping the parameter changes no behaviour.
+    """
     script = f'. "{SRCDIR}/test/lib.sh" || exit 1; {expr}'
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     return p.stdout.strip(), p.returncode
@@ -560,9 +572,9 @@ def _tree_with_module(tmp_path, name):
 
 def test_the_stamp_writer_reports_failure(tmp_path, expect):
     """`|| true` made both controllers' warning branches unreachable."""
-    out, rc = _sh(tmp_path, 'pgc_write_source_stamp "/proc/pgc-twin" "deadbeef"')
+    out, rc = _sh('pgc_write_source_stamp "/proc/pgc-twin" "deadbeef"')
     expect.num(rc, 1, "the writer reports failure on an unwritable target")
-    ok, rc2 = _sh(tmp_path, f'pgc_write_source_stamp "{tmp_path}/s" "cafebabe"')
+    ok, rc2 = _sh(f'pgc_write_source_stamp "{tmp_path}/s" "cafebabe"')
     expect.num(rc2, 0, "control: and succeeds on a writable one")
 
 
@@ -576,10 +588,10 @@ def test_two_installations_of_one_major_do_not_share_a_stamp(tmp_path, expect):
                      f'  --pkglibdir) echo "/usr/local/pg18{n}/lib" ;;\nesac\n')
         c.chmod(0o755)
         cfgs.append(c)
-    a, _ = _sh(tmp_path, f'pgc_source_stamp_path /tree "{cfgs[0]}"')
-    b, _ = _sh(tmp_path, f'pgc_source_stamp_path /tree "{cfgs[1]}"')
+    a, _ = _sh(f'pgc_source_stamp_path /tree "{cfgs[0]}"')
+    b, _ = _sh(f'pgc_source_stamp_path /tree "{cfgs[1]}"')
     expect.text(str(a != b), "True", "two prefixes of one major get different stamps")
-    a2, _ = _sh(tmp_path, f'pgc_source_stamp_path /tree "{cfgs[0]}"')
+    a2, _ = _sh(f'pgc_source_stamp_path /tree "{cfgs[0]}"')
     expect.text(a2, a, "control: the same pg_config twice gives the same path")
 
 
@@ -627,11 +639,11 @@ def test_the_two_fingerprint_implementations_cover_the_same_inputs(tmp_path, exp
         ("the top-level Makefile", t / "Makefile", "all:\n\t$(MAKE) -C objstore # x\n"),
         ("the control file", t / "pgcolumnar.control", "y\n"),
     ):
-        sh_before, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+        sh_before, _ = _sh(f'pgc_source_fingerprint "{t}"')
         py_before = source_fingerprint(t)
         old = path.read_text()
         path.write_text(body)
-        sh_after, _ = _sh(t, f'pgc_source_fingerprint "{t}"')
+        sh_after, _ = _sh(f'pgc_source_fingerprint "{t}"')
         py_after = source_fingerprint(t)
         path.write_text(old)
         expect.text(f"{sh_after != sh_before} {py_after != py_before}", "True True",
@@ -1134,3 +1146,95 @@ def test_a_symlinked_src_is_skipped_like_any_other_symlinked_build_dir(tmp_path,
     out2 = _mf_of(real_tree)
     expect.num(len([l for l in out2.splitlines() if l.startswith("src/a.c ")]), 1,
                "control: a real src directory is still hashed")
+
+# ---- a helper may not take a parameter it never reads (#933) -------------------
+#
+# `_sh(srcdir, expr)` took a tree and ignored it: the docstring said "evaluate one
+# lib.sh expression against a tree", nine call sites passed a fixture tree, and the
+# body sourced the module-global SRCDIR -- the real source tree -- instead.
+#
+# WHICH READING WAS INTENDED IS A MEASUREMENT, not a judgement, and it settles the
+# fix. Every caller passes a tree built by `_tree_with_module` or `_tree_with_source`,
+# and none of those contains `test/lib.sh`:
+#
+#     fixture tree holds: ['Makefile', 'objstore', 'pgcolumnar.control']
+#     honouring srcdir:   rc=1, "No such file or directory" -- the source fails
+#     sourcing SRCDIR:    rc=0, the function under test runs
+#
+# So the parameter could never have worked, and the arms mean the real tree. The
+# parameter was noise that made nine call sites read as something they were not.
+#
+# TEST FUNCTIONS ARE EXCLUDED, because their parameters are pytest FIXTURES:
+# requesting one has an effect whether or not the body reads it, and three in this
+# corpus are legitimately unread.
+#
+# PYTEST HOOKS ARE EXCLUDED TOO, and that is not a hatch. A hook's signature IS
+# pytest's API -- arguments arrive by NAME -- so declaring a parameter you do not read
+# is how a hook says which of them it wants. Three of the four the scan found before
+# this change were hooks: `pytest_collection_modifyitems(config)`,
+# `pytest_xdist_node_collection_finished(node)` and `pytest_sessionfinish(exitstatus)`.
+# Only `_sh` was a defect, so the budget was 1 and is now 0.
+
+
+def _unread_parameters(source, filename="<probe>"):
+    """-> [(function, parameter, line)] for helpers that ignore an argument."""
+    import ast
+
+    out = []
+    for fn in ast.walk(ast.parse(source)):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if fn.name.startswith("test_") or fn.name.startswith("pytest_"):
+            continue
+        names = [a.arg for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs]
+        names = [n for n in names if n not in ("self", "cls")]
+        if not names:
+            continue
+        read = {n.id for n in ast.walk(fn)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        for n in names:
+            if n not in read:
+                out.append((f"{filename}:{fn.lineno}", fn.name, n))
+    return out
+
+
+def test_the_unread_parameter_scan_finds_one(expect):
+    """The positive control, on the exact shape `_sh` had."""
+    found = _unread_parameters(
+        "def _helper(srcdir, expr):\n"
+        "    return run(GLOBAL, expr)\n", "probe.py")
+    expect.num(len(found), 1, "a helper ignoring its first argument is found")
+    expect.text(found[0][2], "srcdir", "and the parameter is named")
+
+
+def test_the_unread_parameter_scan_spares_fixtures_and_hooks(expect):
+    """The false-positive budget, which is what makes the zero below mean something."""
+    for label, src in (
+        ("a test function's unread fixture",
+         "def test_x(tmp_path, expect):\n    expect.num(1, 1, 'n')\n"),
+        ("a pytest hook's unread argument",
+         "def pytest_sessionfinish(session, exitstatus):\n    do(session)\n"),
+        ("a parameter read only inside an f-string",
+         "def _h(tree):\n    return f'{tree}/x'\n"),
+        ("a parameter read only in a nested function",
+         "def _h(tree):\n    def inner():\n        return tree\n    return inner\n"),
+        ("a parameter read only in a comprehension",
+         "def _h(items):\n    return [i for i in items]\n"),
+    ):
+        expect.num(len(_unread_parameters(src)), 0, f"not flagged: {label}")
+
+
+def test_no_helper_in_this_corpus_takes_a_parameter_it_never_reads(expect):
+    """The population. One before this change -- `_sh(srcdir, expr)` -- and none now.
+
+    Corpus-wide rather than this file only: the defect was here, but the class is not.
+    """
+    import pathlib
+
+    here = pathlib.Path(__file__).parent
+    files = sorted(here.glob("*.py"))
+    expect.at_least(len(files), 10, "premise: the scan has a corpus to read")
+    found = []
+    for f in files:
+        found += _unread_parameters(f.read_text(encoding="utf-8"), f.name)
+    expect.text(repr(found), "[]", "no helper ignores an argument it was handed")

@@ -764,6 +764,46 @@ a plausible wrong hash that neither the per-file sentinel nor the empty-manifest
 guard can see. It has not been observed. The boundary of this change is "the three
 observed variants are closed", not "the function is now infallible".
 
+### A helper that took a tree and ignored it
+
+`_sh(srcdir, expr)` read as "evaluate one `lib.sh` expression against a tree" — the
+docstring said so, nine call sites passed a fixture tree, and the body sourced the
+module-global `SRCDIR`, the real source tree, instead. Whatever those arms measured, it
+was not parameterised by the tree they were handed (#933).
+
+**Which reading was intended is a measurement, not a judgement.** Every caller passes a
+tree built by `_tree_with_module` or `_tree_with_source`, and none of those contains
+`test/lib.sh`:
+
+```
+fixture tree holds: ['Makefile', 'objstore', 'pgcolumnar.control']
+honouring srcdir:   rc=1, "No such file or directory" -- the source fails
+sourcing SRCDIR:    rc=0, the function under test runs
+```
+
+So the parameter could never have worked: honouring it would have made every one of
+those arms measure a failed `source` rather than the function. The arms mean the real
+tree, the parameter was noise, and it is gone. The expressions that DO need the fixture
+interpolate it themselves, which is why dropping it changes no behaviour.
+
+| test | asserts |
+| --- | --- |
+| `test_the_unread_parameter_scan_finds_one` | the scan fires on the shape `_sh` had |
+| `test_the_unread_parameter_scan_spares_fixtures_and_hooks` | five shapes it must not flag |
+| `test_no_helper_in_this_corpus_takes_a_parameter_it_never_reads` | the population, corpus-wide: one before, none now |
+
+**The class, not the instance.** The scan is corpus-wide because the defect was here and
+the class is not.
+
+**Two exclusions, both real rather than hatches.** A **test** function's parameters are
+pytest fixtures: requesting one has an effect whether or not the body reads it, and three
+in this corpus are legitimately unread. A **hook**'s signature is pytest's API — arguments
+arrive by name — so declaring one you do not read is how a hook says which it wants.
+Three of the four the scan found before this change were hooks:
+`pytest_collection_modifyitems(config)`, `pytest_xdist_node_collection_finished(node)`
+and `pytest_sessionfinish(exitstatus)`. Only `_sh` was a defect, so the budget was 1 and
+is now 0.
+
 ## 6. test_docs_cover_the_corpus.py: this document, checked
 
 **THE SWEEP GOES BOTH WAYS NOW (#908).** `undocumented()` computes tests on disk

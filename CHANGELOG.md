@@ -701,6 +701,35 @@ true until the next version shipped.
   deleted fourth; the end state is one.
   which never started.
 
+- A test helper no longer takes a tree it ignores (#933).
+
+  `_sh(srcdir, expr)` in `test/pytest/test_build_refusal.py` read as "evaluate one
+  `lib.sh` expression against a tree": the docstring said so, nine call sites passed a
+  fixture tree, and the body sourced the module-global `SRCDIR` -- the real source tree --
+  instead. Whatever those arms measured, it was not parameterised by the tree they were
+  handed.
+
+  WHICH READING WAS INTENDED IS A MEASUREMENT. Every caller passes a tree built by
+  `_tree_with_module` or `_tree_with_source`, and none contains `test/lib.sh`:
+
+      fixture tree holds: ['Makefile', 'objstore', 'pgcolumnar.control']
+      honouring srcdir:   rc=1, "No such file or directory" -- the source fails
+      sourcing SRCDIR:    rc=0, the function under test runs
+
+  So the parameter could never have worked -- honouring it would have made every one of
+  those arms measure a failed `source` rather than the function under test. The arms mean
+  the real tree, so the parameter was noise that made nine call sites read as something
+  they were not. It is gone, and behaviour is unchanged: the expressions that need the
+  fixture interpolate it themselves.
+
+  A corpus-wide AST scan now requires that no helper takes a parameter it never reads, so
+  the class is closed rather than the instance. Two exclusions, both real: a TEST
+  function's parameters are pytest fixtures, and requesting one has an effect whether or
+  not the body reads it; and a HOOK's signature is pytest's API, where arguments arrive by
+  name, so declaring one you do not read is how a hook says which it wants. Three of the
+  four the scan found were hooks -- `pytest_collection_modifyitems(config)`,
+  `pytest_xdist_node_collection_finished(node)`, `pytest_sessionfinish(exitstatus)` -- so
+  only `_sh` was a defect and the budget was 1, now 0.
 
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
