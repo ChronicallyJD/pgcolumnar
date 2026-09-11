@@ -23,6 +23,7 @@ import ast
 import numbers
 import pathlib
 
+import functools
 import itertools
 
 import pytest
@@ -259,6 +260,74 @@ def _plan_nodes(node):
             yield from _plan_nodes(entry)
 
 
+def _resolving(method):
+    """Set the verdict of the record this call took, from the outcome. #937 phase 2.
+
+    WHY NOT FROM THE EXCEPTION IN `pytest_runtest_call`. That was the first
+    design, and @OffgridwithJD refuted it: proving a guard REFUSES means catching
+    the AssertionError, which five tests in this corpus do (test_ordered.py:243,
+    test_failed_query_sentinel.py:236, :326, :357, :382). Measured before this:
+
+        count before/mid/after: 0 / 1 / 2
+          record 0  'this comparison must fail'   verdict PASS   <- this RAISED
+          record 1  'and the test continues'      verdict PASS
+        1 passed
+
+    A genuinely failed assertion stayed PASS, in a passing test, with no exception
+    reaching the hook. Here the resolution is INSIDE the assertion call, so it
+    happens before any `except` in the test body can see the error.
+
+    WHY A WRAPPER RATHER THAN A VERDICT PASSED AT THE CALL SITE. `outcomes` and
+    `refusal` delegate to pytest's own `assert_outcomes`, which raises a message
+    this layer never composes -- there is no verdict for the call site to pass. A
+    wrapper covers those without the assertion methods knowing they are wrapped.
+
+    IT MARKS THE RECORD THIS CALL TOOK, BY INDEX -- AND TODAY THAT IS THE SAME
+    RECORD AS THE LAST ONE. The first version of this comment claimed the index
+    form was needed to survive nesting, and a mutation refuted it: replacing
+    `self._records[taken]` with `self._records[-1]` left all 235 tests green,
+    because nothing distinguishes them. `row_set` delegates to `rows`, but
+    `row_set` takes no record of its own, so one call appends at most one record
+    and the two expressions always name it.
+
+    The index form is kept because it stays correct if that stops being true, and
+    the invariant it depends on is now PINNED rather than assumed:
+    test_check_records.py asserts every recording method takes exactly one record
+    per call. If someone writes one that records twice, that arm reddens and this
+    comment is still true -- which is the opposite of how the first version of it
+    would have aged.
+
+    WRAPPING TWICE CHANGES NOTHING, and the drift arm deliberately does not look
+    for it. The marker sits on the outer wrapper, so a doubly-wrapped method is
+    indistinguishable from a singly-wrapped one -- @OffgridwithJD named that as the
+    gap most likely to be reached. Measured: both wrappers compute the same
+    `taken` and write the same verdict and reason, because the inner call appends
+    nothing before the outer one measures. An arm against a change that alters no
+    behaviour would be a false red waiting to happen.
+
+    A REFUSAL MARKS NOTHING, and that needs no special case for VacuityError being
+    an AssertionError subclass: every VacuityError in the recording methods is
+    raised BEFORE the record is taken, so no record exists to mark. That is not an
+    accident to rely on -- test_check_records.py scans the module and fails if
+    anyone adds one after.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        taken = len(self._records)
+        try:
+            return method(self, *args, **kwargs)
+        except AssertionError as exc:
+            if len(self._records) > taken:
+                rec = self._records[taken]
+                rec.verdict = "FAIL"
+                rec.reason = str(exc)
+            raise
+
+    wrapper._pgc_resolves_verdict = True
+    return wrapper
+
+
 class Expect:
     """Records assertions, and refuses the ones that could not have failed."""
 
@@ -342,6 +411,7 @@ class Expect:
         self._records.append(_Record(name, verdict, reason))
 
     # -- numbers -----------------------------------------------------------
+    @_resolving
     def num(self, got, want, name):
         """Compare two numbers. Refuses anything that is not a number.
 
@@ -381,6 +451,7 @@ class Expect:
                   allow_empty=allow_empty)
 
     # -- ordered sequences ---------------------------------------------------
+    @_resolving
     def ordered_rows(self, got, want, name):
         """Compare two sequences IN ORDER, refusing the cases where order says nothing.
 
@@ -420,6 +491,7 @@ class Expect:
                 f"{name}: same prefix, different length: got {len(g)} rows want {len(w)}"
             )
 
+    @_resolving
     def ordering_observable(self, forward, reverse, name):
         """Assert this fixture can distinguish order at all, before relying on it.
 
@@ -448,6 +520,7 @@ class Expect:
             )
 
     # -- inequality ----------------------------------------------------------
+    @_resolving
     def differ(self, got, want, name):
         """Assert that two arms of an A/B are observably different.
 
@@ -561,6 +634,7 @@ class Expect:
         self.num(count, want, name)
 
     # -- row sets ----------------------------------------------------------
+    @_resolving
     def rows(self, got, want, name, allow_empty=None):
         """Compare two result sets. Refuses two empty sides unless declared.
 
@@ -581,6 +655,7 @@ class Expect:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
     # -- hashes and oracles ------------------------------------------------
+    @_resolving
     def hash(self, got, want, name):
         """Compare two oracle hashes. Refuses self-comparison and error sentinels."""
         if got is want:
@@ -598,6 +673,7 @@ class Expect:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
     # -- text --------------------------------------------------------------
+    @_resolving
     def text(self, got, want, name):
         """Compare text exactly. Refuses an empty expectation and a failed query."""
         self._refuse_failed_query(name, got, want)
@@ -610,6 +686,7 @@ class Expect:
             raise AssertionError(f"{name}: got {got!r} want {want!r}")
 
     # -- SQLSTATE ----------------------------------------------------------
+    @_resolving
     def sqlstate(self, exc, want, name):
         """Assert a raised database error carries EXACTLY this SQLSTATE.
 
@@ -672,6 +749,7 @@ class Expect:
             raise AssertionError(f"{name}: got SQLSTATE {got!r} want {want!r}")
 
     # -- plans -------------------------------------------------------------
+    @_resolving
     def plan_node(self, plan, node_type=None, provider=None, name=None):
         """Assert a node exists, by EXACT equality on a typed EXPLAIN JSON field.
 
@@ -718,6 +796,7 @@ class Expect:
         )
 
     # -- bounds -------------------------------------------------------------
+    @_resolving
     def at_least(self, got, floor, name):
         """Assert got >= floor. Both sides must be numbers.
 
@@ -740,6 +819,7 @@ class Expect:
             raise AssertionError(f"{name}: got {got!r}, wanted at least {floor!r}")
 
     # -- the layer's own tests ---------------------------------------------
+    @_resolving
     def refusal(self, result, name, *patterns):
         """The inner run failed, AND it failed for the REASON named.
 
@@ -787,6 +867,7 @@ class Expect:
         # anywhere in the file.
         result.stdout.fnmatch_lines([f"E*{p}*" for p in patterns])
 
+    @_resolving
     def outcomes(self, result, name, **want):
         """Assert on an INNER pytest run's outcomes, and count it.
 
@@ -803,6 +884,7 @@ class Expect:
         self._record(name)
         result.assert_outcomes(**want)
 
+    @_resolving
     def run_failed(self, result, name):
         """Assert an inner run exited non-zero, and count it."""
         self._record(name)
@@ -811,6 +893,7 @@ class Expect:
                 f"{name}: the inner run exited 0, so nothing refused it."
             )
 
+    @_resolving
     def plan_marker(self, plan, key, name=None, absent=False):
         """Assert a plan node carries (or does not carry) a Columnar property KEY.
 
@@ -864,6 +947,7 @@ class Expect:
             )
 
     # -- the third state ---------------------------------------------------
+    @_resolving
     def cannot_run(self, reason, detail=""):
         """Declare this test unrunnable. Not a pass, and not a silent skip.
 

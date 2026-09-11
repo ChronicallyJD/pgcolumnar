@@ -120,3 +120,293 @@ def test_a_name_carrying_a_separator_survives_the_record(expect):
     e.num(1, 1, nasty)
     expect.num(len(e.records), 1, "a name with separators made exactly one record")
     expect.text(e.records[0].name, nasty, "and the name came back byte-identical")
+
+
+# ---- phase 2: the verdict is resolved where the outcome is known -------------
+#
+# The first version of this file's comment argued the verdict could be resolved
+# from the exception in `pytest_runtest_call`, because assertions are sequential
+# and a raise ends the test. @OffgridwithJD refuted it, and this corpus is what
+# refutes it: proving a guard REFUSES means catching the AssertionError, which
+# five tests do. Measured before the fix:
+#
+#     count before/mid/after: 0 / 1 / 2
+#       record 0  'this comparison must fail'   verdict PASS   <- this one RAISED
+#       record 1  'and the test continues'      verdict PASS
+#     1 passed
+#
+# A genuinely failed assertion stayed PASS, in a passing test, with nothing
+# reaching the hook to correct it. So the verdict is set on the COMPARISON's own
+# path instead, where the outcome is known and no propagation is needed.
+
+
+def test_a_failed_assertion_records_fail_even_when_the_test_catches_it(expect):
+    """THE ARM FOR THE REFUTATION, and the shape five tests in this corpus use.
+
+    Catching the AssertionError is how a test proves a guard refuses. If catching
+    it also erased the verdict, every one of those tests would be reporting on a
+    record stream that says its deliberate failure passed.
+    """
+    e = pgc_vacuity.Expect("verdict::caught")
+    try:
+        e.num(1, 2, "this comparison must fail")
+    except AssertionError:
+        pass
+    expect.num(len(e.records), 1, "premise: the failed assertion was still counted")
+    expect.text(e.records[0].verdict, "FAIL",
+                "and it is recorded as FAIL, not as a pass the catcher hid")
+
+
+def test_the_failure_reason_is_the_assertions_own_message(expect):
+    """A verdict with no reason sends the reader back to the source to find out
+    what happened. The message is the one the assertion already produces, not a
+    second one written for the record -- two messages for one failure is how they
+    drift."""
+    e = pgc_vacuity.Expect("verdict::reason")
+    try:
+        e.num(1, 2, "one equals two")
+    except AssertionError as exc:
+        raised = str(exc)
+    expect.text(e.records[0].reason, raised,
+                "the recorded reason is the message the assertion raised")
+
+
+def test_the_assertions_before_a_failure_keep_their_verdicts(expect):
+    """The verdicts are per assertion, not per test. A test that fails its third
+    assertion made two real claims first, and a stream that marked the whole test
+    would lose them."""
+    e = pgc_vacuity.Expect("verdict::ordering")
+    e.num(1, 1, "first, true")
+    e.num(2, 2, "second, true")
+    try:
+        e.num(3, 4, "third, false")
+    except AssertionError:
+        pass
+    e.num(5, 5, "fourth, after the catch")
+    expect.ordered_rows([r.verdict for r in e.records],
+                        ["PASS", "PASS", "FAIL", "PASS"],
+                        "each assertion carries its own verdict, in order")
+
+
+def test_a_delegated_assertion_records_fail_too(expect):
+    """`outcomes` and `refusal` hand the comparison to pytest's own
+    `assert_outcomes`, so the AssertionError is raised by code this layer does not
+    write and carries a message it did not compose.
+
+    That is the case a verdict passed in at the call site could not cover, and it
+    is why the resolution wraps the comparison rather than describing it.
+    """
+    e = pgc_vacuity.Expect("verdict::delegated")
+
+    class _FakeResult:
+        ret = 0
+
+        def assert_outcomes(self, **want):
+            raise AssertionError("Outcomes do not match: expected passed=1")
+
+    try:
+        e.outcomes(_FakeResult(), "a delegated comparison", passed=1)
+    except AssertionError:
+        pass
+    expect.num(len(e.records), 1, "premise: the delegated assertion was counted")
+    expect.text(e.records[0].verdict, "FAIL",
+                "and a failure raised by pytest's own code is still recorded")
+
+
+def test_a_refusal_still_leaves_no_record(expect):
+    """The boundary, restated for phase 2 because the resolution wraps a region
+    that a refusal must stay outside of.
+
+    Verified statically as well as here: in every recording method, each
+    `VacuityError` is raised BEFORE the record is taken, so no refusal is ever
+    inside the wrapped region. That is what keeps a refusal out of the stream
+    without a special case for `VacuityError` being a subclass of AssertionError.
+    """
+    e = pgc_vacuity.Expect("verdict::refusal")
+    try:
+        e.num("100", 100, "a text comparison")
+    except pgc_vacuity.VacuityError:
+        expect.num(len(e.records), 0, "a refused assertion still records nothing")
+    else:
+        raise AssertionError("num() accepted a string, so this arm tested nothing")
+
+
+def test_every_refusal_precedes_its_record(expect):
+    """The static half of the arm above, so the invariant cannot drift silently.
+
+    If somebody adds a `VacuityError` after the record is taken, the refusal lands
+    inside the wrapped region and starts being recorded as a FAILED ASSERTION.
+    Nothing else in the corpus would notice, and the stream would lie in the most
+    misleading direction available -- a refusal reported as a real failure.
+
+    THIS SCAN FOLLOWS CALLS, and the first version did not. It looked for a
+    literal `raise VacuityError(...)` inside each method body, which would have
+    missed a refusal raised through a helper -- and `_refuse_failed_query` is
+    exactly such a helper, called by most of these methods. Measured while
+    attacking this arm: 17 methods raise it directly, 18 can raise it once calls
+    are followed, so the lexical scan was one method short of the real population.
+
+    It happens that no method calls a refusing helper after its own record, so
+    both scans agree today. The arm is the transitive one anyway, because the
+    reason to write a guard is the case that does not exist yet.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(pgc_vacuity))
+    methods = {}
+    for cls in ast.walk(tree):
+        if isinstance(cls, ast.ClassDef) and cls.name == "Expect":
+            for fn in cls.body:
+                if isinstance(fn, ast.FunctionDef):
+                    methods[fn.name] = fn
+
+    def _raises_here(fn):
+        return any(isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call)
+                   and isinstance(n.exc.func, ast.Name)
+                   and n.exc.func.id == "VacuityError"
+                   for n in ast.walk(fn))
+
+    def _self_calls(fn):
+        return [(n.func.attr, n.lineno) for n in ast.walk(fn)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name) and n.func.value.id == "self"]
+
+    # Close over calls, so a method that refuses only through a helper is in the
+    # population too.
+    refusing = {nm for nm, fn in methods.items() if _raises_here(fn)}
+    growing = True
+    while growing:
+        growing = False
+        for nm, fn in methods.items():
+            if nm in refusing:
+                continue
+            if any(attr in refusing for attr, _ in _self_calls(fn)):
+                refusing.add(nm)
+                growing = True
+
+    scanned = []
+    offenders = []
+    for nm, fn in methods.items():
+        recs = [n.lineno for n in ast.walk(fn)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "_record"]
+        if not recs:
+            continue
+        scanned.append(nm)
+        first = min(recs)
+        for n in ast.walk(fn):
+            if (isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call)
+                    and isinstance(n.exc.func, ast.Name)
+                    and n.exc.func.id == "VacuityError" and n.lineno > first):
+                offenders.append(f"{nm}:{n.lineno} raises it directly after the record")
+        for attr, lineno in _self_calls(fn):
+            if attr in refusing and lineno > first:
+                offenders.append(f"{nm}:{lineno} calls self.{attr}() after the record")
+    # THE PREMISE IS THE POPULATION, and it is the difference between "no method
+    # offends" and "the scan matched no methods". An empty offender list is the
+    # answer to both, and only one of them is good news.
+    expect.at_least(len(scanned), 15, "premise: the scan found the recording methods")
+    expect.rows(offenders, [], "no refusal is raised after its record is taken",
+                allow_empty=True)
+
+
+def test_every_recording_method_resolves_its_verdict(expect):
+    """THE LIST CANNOT DRIFT. A method that takes a record and is not wrapped
+    records a PASS it never revisits, so its failures are invisible in the stream
+    while the test still fails normally -- nothing else in the corpus would
+    notice.
+
+    Derived from the module, not from a list written here: the population is every
+    method that calls `_record`, and the claim is that all of them are wrapped.
+    A list would have to be updated by whoever adds the sixteenth, which is
+    exactly the person who would forget.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(pgc_vacuity))
+    recording = []
+    for cls in ast.walk(tree):
+        if not (isinstance(cls, ast.ClassDef) and cls.name == "Expect"):
+            continue
+        for fn in cls.body:
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == "_record" for n in ast.walk(fn)):
+                recording.append(fn.name)
+
+    expect.at_least(len(recording), 15,
+                    "premise: the scan found the recording methods")
+    unwrapped = sorted(
+        nm for nm in recording
+        if not getattr(getattr(pgc_vacuity.Expect, nm), "_pgc_resolves_verdict", False)
+    )
+    expect.rows(unwrapped, [], "every method that takes a record resolves its verdict",
+                allow_empty=True)
+
+
+def test_wrapping_a_method_twice_changes_nothing(expect):
+    """WHAT THE ARM ABOVE CANNOT SEE, measured rather than left as a worry.
+
+    @OffgridwithJD attacked the drift arm and named double-wrapping as the most
+    reachable thing it would miss: the marker is on the outer wrapper, so a method
+    wrapped twice looks exactly like one wrapped once.
+
+    That is true, and it does not matter -- which is the answer, not an excuse.
+    Both wrappers compute the same `taken` and resolve the same record to the same
+    verdict and reason, because the inner call appends nothing before the outer one
+    measures. Measured here rather than argued, because "I think it is harmless" is
+    the sentence that has been wrong three times today.
+
+    So the arm is not extended to catch it. A guard against a change that alters
+    nothing is a false red waiting to happen, and this layer's budget forbids those
+    more strictly than it forbids a gap.
+    """
+    e = pgc_vacuity.Expect("double::wrapped")
+    original = pgc_vacuity.Expect.num
+    pgc_vacuity.Expect.num = pgc_vacuity._resolving(original)
+    try:
+        try:
+            e.num(1, 2, "a claim that is false")
+        except AssertionError:
+            pass
+        e.num(3, 3, "a claim that is true")
+    finally:
+        pgc_vacuity.Expect.num = original
+    expect.ordered_rows([r.verdict for r in e.records], ["FAIL", "PASS"],
+                        "a doubly-wrapped method resolves exactly as a single one does")
+    expect.num(e.count, 2, "and still takes one record per call")
+
+
+def test_a_recording_method_takes_exactly_one_record_per_call(expect):
+    """THE INVARIANT THE RESOLUTION RESTS ON, pinned because a mutation showed it
+    was assumed.
+
+    `_resolving` marks `self._records[taken]`. Replacing that with
+    `self._records[-1]` left the whole corpus green, because one call appends at
+    most one record and the two always name it. That is a property of the methods,
+    not of the wrapper, and nothing was asserting it.
+
+    If a method ever records twice, `[taken]` and `[-1]` stop agreeing, the
+    wrapper marks the first and the second keeps a verdict nobody set. This is the
+    arm that says so, rather than the comment.
+    """
+    e = pgc_vacuity.Expect("records::one-per-call")
+    calls = [
+        lambda: e.num(1, 1, "num"),
+        lambda: e.text("a", "a", "text"),
+        lambda: e.rows(["a"], ["a"], "rows"),
+        lambda: e.ordered_rows(["a", "b"], ["a", "b"], "ordered_rows"),
+        lambda: e.at_least(5, 1, "at_least"),
+        lambda: e.differ("x", "y", "differ"),
+        lambda: e.row_set(["a"], ["a"], "row_set -- delegates to rows"),
+    ]
+    deltas = []
+    for call in calls:
+        before = e.count
+        call()
+        deltas.append(e.count - before)
+    expect.rows([str(d) for d in deltas], ["1"] * len(calls),
+                "every call, including the delegating one, took exactly one record")
