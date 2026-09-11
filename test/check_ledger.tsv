@@ -404,6 +404,7 @@ harness_selftest	340-the-binary-must-be-built-from	premise: the spelling fixture
 harness_selftest	340-the-binary-must-be-built-from	premise: the sweep finds the call sites it is meant to police	never	-
 harness_selftest	340-the-binary-must-be-built-from	premise: the tree fingerprints to something when it is readable	never	-
 harness_selftest	340-the-binary-must-be-built-from	premise: the unprivileged read agrees while everything is readable	never	-
+harness_selftest	340-the-binary-must-be-built-from	premise: the unprivileged reader can source the staged harness	never	-
 harness_selftest	340-the-binary-must-be-built-from	premise: the writer wrote a stamp at all	never	-
 harness_selftest	340-the-binary-must-be-built-from	renaming a source file moves the fingerprint too	never	-
 harness_selftest	340-the-binary-must-be-built-from	so its verdict is unknown rather than a spurious stale	never	-
