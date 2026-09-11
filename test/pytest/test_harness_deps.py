@@ -944,8 +944,9 @@ SHELL_REFERENCES = {
         "sources the shell harness's helper library to call its build-and-install "
         "function, so the build refusal has one implementation rather than two",
     "test_build_refusal.py":
-        "sources that library for the pure-shell stamp and freshness helpers, and "
-        "for the one permitted cross-implementation arm; see its module docstring",
+        "sources that library twice and for two reasons only: the one permitted "
+        "cross-implementation arm, and a historical-parity arm whose fixture is its "
+        "own. The pure-shell stamp and freshness drivers are gone; see CONTEXT.md",
     "test_suite_accounting.py":
         "reads the matrix runner's text and executes the real runner",
     "test_mutation_ledger.py":

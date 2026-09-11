@@ -241,13 +241,25 @@ Python that reaches into shell:
   `chmod 000`, one varies the locale -- and both use the module's own CLI, which is
   the entry point lib.sh uses with lib.sh taken out of the path.
 
-  **13 calls remain, in three groups, and only the first is debt.** Seven drive
-  `pgc_write_source_stamp`, `pgc_source_stamp_path`, `pgc_freshness_report` and
-  `pgc_freshness_verdict`, which are PURE SHELL rather than wrappers over shared
-  code: those properties belong to the shell harness and moving them is the next
-  step. Two are `test_the_two_fingerprint_implementations_cover_the_same_inputs`,
-  which reaches across on purpose -- see below. The last two are a historical-parity
-  arm whose fixture is its own, bar one call for a directory list.
+  **FOUR calls remain and none of them is debt.** Two are
+  `test_the_two_fingerprint_implementations_cover_the_same_inputs`, which reaches
+  across on purpose -- see below. Two are a historical-parity arm whose fixture is
+  its own.
+
+  The seven that drove `pgc_write_source_stamp`, `pgc_source_stamp_path`,
+  `pgc_freshness_report` and `pgc_freshness_verdict` are **gone**, and not one of
+  them needed porting: `test/selftest/340` already held every property they
+  asserted, with more arms in each case. Measured arm by arm before anything was
+  deleted.
+
+  **THE FIRST MEASUREMENT OF 340 WAS WRONG AND NEARLY COST A DUPLICATE.** Enumerating
+  its checks with `grep -cE '^check "'` gave 81; the real number is 89, because 340
+  has INDENTED `check` calls inside an `if` and a `for`, and the eight it missed are
+  exactly the unreadable-source block. On that bad count one python arm looked like a
+  genuine gap, and a duplicate of it was written and proven to discriminate before
+  the duplication was noticed. The tell was a duplicate check name -- the ledger tool
+  reported "one ledger row covers 2" -- and the right response to a name that already
+  exists is to ask why, not to rename it. Anchor a check sweep at `^[[:space:]]*`.
 
 - **The one permitted cross-reference, named as the rule asks.**
   `test_the_two_fingerprint_implementations_cover_the_same_inputs` asserts that the

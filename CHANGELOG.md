@@ -496,6 +496,61 @@ true until the next version shipped.
   is the title and colliding with the real entry 5. The fixture reported 3 entries in a
   two-entry document, which is how it was found.
 
+- The pytest corpus no longer drives the shell harness for properties the shell
+  harness already holds, and the inventory of what remains is down to four calls,
+  none of them debt (#432).
+
+  CONTEXT.md's rule: the two harnesses are parallel in FUNCTIONALITY and independent
+  in CALL. `test_build_refusal.py` drove `test/lib.sh` for seven calls over
+  `pgc_write_source_stamp`, `pgc_source_stamp_path`, `pgc_freshness_report` and
+  `pgc_freshness_verdict` -- four PURE SHELL functions, so the python arms were a
+  second measurement of someone else's subject, agreeing with it by construction.
+
+  **Five arms removed and not one needed porting.** `test/selftest/340` already held
+  every property they asserted, and more of it in each case:
+
+  | the python arm | what 340 already had |
+  | --- | --- |
+  | the stamp writer reports failure | the same, plus a premise that the stamp really was not written |
+  | two installations of one major do not share a stamp | the same, plus pkglibdir keying and two unreadable pg_configs |
+  | the report names each file and states how many | the same two arms |
+  | an empty manifest says so rather than printing nothing | the same arm |
+  | a failed digest is unknown, never a false stale | the same, over TWO unreadable files, plus the premise below |
+
+  340's version of the last one carries a premise the pytest twin did not state: that
+  the unprivileged read AGREES with the privileged one while nothing is denied.
+  Without it the arms measure the user switch rather than the permission denial.
+
+  **The first measurement of 340 was wrong and nearly cost a duplicate.** Enumerating
+  its checks with `grep -cE '^check "'` gave 81. The real number is **89**: 340 has
+  indented `check` calls inside an `if` and a `for`, and the eight the sweep missed
+  are exactly the unreadable-source block. On that bad count one python arm looked
+  like a genuine gap, and a duplicate of it was written -- and proven to discriminate
+  against a mutation -- before the duplication was noticed.
+
+  **The tell was a duplicate check name.** `pgc_ledger.py` reported "duplicate check
+  name in one run, so one ledger row covers 2", and the first response was to rename
+  the new check. The right response to a name that already exists is to ask WHY it
+  exists. Renaming it hid the only evidence that the work was unnecessary. A check
+  sweep has to be anchored at `^[[:space:]]*`, not at column 0.
+
+  Two mutations were run against the duplicate before it was discarded, and the first
+  was a no-op for a reason worth keeping: `pgc_source_fingerprint` returns empty
+  because the MODULE prints nothing and exits 0, not because the wrapper's `rc != 0`
+  branch fires. Mutating that branch changes nothing on this path. The property lives
+  in `test/pgc_fingerprint.py`, and the wrapper's contribution is only that it does
+  not substitute a value for the module's empty answer.
+
+  What remains in `test_build_refusal.py` is four calls in two arms, both named:
+  `test_the_two_fingerprint_implementations_cover_the_same_inputs`, which is the one
+  permitted cross-reference because the property IS the relationship between the two
+  implementations, and a historical-parity arm whose fixture is its own. `_sh_fp_as`
+  is deleted with its last caller.
+
+  TESTS.md loses the rows naming the deleted arms, and three prose passages that named
+  them are rewritten to say where the property lives now rather than left pointing at
+  arms that do not exist. A backticked name is a claim that it exists.
+
 - A count `grep` never produced no longer reads as "present" (#929).
 
   #922 replaced roughly 28 `producer | grep -q PAT` tests with
