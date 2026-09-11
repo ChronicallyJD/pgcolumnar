@@ -40,6 +40,12 @@ true until the next version shipped.
   the failure from a conftest, because no code in the tree drops a record and an
   arm that waits for a real defect is not evidence the check can fail.
 
+  It is a transport check and not a completeness check. A record created after
+  the report was built is invisible to it, because both quantities come from one
+  read of the recorder at one instant. That is a limit rather than an oversight:
+  the totals are built from what arrived, and under `-n` the controller has no
+  recorder to consult. An arm asserts the limit so it cannot be claimed away.
+
 - Every counted assertion in the pytest harness produces a record, and the
   count is derived from them (#937, first phase).
 

@@ -2478,6 +2478,7 @@ taken, so no record exists to mark. That is scanned rather than trusted.
 | `test_the_total_is_printed_from_the_records_not_from_the_test_count` | 5 claims across 2 tests is 5, not 2 |
 | `test_a_record_lost_in_transport_is_refused` | **the arm this phase exists for** |
 | `test_a_verdict_outside_the_closed_set_is_refused` | the schema half |
+| `test_a_record_created_after_the_report_is_NOT_caught` | **the limit**, pinned because I claimed the opposite |
 
 **The obvious reconciliation here is vacuous by construction, and phase 1 made it
 so on purpose.** `count` *is* `len(self._records)`, so checking one against the
@@ -2499,10 +2500,19 @@ arrived   the list read back off the report AFTER it was built -- crossing the
 state is invisible to the controller, so the value travels on the report.
 Measured on the pinned runner, `user_properties` survive that crossing intact.
 
-**What it catches:** a record created after the report was built, one dropped or
-mangled in transport, and a verdict outside the closed set. **What it does not:** a
-record that is present, transported, well-formed and wrong. That is phase 2's job,
-and it is said here so this does not read as a guarantee it is not.
+**What it catches:** a record dropped or mangled between the report being built and
+the report being read, and a verdict outside the closed set.
+
+**What it does not**, and the first version of this section claimed the first of
+these wrongly: a record created **after** the report was built, because both
+quantities come from one read of the recorder at one instant — measured, the
+recorder held 4, the report carried 3, and the run passed; and a record that is
+present, transported, well-formed and **wrong**, which is phase 2's job.
+
+So it is a transport check rather than a completeness check. The limit is not
+straightforwardly fixable — the totals are built from what arrived, and under `-n`
+the controller has no recorder to consult — so it is pinned by an arm instead of
+described by a sentence.
 
 **The arms inject the failure from a conftest**, because no in-tree code drops a
 record — an arm that waits for a real defect to appear is not evidence the check

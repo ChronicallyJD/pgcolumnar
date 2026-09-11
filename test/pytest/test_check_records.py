@@ -550,3 +550,50 @@ def test_a_verdict_outside_the_closed_set_is_refused(pytester, expect):
     result = pytester.runpytest("-p", "pgc_vacuity")
     expect.run_failed(result, "a verdict outside the closed set is refused")
     result.stderr.fnmatch_lines(["*SORTOF*"])
+
+
+def test_a_record_created_after_the_report_is_NOT_caught(pytester, expect):
+    """THE LIMIT, pinned so it cannot be re-claimed. I claimed the opposite.
+
+    The PR body, the CHANGELOG and the layer's own comment all said phase 3
+    catches a record created after the report was built. It does not, and the
+    reason is structural rather than an oversight: both quantities are taken from
+    ONE read of the recorder at ONE instant, so a later append is invisible to
+    both.
+
+    It is also not straightforwardly fixable. The totals are built from what
+    ARRIVED, and under `-n` the controller has no recorder to consult -- the
+    worker's lives in another process. So this is a transport check, and the
+    honest thing is an arm that says where the edge is rather than a sentence
+    claiming there is none.
+
+    Found by attacking my own PR description before anyone reviewed it, which is
+    the fourth claim of mine this chain that no arm defended.
+    """
+    pytester.makepyfile(
+        """
+        def test_three_claims(expect):
+            expect.num(1, 1, "a")
+            expect.num(2, 2, "b")
+            expect.num(3, 3, "c")
+        """
+    )
+    pytester.makeconftest(
+        """
+        import pytest
+        import pgc_vacuity
+
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(item, call):
+            report = yield
+            if call.when == "call":
+                rec = pgc_vacuity._RECORDERS.get(item.nodeid)
+                if rec is not None:
+                    rec._records.append(pgc_vacuity._Record("a record created LATE"))
+            return report
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(result, "a late record does NOT refuse the run -- this is the limit",
+                    passed=1, failed=0)
+    result.stdout.fnmatch_lines(["*checks run: 3*"])

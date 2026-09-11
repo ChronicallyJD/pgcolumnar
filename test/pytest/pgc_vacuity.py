@@ -1169,11 +1169,33 @@ class _RecordCollector:
     report. Measured on the pinned runner, user_properties survive that crossing
     intact -- which is what makes this a reconciliation rather than a formality.
 
-    WHAT IT CATCHES: a record created after the report was built, one dropped or
-    mangled in transport, and a verdict outside the closed set. WHAT IT DOES NOT:
-    a record that is present, transported and well-formed, and wrong. That is
-    phase 2's job, and saying so here keeps this from reading as a guarantee it
-    is not.
+    WHAT IT CATCHES: a record dropped or mangled between the report being built
+    and the report being read, and a verdict outside the closed set.
+
+    WHAT IT DOES NOT, and the first version of this comment claimed the first of
+    these, wrongly:
+
+    * A RECORD CREATED AFTER THE REPORT WAS BUILT. Both values are taken from one
+      read of the recorder at one instant, so a later append is invisible to both
+      and the run passes. Measured, by appending from a hook outside this layer's:
+
+          recorder now holds 4; report carries 3
+          checks run: 3
+          accounting: 3 pass + 0 fail + 0 unrun = 3
+          1 passed, rc=0
+
+      It is not straightforwardly fixable either, and that is the honest reason it
+      is a limit rather than a TODO: the totals are BUILT from what arrived, and
+      under -n the controller has no recorder to consult -- the worker's is in
+      another process. An arm in test_check_records.py pins this so it cannot be
+      re-claimed.
+
+    * A record that is present, transported and well-formed, and WRONG. That is
+      phase 2's job.
+
+    So this is a transport check, not a completeness check, and calling it the
+    latter would be the third vacuous reconciliation #937 warns about wearing the
+    clothes of the two it already names.
     """
 
     def __init__(self):
