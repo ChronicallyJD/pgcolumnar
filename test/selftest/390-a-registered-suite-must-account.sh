@@ -657,7 +657,14 @@ check "premise: and so is the wide reader it is paired with" \
 # THE TWO READERS MUST DISAGREE ON EXACTLY ONE SHAPE, which is the whole premise. A log
 # carrying only `checks run:` is accounted by the wide reader and not by the narrow one.
 _o28="$PGC_WORKDIR/acc928"; mkdir -p "$_o28"
-printf 'accounting: 3 passed + 0 failed + 0 unrunnable = 3\nx.sh: PASSED\n' > "$_o28/libsh.log"
+# THE FIXTURE CARRIES THE SHAPE THE NARROW READER ACTUALLY WANTS, and that shape
+# moved under this branch: lib.sh's accounting line gained a `skipped` term, so the
+# four-term form this fixture first wrote stopped being accepted. The premise arm
+# below is what said so -- it went red on the rebase with `got [no] want [yes]`,
+# which is precisely the job of a premise that asserts a fixture really is in the
+# state the test needs. Without it the two readers would have agreed on this log for
+# the wrong reason and the arm about their disagreement would have been vacuous.
+printf 'accounting: 3 passed + 0 failed + 0 unrunnable + 0 skipped = 3\nx.sh: PASSED\n' > "$_o28/libsh.log"
 printf 'checks run: 9\nowntally.sh: PASSED\n' > "$_o28/own.log"
 printf 'some output\nPASSED\n' > "$_o28/neither.log"
 check "premise: a lib.sh accounting line is seen by the narrow reader" \
