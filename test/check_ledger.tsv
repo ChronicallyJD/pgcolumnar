@@ -678,7 +678,6 @@ harness_selftest	410-a-check-must-have-been-red	but that suite is counted as not
 harness_selftest	410-a-check-must-have-been-red	control: a well-formed log still merges	never	-
 harness_selftest	410-a-check-must-have-been-red	control: an all-PASS log still merges with no flag at all	never	-
 harness_selftest	410-a-check-must-have-been-red	control: the same log merges with a different reason, so the refusal above is --mutation-across-two-checks and not the log	never	-
-harness_selftest	410-a-check-must-have-been-red	control: the same log merges without --mutation	never	-
 harness_selftest	410-a-check-must-have-been-red	each says what was wrong with the input	never	-
 harness_selftest	410-a-check-must-have-been-red	every committed row has five fields	never	-
 harness_selftest	410-a-check-must-have-been-red	every row has five fields and no trailing tab	never	-
