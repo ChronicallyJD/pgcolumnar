@@ -544,6 +544,29 @@ true until the next version shipped.
   name joined onto a `tmp_path`, because both are the string `lib.sh` and only the
   dataflow says which.
 
+  **The other direction: `test/selftest/370` is deleted.** It pinned the POSITION of
+  `plan_marker`'s empty-plan refusal by reading the Python source as text, which is all a
+  shell part can see. It cannot run the function, so it cannot tell a refusal that still
+  fires from one stranded behind an early return -- the only thing the position is for.
+  The property moved into `test_guards_pinned.py` as
+  `test_the_empty_plan_refusal_precedes_the_arms_it_protects`, which takes the class off
+  the `expect` fixture so the file still imports nothing. 370's other three properties
+  were already covered; confirmed by running those arms, not by reading them.
+
+  That arm discriminates -- move the refusal to the end of `plan_marker` and it fails --
+  and it is NOT load-bearing today: with the refusal at the end,
+  `plan_marker([], absent=True)` still refuses, because `plan_marker` has no early
+  return. So 370's stated reason, that the absent arm returns a pass first, describes a
+  shape the function does not have. It is labelled prospective insurance against a
+  refactor that adds one, rather than sold as a live hole.
+
+  **CONTEXT.md said seven shell files reach across and the number is three.** `lib.sh`,
+  `selftest/030` and `selftest/040` matched only `pgc_cluster_datadir` and
+  `pgc_cluster_is_ours`, which are shell functions defined in `lib.sh` -- rule 3 of that
+  entry, "a word that merely looks like a filename", caught for the second time in the
+  entry that states it. `selftest/350`, `360` and `380` are the real three.
+
+
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
 

@@ -913,6 +913,9 @@ SHELL_REFERENCES = {
         "for the one permitted cross-implementation arm; see its module docstring",
     "test_suite_accounting.py":
         "reads the matrix runner's text and executes the real runner",
+    "test_mutation_ledger.py":
+        "executes the matrix runner with its list flag to get the registered suite "
+        "list, which is the same mechanism the entry above uses",
 }
 
 _SHELL_NAMES = re.compile(

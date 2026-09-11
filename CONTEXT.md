@@ -261,6 +261,12 @@ Python that reaches into shell:
 - `test_suite_accounting.py` -- reads `run_all_versions.sh`'s text, sources the
   real `lib.sh` from a suite it writes, and executes the real runner.
 - `pgc_cluster.py` -- sources the real `test/lib.sh`.
+- `test_mutation_ledger.py` -- runs `run_all_versions.sh --list-suites` for the
+  registered suite list. It **arrived after this inventory was written**, with #925,
+  and the arm below is what said so: the set-equality assertion reddened on the
+  rebase naming a fourth file, which is the whole reason the inventory is a mechanism
+  and not this paragraph. Same mechanism as `test_suite_accounting.py`, so it is the
+  same item of debt twice and they should move together.
 
 Shell whose subject is python: `selftest/350`, `360` and `380`. **Three, not the
 seven this line first named, and the three it dropped were rule 3 all along.**

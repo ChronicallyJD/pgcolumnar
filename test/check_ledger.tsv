@@ -478,18 +478,6 @@ harness_selftest	360-an-unrunnable-pytest-test-must	the layer ends a session by 
 harness_selftest	360-an-unrunnable-pytest-test-must	the layer prints the unrunnable reason in lib.sh's shape	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	the layer still writes the unrunnable state	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses agree on the INCOMPLETE exit code	never	-
-harness_selftest	370-the-plan-marker-guard-must	a neutered absent arm is caught	never	-
-harness_selftest	370-the-plan-marker-guard-must	a neutered empty-plan refusal is caught	never	-
-harness_selftest	370-the-plan-marker-guard-must	a neutered present arm is caught	never	-
-harness_selftest	370-the-plan-marker-guard-must	and that refusal is a VacuityError, not an ordinary assertion	never	-
-harness_selftest	370-the-plan-marker-guard-must	plan_marker keeps the arm that fails when the key is absent	never	-
-harness_selftest	370-the-plan-marker-guard-must	plan_marker keeps the arm that fails when the key is present	never	-
-harness_selftest	370-the-plan-marker-guard-must	plan_marker refuses a plan with no nodes at all	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: both line numbers were found, so the ordering arm can mean something	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: plan_marker's body was actually cut out of the file	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: the pytest layer is where this part thinks it is	never	-
-harness_selftest	370-the-plan-marker-guard-must	premise: while the real body satisfies all three, so the greps work	never	-
-harness_selftest	370-the-plan-marker-guard-must	the empty-plan refusal precedes the arm it protects	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a caller that reimplements the digest is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a fingerprint that reads src only is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a make_cluster with no cleanup is caught	never	-
