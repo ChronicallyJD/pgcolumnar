@@ -226,7 +226,7 @@ class Cluster:
 
     @property
     def so_path(self):
-        return os.path.join(self.libdir, "pgcolumnar.so")
+        return os.path.join(self.libdir, _SO_NAME)
 
     def so_md5(self):
         """Fingerprint the library under test.
@@ -235,8 +235,7 @@ class Cluster:
         against a previously installed library. The Python harness keeps it for the
         same reason.
         """
-        out = _run(["md5sum", self.so_path])
-        return out.split()[0][:12]
+        return _md5_of(self.so_path)
 
     # -- lifecycle, the only place a binary is invoked ---------------------
     def initdb(self):
@@ -435,6 +434,57 @@ def source_manifest(srcdir):
     return _fp.manifest(srcdir)
 
 
+# The library's filename, named ONCE. `so_path` and `installed_library` both need
+# it, and this module's own comments argue against twin implementations of "is the
+# thing under test the thing in this tree" -- that pair produced four defects in one
+# day (#907).
+_SO_NAME = "pgcolumnar.so"
+
+
+def _md5_of(path):
+    """Digest a FILE with md5sum, the way `so_md5` has always done it.
+
+    Deliberately not `hashlib`: `test_this_module_keeps_no_private_fingerprint`
+    forbids a private digest in this module, because the twin source-fingerprint
+    implementations produced four defects in one day and the docstring claiming they
+    agreed was false through two rounds of fixing (#907). That argument is about a
+    SECOND WAY TO COMPUTE ONE THING, which is what a separate artifact digest would
+    be, so `so_md5` and `installed_library` share this.
+
+    Truncated to 12 like `so_md5`, so the value written into the build marker is the
+    same string the run prints, and a reader can compare them by eye.
+    """
+    return _run(["md5sum", str(path)]).split()[0][:12]
+
+
+def installed_library(pg_config):
+    """What the prefix holds RIGHT NOW: an md5, "absent", or None if unreadable.
+
+    This is a claim about THIS PREFIX OVER TIME, which is the property actually at
+    stake, and deliberately not a claim about the source. The source cannot predict
+    the artifact: the build path is compiled in, so one commit built in two
+    directories produces two different libraries -- @jdatcmd measured 2c9559d087b0
+    and 757591c69d32 from a8702031 with nothing but the directory differing. A
+    stored per-source constant would therefore fail open on every legitimate
+    rebuild-elsewhere, and this project builds from a fresh directory routinely.
+
+    `None` is NOT "unchanged". The caller writes it into the marker as `unobserved`,
+    so a degraded decision is readable rather than inferred from an absence.
+    """
+    try:
+        libdir = _pg_config(pg_config, "--pkglibdir")
+    except Exception:
+        return None
+    try:
+        return _md5_of(pathlib.Path(libdir) / _SO_NAME)
+    except Exception:
+        # The prefix answered and the library could not be digested -- missing, or
+        # unreadable. That is an observation, not an absence of one, and it must
+        # rebuild rather than certify. Broad on purpose: every way of failing to
+        # read the artifact means the same thing here, and the direction is closed.
+        return "absent"
+
+
 def build_once(srcdir, pg_config, major, lock_path=None, runner=None):
     """build_and_install, but at most once across xdist workers.
 
@@ -457,18 +507,36 @@ def build_once(srcdir, pg_config, major, lock_path=None, runner=None):
     # make the guard cheap. A tree we cannot fingerprint gets a key that never
     # matches, so it always rebuilds.
     fp = source_fingerprint(srcdir)
-    want = f"{pg_config}\n{major}\n{fp}\n" if fp else None
+
+    def key(lib):
+        # THE INSTALLED LIBRARY IS PART OF THE KEY (#956). The source fingerprint
+        # answers "did this layer last build this source". It was read as "does the
+        # prefix hold that build", and those are different claims. The gap cost two
+        # debugging sessions in one day: a perf run installed a pre-#945 library
+        # into the shared prefix, and the corpus then reported ten failures here and
+        # nineteen on @jdatcmd's box with the code entirely innocent. The source had
+        # not changed, so the old key matched and the build was skipped.
+        #
+        # Anything may write this prefix -- the shell harness, a measurement run, a
+        # manual install, another worktree -- and stopping them is not the fix. The
+        # fix is for this decision to notice.
+        return f"{pg_config}\n{major}\n{fp}\n{lib or 'unobserved'}\n"
+
     with open(lock_path, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         try:
             try:
-                if want is not None and pathlib.Path(marker).read_text() == want:
+                if fp and pathlib.Path(marker).read_text() == key(
+                        installed_library(pg_config)):
                     return "already-built"
             except OSError:
                 pass
             build_and_install(srcdir, pg_config, major, runner=runner)
-            if want is not None:
-                pathlib.Path(marker).write_text(want)
+            if fp:
+                # AFTER the install, because the install is what writes the library:
+                # a fingerprint taken before it would record the previous one and
+                # certify exactly the state this guard exists to refuse.
+                pathlib.Path(marker).write_text(key(installed_library(pg_config)))
             return "built"
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)

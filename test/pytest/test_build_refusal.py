@@ -216,6 +216,114 @@ def test_editing_the_source_rebuilds(tmp_path, expect):
     expect.num(len(calls), 2, "an edited source builds again")
 
 
+def _pg_config_answering(tmp_path, libdir):
+    """A real executable that answers --pkglibdir, so the test drives the
+    production path rather than a seam added for the test."""
+    pgc = tmp_path / "pg_config"
+    pgc.write_text("#!/bin/sh\n"
+                   "case \"$1\" in\n"
+                   "  --pkglibdir) echo %s ;;\n"
+                   "  *) echo unsupported >&2; exit 1 ;;\n"
+                   "esac\n" % libdir)
+    pgc.chmod(0o755)
+    return pgc
+
+
+def test_build_once_rebuilds_when_another_process_replaced_the_library(tmp_path, expect):
+    """#956. The marker answers "did this layer build this source", and it is read
+    as "does the prefix hold that build". Those are different claims.
+
+    Measured twice in one day: a perf run installed a pre-#945 library into the
+    shared prefix, and the corpus then reported ten failures here and nineteen on
+    @jdatcmd's box, with the code entirely innocent. The source never changed, so
+    the source fingerprint matched and the build was skipped.
+    """
+    tree = _tree_with_source(tmp_path, "replaced", "int a = 1;\n")
+    libdir = tmp_path / "libdir"
+    libdir.mkdir()
+    so = libdir / "pgcolumnar.so"
+    pgc = _pg_config_answering(tmp_path, libdir)
+    lock = str(tmp_path / "lock956")
+
+    calls = []
+
+    def installing(argv):
+        # An install WRITES the library, which is what makes this fixture faithful:
+        # the thing the marker should be describing is a file on disk.
+        calls.append(argv)
+        so.write_bytes(b"build-%d" % len(calls))
+        return _Proc(0)
+
+    # PREMISE: the fake pg_config really answers, or the arm below is vacuous.
+    probe = subprocess.run([str(pgc), "--pkglibdir"], capture_output=True, text=True)
+    expect.num(probe.returncode, 0, "premise: the fake pg_config answers --pkglibdir")
+    expect.text(probe.stdout.strip(), str(libdir), "and it names the library directory")
+
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "built", "the first caller builds")
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "already-built", "an untouched prefix still skips, as before")
+    expect.num(len(calls), 1, "so the build ran once")
+
+    # A THIRD PARTY overwrites the installed library. Source unchanged, prefix
+    # unchanged, major unchanged -- only the artifact differs.
+    so.write_bytes(b"someone-elses-build")
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "built", "a replaced library rebuilds rather than certifying")
+    expect.num(len(calls), 2, "and the build actually ran, rather than the verdict alone changing")
+
+
+def test_build_once_rebuilds_when_the_library_was_deleted(tmp_path, expect):
+    """Absent is not fresh. A prefix someone cleaned must not read as built."""
+    tree = _tree_with_source(tmp_path, "deleted", "int a = 1;\n")
+    libdir = tmp_path / "libdir2"
+    libdir.mkdir()
+    so = libdir / "pgcolumnar.so"
+    pgc = _pg_config_answering(tmp_path, libdir)
+    lock = str(tmp_path / "lock956b")
+    calls = []
+
+    def installing(argv):
+        calls.append(argv)
+        so.write_bytes(b"build")
+        return _Proc(0)
+
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=installing)
+    expect.num(len(calls), 1, "the first caller builds")
+    so.unlink()
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "built", "a deleted library rebuilds")
+    expect.num(len(calls), 2, "and the build ran")
+
+
+def test_a_prefix_that_cannot_be_observed_is_recorded_as_unobserved(tmp_path, expect):
+    """The degraded path, tested rather than left as a fallback nobody exercises.
+
+    `pg_config` may not be answerable -- three tests in this file pass one that is
+    not. Skipping the comparison then is the only option that does not break them,
+    and it fails OPEN, which is this issue's own defect class. So it is allowed but
+    written into the marker, making the degraded state readable instead of inferred.
+    """
+    tree = _tree_with_source(tmp_path, "unobservable", "int a = 1;\n")
+    lock = str(tmp_path / "lock956c")
+    calls = []
+
+    def counting(argv):
+        calls.append(argv)
+        return _Proc(0)
+
+    expect.text(build_once(tree, "/nonexistent/pg_config", "18",
+                           lock_path=lock, runner=counting),
+                "built", "an unanswerable pg_config still builds")
+    expect.text(build_once(tree, "/nonexistent/pg_config", "18",
+                           lock_path=lock, runner=counting),
+                "already-built", "and still skips, so the existing arms keep their meaning")
+    expect.num(len(calls), 1, "the build ran once")
+    marker = pathlib.Path(lock + ".done").read_text()
+    expect.num(marker.count("unobserved"), 1,
+               "and the marker says the library was not observed, rather than implying it was")
+
+
 def test_the_fingerprint_reads_content_not_mtime(tmp_path, expect):
     """A checkout or a branch switch rewrites mtimes without changing what
     compiles, and `git stash` does the reverse. Content is the honest input."""

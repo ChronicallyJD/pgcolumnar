@@ -1259,6 +1259,34 @@ true until the next version shipped.
   now re-records. It names the two cases that remain: a declaration that no longer
   resolves, and the implicit base projection, which is not readable by name at all.
 
+- The pytest harness no longer reports results against a library another process
+  installed (#956).
+
+  `build_once()` skipped the build when its marker matched, and the marker recorded
+  the pg_config, the major and the source fingerprint. That answers "did this layer
+  last build this source", and it was read as "does the prefix hold that build". The
+  two differ whenever anything else writes the shared prefix: the bash harness, a
+  timing run, a manual install, another worktree. Measured twice in one day, a
+  measurement run installed an older library and the corpus then reported ten
+  failures in one file on one machine and nineteen on another, with the code under
+  test entirely innocent.
+
+  The installed library is now part of the marker, so a prefix someone else wrote is
+  rebuilt rather than certified. A library that is absent counts as changed. Where
+  the prefix genuinely cannot be read the comparison is skipped, which is the only
+  option that leaves the existing arms meaning what they say, and the marker records
+  `unobserved` so the degraded decision is readable rather than inferred.
+
+  The digest cannot be predicted from the source, because the build path is compiled
+  in: one commit built in two directories produces two different libraries. So what
+  is recorded is the digest installed at the moment the marker was written, which is
+  a statement about that prefix over time.
+
+  Blast radius worth knowing, since it is what made this hard to spot: a stale
+  library fails exactly the tests of the feature it lacks, so it presents as one
+  whole file failing while the rest of the suite passes. Scattered failures are
+  usually the code; a clean file boundary is usually the environment.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added

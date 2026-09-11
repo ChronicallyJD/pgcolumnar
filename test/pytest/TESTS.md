@@ -815,6 +815,45 @@ Three of the four the scan found before this change were hooks:
 and `pytest_sessionfinish(exitstatus)`. Only `_sh` was a defect, so the budget was 1 and
 is now 0.
 
+### The marker answered a different question from the one it was read as (#956)
+
+`build_once()` skips the build when a marker matches. The marker used to record
+`pg_config`, the major and the **source** fingerprint, so it answered *"did this layer
+last build this source?"* — and it was read as *"does the prefix hold that build?"*
+Those are different claims, and the gap is not hypothetical: it cost two debugging
+sessions in one day. A measurement run installed a pre-#945 library into the shared
+prefix, and the corpus then reported **10 failures** here and **19** on @jdatcmd's box,
+with the code entirely innocent. The source had not changed, so the old key matched.
+
+The installed library is now part of the key. Anything may write that prefix — the shell
+harness, a perf run, a manual install, another worktree — and stopping them is not the
+fix; noticing is.
+
+| test | asserts |
+| --- | --- |
+| `test_build_once_rebuilds_when_another_process_replaced_the_library` | a third party overwriting the library rebuilds instead of certifying, and the build actually runs |
+| `test_build_once_rebuilds_when_the_library_was_deleted` | absent is not fresh |
+| `test_a_prefix_that_cannot_be_observed_is_recorded_as_unobserved` | the degraded path is exercised, and says so in the marker |
+
+**Why a per-source constant cannot work.** The library's digest is not a function of the
+source: the build path is compiled in. @jdatcmd measured `2c9559d087b0` and
+`757591c69d32` from one commit with nothing but the build directory differing. So
+"this source should produce digest X" is false as soon as anyone builds elsewhere, which
+is every worktree and every `devloop` arm. What is recorded instead is **the digest that
+was installed when the marker was written** — a claim about this prefix over time.
+
+**The degraded path is tested rather than assumed.** `pg_config` may not be answerable;
+three tests in this file pass one that is not. Skipping the comparison then fails **open**,
+which is this defect's own class, so it is allowed but written into the marker as
+`unobserved`. A reader can see the decision was degraded instead of inferring it from an
+absence.
+
+**The digest is computed once.** `so_md5()` already fingerprinted the installed library
+with `md5sum`, so `installed_library()` shares that path rather than adding a second way
+to digest one artifact. `test_this_module_keeps_no_private_fingerprint` caught the first
+attempt, which reached for `hashlib` — the guard was right, and the fix is better for it.
+
+
 ## 6. test_docs_cover_the_corpus.py: this document, checked
 
 **THE SWEEP GOES BOTH WAYS NOW (#908).** `undocumented()` computes tests on disk
