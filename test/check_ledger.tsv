@@ -461,23 +461,22 @@ harness_selftest	350-the-pytest-corpus-must-be	the counter stops at the next hea
 harness_selftest	350-the-pytest-corpus-must-be	the gate runs the harness guards	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the row's value is read, not a digit inside its label	never	-
 harness_selftest	350-the-pytest-corpus-must-be	the sweep counts the fixture's tests and files	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	a comparison on the exit status is not counted as an assignment	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	a drifted exit code is visible rather than absorbed	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	a write-only unrunnable field is caught	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	an unconditional exit override is caught by the dominance arm	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	and only ever moves a run off zero, so a failure still dominates	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	and something READS it, rather than only writing it	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	premise: and that same fixture does show the write, so the arm is not blind	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	a drifted print shape is visible	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	a reason dropped from one side only is visible	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: and that fixture is a real list rather than an empty parse	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: and that fixture parses to a shape rather than to nothing	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: lib.sh prints a line for an unrunnable check	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: lib.sh states a closed list of unrunnable reasons	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: lib.sh states an INCOMPLETE exit code this part could read	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: the harness library is where this part thinks it is	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer is where this part thinks it is	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer prints one too	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer states a closed list too	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	premise: the pytest layer states one too	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	premise: while a real assignment on the same line shape IS counted	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	premise: while the real layer satisfies that same arm	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	the layer ends a session by setting its exit status	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	the layer prints the unrunnable reason in lib.sh's shape	never	-
-harness_selftest	360-an-unrunnable-pytest-test-must	the layer still writes the unrunnable state	never	-
 harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses agree on the INCOMPLETE exit code	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses agree on the closed list of unrunnable reasons	never	-
+harness_selftest	360-an-unrunnable-pytest-test-must	the two harnesses print an unrunnable check in the same shape	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a caller that reimplements the digest is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a fingerprint that reads src only is caught	never	-
 harness_selftest	380-the-pytest-cluster-helpers	a make_cluster with no cleanup is caught	never	-

@@ -566,6 +566,43 @@ true until the next version shipped.
   entry, "a word that merely looks like a filename", caught for the second time in the
   entry that states it. `selftest/350`, `360` and `380` are the real three.
 
+  **`test/selftest/360` is rewritten rather than deleted, and it now checks more.**
+  Eleven of its seventeen arms were text pins on `pgc_vacuity.py`: that the
+  unrunnable field is written, that something reads it, that the read reaches
+  `session.exitstatus`, that the override is conditional. Those are gone. What is
+  left is the kind CONTEXT.md permits -- a property that IS the relationship between
+  the two harnesses, so it cannot be stated from one side -- and there turned out to
+  be THREE such properties where the part checked one.
+
+  The part checked the INCOMPLETE exit code and left two duplications beside it
+  unchecked: the closed list of unrunnable reasons, and the one-line shape an
+  unrunnable check prints. Both are now parsed out of both files and compared, with
+  a drifted fixture for each so the comparison can fail. The reason list is the
+  worse omission of the two, because being closed on both sides is its whole purpose.
+
+  Both deletions were measured first. With `session.exitstatus = EXIT_INCOMPLETE`
+  made unreachable in `pgc_vacuity.py` -- the defect exactly as it shipped -- the
+  four behavioural arms in `test_layer.py` go from `4 passed` to `2 failed, 2
+  passed`. Two is correct rather than partial: the other two assert exit 1 for a run
+  with a real failure and exit 0 for a run with nothing unrunnable, and neither
+  outcome moves. The file was restored and compared byte-for-byte afterwards.
+
+  **And the reason the part gave for keeping those pins was true when written and is
+  not now.** It said the behavioural arms "need pytest, psycopg and a virtualenv; CI
+  installs none of them". CI has a `pytest-guards` job that installs pytest pinned
+  from `requirements-test.txt`, asserts psycopg is absent, and runs the
+  database-free file list -- which contains `test_layer.py`. A stale justification
+  for keeping coverage in the wrong place is harder to find than a missing check,
+  because nothing reddens.
+
+  Two instrument defects of my own, both caught by the new arms' own premises. The
+  shape parse took the FIRST line matching the print marker, which in
+  `pgc_vacuity.py` is the DOCSTRING that spells the shape out for a reader;
+  requiring a quote before the marker selects the code in both languages. And the
+  drifted-shape fixture wrote one space where the real shape has two, so the parse
+  found nothing and the comparison was empty-against-real -- which "differs", for
+  the wrong reason. Its premise arm said so.
+
 
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
