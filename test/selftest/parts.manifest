@@ -40,3 +40,5 @@
 400-a-check-result-must-be-machine.sh
 410-a-check-must-have-been-red.sh
 420-a-deleted-part-must-be-visible.sh
+430-the-self-test-must-not-report.sh
+440-a-count-grep-never-produced.sh

@@ -1379,7 +1379,7 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	_led_logs=""
 	for s in "${SUITES[@]}"; do
 		[ -s "$builddir/${s}.log" ] || continue
-		[ "$(grep -c '^RESULT	' "$builddir/${s}.log" || true)" != 0 ] \
+		[ "$(grep -c '^RESULT	' "$builddir/${s}.log" || true)" -ne 0 ] \
 			&& _led_logs="$_led_logs $builddir/${s}.log"
 	done
 	if [ -z "$_led_logs" ]; then
