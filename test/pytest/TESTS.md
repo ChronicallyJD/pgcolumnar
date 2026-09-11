@@ -2159,6 +2159,29 @@ references in `.github/`, zero in the runner.
 If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so the
 gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
 which falls as suites are seeded.
+
+### `test_the_gate_refuses_a_census_that_contradicts_its_own_ledger`
+
+The arm above asserts the two committed files agree. This one asserts the **tool
+refuses a pair that does not** — because the gate printed `ledger census: rows=N`
+and never compared it to the budget's claim, returning 0 on a fifteen-row lie
+(#952). Reporting is not enforcing.
+
+It is decidable from the two inputs alone, with no prior and no `--against`, and
+that is the point rather than an economy. The disagreement is created by a **merge**:
+two PRs each re-derive the census from the same base, the ledger then takes both sets
+of rows, and the budget keeps whichever side won the conflict. A check that needed the
+prior could not speak about the commit that creates the problem. Three PRs in flight
+at once set 769, 762 and 800 from a base of 756, and no two of them composed.
+
+Refused in **both** directions, which is what separates it from a ceiling: a ceiling
+refuses a rise, and bounding this number deadlocks, as `check_ledger_budget.txt`
+argues. Absence of the field is reported rather than refused, because absence is not a
+contradiction — and because every other gate fixture in both harnesses states only
+`suites_not_covered`, so refusing there would redden about twenty arms testing
+something else. What holds the committed budget to naming both numbers is the arm
+above.
+
 ## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
 
 **Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5
