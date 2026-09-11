@@ -1480,9 +1480,10 @@ true until the next version shipped.
   `set -uo pipefail`, and the case was reported nowhere at all. It now emits a SKIP
   record with its reason.
 
-  Fifty-seven checks across four of the suites are still not recorded, because those
-  suites have further check-like helpers of their own -- `eq_on_off` in `phase6`
-  alone accounts for thirty-nine -- each printing its own display. Those need a
+  Fifty-eight checks across four of the suites are still not recorded -- fifty-eight
+  on PG18 and fifty-seven on PG16, because one of them sits behind a version gate --
+  since those suites have further check-like helpers of their own, `eq_on_off` in
+  `phase6` alone accounting for thirty-nine, each printing its own display. Those need a
   second pass rather than the same substitution, and the count in #965 should be read
   as the number of checks rather than the number of helpers.
 
