@@ -479,9 +479,12 @@ harness_selftest	390-a-registered-suite-must-account	and it is NAMED, so the rea
 harness_selftest	390-a-registered-suite-must-account	and it is named as that fault, not as one of the other two	never	-
 harness_selftest	390-a-registered-suite-must-account	and it is named as the opposite fault, not the same one	never	-
 harness_selftest	390-a-registered-suite-must-account	and it is named, which the symmetry check could never do	never	-
+harness_selftest	390-a-registered-suite-must-account	and names nothing when the two readers agree	never	-
 harness_selftest	390-a-registered-suite-must-account	and prose containing the word does not count as the line	never	-
 harness_selftest	390-a-registered-suite-must-account	and so does a failing one, which is the point	never	-
+harness_selftest	390-a-registered-suite-must-account	and sorts its inputs, because the runner appends them in SUITES order	never	-
 harness_selftest	390-a-registered-suite-must-account	and the excused one is not named as a failure	never	-
+harness_selftest	390-a-registered-suite-must-account	and the population reconciliation counts that same file	never	-
 harness_selftest	390-a-registered-suite-must-account	and the reader answers no on it, which is the wrong answer the arm catches	never	-
 harness_selftest	390-a-registered-suite-must-account	and the real function reconciles the same input, so the arm is not noise	never	-
 harness_selftest	390-a-registered-suite-must-account	and the reconciliation is given that record	never	-
@@ -491,10 +494,17 @@ harness_selftest	390-a-registered-suite-must-account	equal sets reconcile	never	
 harness_selftest	390-a-registered-suite-must-account	every registered suite has a file	never	-
 harness_selftest	390-a-registered-suite-must-account	nor no for every one of them	never	-
 harness_selftest	390-a-registered-suite-must-account	opposite errors do not cancel: both directions are reported	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: a lib.sh accounting line is seen by the narrow reader	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: a private tally is NOT seen by the narrow reader	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: and a log with neither is seen by neither	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: and produced exactly one accounting line to be read	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: and so is the wide reader it is paired with	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: and that count excludes the definition line, which mentions it	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: and the accounted reader that feeds it	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: and the narrow count is still printed, as the lib.sh half	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: and the real function still does	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: but IS seen by the wide one, which is where the 2 came from	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: it is callable	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: pipefail is on, which is the condition the bug needs	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the declaration reader evalled out of the runner is callable	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the drift changed the line the reader looks for	never	-
@@ -509,13 +519,16 @@ harness_selftest	390-a-registered-suite-must-account	premise: the reconciliation
 harness_selftest	390-a-registered-suite-must-account	premise: the registered list is not empty, so the partition means something	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the runner defines the declaration reader this part evals	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the runner defines the observation reader this part evals	never	-
+harness_selftest	390-a-registered-suite-must-account	premise: the runner defines the own-mechanism difference this part evals	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the runner defines the population reconciliation	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the runner defines the reconciliation this part evals	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the twin script was written and is runnable	never	-
 harness_selftest	390-a-registered-suite-must-account	premise: the unsorted twin is callable	never	-
+harness_selftest	390-a-registered-suite-must-account	the breakdown headline counts the wide set, not the narrow one	never	-
 harness_selftest	390-a-registered-suite-must-account	the debt file is in the tree	never	-
 harness_selftest	390-a-registered-suite-must-account	the grep -q shape is the one that gets this wrong under pipefail	never	-
 harness_selftest	390-a-registered-suite-must-account	the identity catches comm reading unsorted input	never	-
+harness_selftest	390-a-registered-suite-must-account	the own-mechanism difference names the suite the readers disagree about	never	-
 harness_selftest	390-a-registered-suite-must-account	the partition over the real suite list adds up	never	-
 harness_selftest	390-a-registered-suite-must-account	the population partitions, and prints inputs == sum(buckets)	never	-
 harness_selftest	390-a-registered-suite-must-account	the reader accepts the line the producer actually emits	never	-
