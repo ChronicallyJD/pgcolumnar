@@ -235,33 +235,74 @@ def test_every_refusal_precedes_its_record(expect):
     """The static half of the arm above, so the invariant cannot drift silently.
 
     If somebody adds a `VacuityError` after the record is taken, the refusal lands
-    inside the wrapped region and starts being recorded as a failed assertion.
-    Nothing else in the corpus would notice.
+    inside the wrapped region and starts being recorded as a FAILED ASSERTION.
+    Nothing else in the corpus would notice, and the stream would lie in the most
+    misleading direction available -- a refusal reported as a real failure.
+
+    THIS SCAN FOLLOWS CALLS, and the first version did not. It looked for a
+    literal `raise VacuityError(...)` inside each method body, which would have
+    missed a refusal raised through a helper -- and `_refuse_failed_query` is
+    exactly such a helper, called by most of these methods. Measured while
+    attacking this arm: 17 methods raise it directly, 18 can raise it once calls
+    are followed, so the lexical scan was one method short of the real population.
+
+    It happens that no method calls a refusing helper after its own record, so
+    both scans agree today. The arm is the transitive one anyway, because the
+    reason to write a guard is the case that does not exist yet.
     """
     import ast
     import inspect
 
     tree = ast.parse(inspect.getsource(pgc_vacuity))
+    methods = {}
+    for cls in ast.walk(tree):
+        if isinstance(cls, ast.ClassDef) and cls.name == "Expect":
+            for fn in cls.body:
+                if isinstance(fn, ast.FunctionDef):
+                    methods[fn.name] = fn
+
+    def _raises_here(fn):
+        return any(isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call)
+                   and isinstance(n.exc.func, ast.Name)
+                   and n.exc.func.id == "VacuityError"
+                   for n in ast.walk(fn))
+
+    def _self_calls(fn):
+        return [(n.func.attr, n.lineno) for n in ast.walk(fn)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name) and n.func.value.id == "self"]
+
+    # Close over calls, so a method that refuses only through a helper is in the
+    # population too.
+    refusing = {nm for nm, fn in methods.items() if _raises_here(fn)}
+    growing = True
+    while growing:
+        growing = False
+        for nm, fn in methods.items():
+            if nm in refusing:
+                continue
+            if any(attr in refusing for attr, _ in _self_calls(fn)):
+                refusing.add(nm)
+                growing = True
+
     scanned = []
     offenders = []
-    for cls in ast.walk(tree):
-        if not (isinstance(cls, ast.ClassDef) and cls.name == "Expect"):
+    for nm, fn in methods.items():
+        recs = [n.lineno for n in ast.walk(fn)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "_record"]
+        if not recs:
             continue
-        for fn in cls.body:
-            if not isinstance(fn, ast.FunctionDef):
-                continue
-            recs = [n.lineno for n in ast.walk(fn)
-                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                    and n.func.attr == "_record"]
-            if not recs:
-                continue
-            scanned.append(fn.name)
-            for n in ast.walk(fn):
-                if (isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call)
-                        and isinstance(n.exc.func, ast.Name)
-                        and n.exc.func.id == "VacuityError"
-                        and n.lineno > min(recs)):
-                    offenders.append(f"{fn.name}:{n.lineno}")
+        scanned.append(nm)
+        first = min(recs)
+        for n in ast.walk(fn):
+            if (isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call)
+                    and isinstance(n.exc.func, ast.Name)
+                    and n.exc.func.id == "VacuityError" and n.lineno > first):
+                offenders.append(f"{nm}:{n.lineno} raises it directly after the record")
+        for attr, lineno in _self_calls(fn):
+            if attr in refusing and lineno > first:
+                offenders.append(f"{nm}:{lineno} calls self.{attr}() after the record")
     # THE PREMISE IS THE POPULATION, and it is the difference between "no method
     # offends" and "the scan matched no methods". An empty offender list is the
     # answer to both, and only one of them is good news.
