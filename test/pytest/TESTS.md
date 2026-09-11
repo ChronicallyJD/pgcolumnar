@@ -2432,5 +2432,41 @@ these records into a line, the shell's tab-and-newline defect returns — measur
 there as a record of four fields for a tabbed name and two lines for a newline —
 and without this arm nothing would say so.
 
-Still to come in #937: the verdict resolved from the outcome, and a session
-reconciliation that can fail.
+### Phase 2: the verdict is resolved where the outcome is known
+
+| test | what it pins |
+|---|---|
+| `test_a_failed_assertion_records_fail_even_when_the_test_catches_it` | the refutation's arm |
+| `test_the_failure_reason_is_the_assertions_own_message` | one message per failure, not two that can drift |
+| `test_the_assertions_before_a_failure_keep_their_verdicts` | verdicts are per assertion, not per test |
+| `test_a_delegated_assertion_records_fail_too` | a failure raised by pytest's own `assert_outcomes` |
+| `test_a_refusal_still_leaves_no_record` | the boundary a refusal must stay outside of |
+| `test_every_refusal_precedes_its_record` | the static half, so that boundary cannot drift |
+| `test_every_recording_method_resolves_its_verdict` | all 15, derived from the module rather than listed |
+| `test_a_recording_method_takes_exactly_one_record_per_call` | the invariant the resolution rests on, pinned after a mutation showed it was assumed |
+
+**The first design was wrong and the corpus is what refuted it.** Resolving each
+verdict from the exception in `pytest_runtest_call` assumed a raise ends the test.
+Proving a guard refuses means *catching* the `AssertionError`, which five tests
+here do. Measured before the fix:
+
+```
+count before/mid/after: 0 / 1 / 2
+  record 0  'this comparison must fail'   verdict PASS   <- this one RAISED
+  record 1  'and the test continues'      verdict PASS
+1 passed
+```
+
+A genuinely failed assertion stayed `PASS`, in a passing test, with nothing
+reaching the hook to correct it. The resolution now happens **inside** the
+assertion call, before any `except` in the test body can see the error.
+
+**It is a wrapper rather than a verdict passed at the call site** because
+`outcomes` and `refusal` delegate to pytest's `assert_outcomes`, which raises a
+message this layer never composes — there is no verdict for the call site to pass.
+
+**A refusal marks nothing, with no special case** for `VacuityError` being an
+`AssertionError` subclass: every `VacuityError` is raised *before* its record is
+taken, so no record exists to mark. That is scanned rather than trusted.
+
+Still to come in #937: a session reconciliation that can fail.
