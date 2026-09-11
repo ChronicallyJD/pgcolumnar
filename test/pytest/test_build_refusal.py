@@ -147,12 +147,26 @@ def test_a_missing_lib_sh_is_a_refusal_not_a_pass(tmp_path, expect):
                     "an unsourceable lib.sh refuses")
 
 
+def _answerable(tmp_path, name="cfg"):
+    """A pg_config that ANSWERS, plus the libdir it names.
+
+    Three arms below used to pass `/bin/pg_config`, whose answer depends on the
+    machine: it resolves here and may not on a CI runner. Once `build_once` observes
+    the prefix, "does the skip happen" would depend on that, and a guard must not.
+    The fixture supplies the answer so the arms mean the same thing everywhere.
+    """
+    libdir = tmp_path / (name + "_lib")
+    libdir.mkdir(exist_ok=True)
+    return _pg_config_answering(tmp_path, libdir), libdir
+
+
 def test_build_once_builds_once_and_then_skips(tmp_path, expect):
     """The xdist workers share one prefix, so the install is serialised rather
     than skipped."""
     # A fingerprintable tree: the marker is keyed on source content, so a tree
     # with nothing to compile deliberately never certifies and always rebuilds.
     tree = _tree_with_source(tmp_path, "ok2", "int a = 1;\n")
+    pgc, libdir = _answerable(tmp_path)
     lock = str(tmp_path / "lock")
     calls = []
 
@@ -160,8 +174,8 @@ def test_build_once_builds_once_and_then_skips(tmp_path, expect):
         calls.append(argv)
         return _Proc(0)
 
-    first = build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
-    second = build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    first = build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
+    second = build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
     expect.text(first, "built", "the first caller builds")
     expect.text(second, "already-built", "the second finds the marker")
     expect.num(len(calls), 1, "and the build ran exactly once")
@@ -200,6 +214,7 @@ def test_editing_the_source_rebuilds(tmp_path, expect):
     optimisation meant to make the guard cheap.
     """
     tree = _tree_with_source(tmp_path, "edited", "int a = 1;\n")
+    pgc, libdir = _answerable(tmp_path)
     lock = str(tmp_path / "lock3")
     calls = []
 
@@ -207,13 +222,120 @@ def test_editing_the_source_rebuilds(tmp_path, expect):
         calls.append(argv)
         return _Proc(0)
 
-    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
-    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
     expect.num(len(calls), 1, "unchanged source builds once")
 
     (tree / "src" / "columnar.c").write_text("int a = 2;\n")
-    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
     expect.num(len(calls), 2, "an edited source builds again")
+
+
+def _pg_config_answering(tmp_path, libdir):
+    """A real executable that answers --pkglibdir, so the test drives the
+    production path rather than a seam added for the test."""
+    pgc = tmp_path / "pg_config"
+    pgc.write_text("#!/bin/sh\n"
+                   "case \"$1\" in\n"
+                   "  --pkglibdir) echo %s ;;\n"
+                   "  *) echo unsupported >&2; exit 1 ;;\n"
+                   "esac\n" % libdir)
+    pgc.chmod(0o755)
+    return pgc
+
+
+def test_build_once_rebuilds_when_another_process_replaced_the_library(tmp_path, expect):
+    """#956. The marker answers "did this layer build this source", and it is read
+    as "does the prefix hold that build". Those are different claims.
+
+    Measured twice in one day: a perf run installed a pre-#945 library into the
+    shared prefix, and the corpus then reported ten failures here and nineteen on
+    @jdatcmd's box, with the code entirely innocent. The source never changed, so
+    the source fingerprint matched and the build was skipped.
+    """
+    tree = _tree_with_source(tmp_path, "replaced", "int a = 1;\n")
+    libdir = tmp_path / "libdir"
+    libdir.mkdir()
+    so = libdir / "pgcolumnar.so"
+    pgc = _pg_config_answering(tmp_path, libdir)
+    lock = str(tmp_path / "lock956")
+
+    calls = []
+
+    def installing(argv):
+        # An install WRITES the library, which is what makes this fixture faithful:
+        # the thing the marker should be describing is a file on disk.
+        calls.append(argv)
+        so.write_bytes(b"build-%d" % len(calls))
+        return _Proc(0)
+
+    # PREMISE: the fake pg_config really answers, or the arm below is vacuous.
+    probe = subprocess.run([str(pgc), "--pkglibdir"], capture_output=True, text=True)
+    expect.num(probe.returncode, 0, "premise: the fake pg_config answers --pkglibdir")
+    expect.text(probe.stdout.strip(), str(libdir), "and it names the library directory")
+
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "built", "the first caller builds")
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "already-built", "an untouched prefix still skips, as before")
+    expect.num(len(calls), 1, "so the build ran once")
+
+    # A THIRD PARTY overwrites the installed library. Source unchanged, prefix
+    # unchanged, major unchanged -- only the artifact differs.
+    so.write_bytes(b"someone-elses-build")
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "built", "a replaced library rebuilds rather than certifying")
+    expect.num(len(calls), 2, "and the build actually ran, rather than the verdict alone changing")
+
+
+def test_build_once_rebuilds_when_the_library_was_deleted(tmp_path, expect):
+    """Absent is not fresh. A prefix someone cleaned must not read as built."""
+    tree = _tree_with_source(tmp_path, "deleted", "int a = 1;\n")
+    libdir = tmp_path / "libdir2"
+    libdir.mkdir()
+    so = libdir / "pgcolumnar.so"
+    pgc = _pg_config_answering(tmp_path, libdir)
+    lock = str(tmp_path / "lock956b")
+    calls = []
+
+    def installing(argv):
+        calls.append(argv)
+        so.write_bytes(b"build")
+        return _Proc(0)
+
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=installing)
+    expect.num(len(calls), 1, "the first caller builds")
+    so.unlink()
+    expect.text(build_once(tree, str(pgc), "18", lock_path=lock, runner=installing),
+                "built", "a deleted library rebuilds")
+    expect.num(len(calls), 2, "and the build ran")
+
+
+def test_a_prefix_that_cannot_be_observed_never_certifies(tmp_path, expect):
+    """The degraded path FAILS CLOSED (#956 review, @jdatcmd).
+
+    Writing `unobserved` into the marker made two consecutive unobservable calls
+    match and skip -- a fail-open inside a change about a fail-open. @jdatcmd
+    constructed it rather than arguing it. Writing no marker at all costs one
+    condition and removes the need to reason about reachability.
+    """
+    tree = _tree_with_source(tmp_path, "unobservable", "int a = 1;\n")
+    lock = str(tmp_path / "lock956c")
+    calls = []
+
+    def counting(argv):
+        calls.append(argv)
+        return _Proc(0)
+
+    expect.text(build_once(tree, "/nonexistent/pg_config", "18",
+                           lock_path=lock, runner=counting),
+                "built", "an unobservable prefix builds")
+    expect.text(build_once(tree, "/nonexistent/pg_config", "18",
+                           lock_path=lock, runner=counting),
+                "built", "and builds AGAIN rather than certifying a prefix it cannot see")
+    expect.num(len(calls), 2, "so the build really ran both times")
+    expect.num(1 if pathlib.Path(lock + ".done").exists() else 0, 0,
+               "and no marker was written, so there is nothing to match against")
 
 
 def test_the_fingerprint_reads_content_not_mtime(tmp_path, expect):
@@ -348,6 +470,7 @@ def test_the_fingerprint_covers_a_separately_built_module(tmp_path, expect):
 def test_an_objstore_edit_forces_a_second_build(tmp_path, expect):
     """The consequence, end to end, which is what the finding was about."""
     tree = _tree_with_objstore(tmp_path, "fp2")
+    pgc, _libdir = _answerable(tmp_path, "objstore")
     lock = str(tmp_path / "lock_obj")
     calls = []
 
@@ -355,12 +478,12 @@ def test_an_objstore_edit_forces_a_second_build(tmp_path, expect):
         calls.append(argv)
         return _Proc(0)
 
-    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
-    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
     expect.num(len(calls), 1, "premise: an unchanged tree builds once")
 
     (tree / "objstore" / "module.c").write_text("int b = 2;\n")
-    build_once(tree, "/bin/pg_config", "18", lock_path=lock, runner=counting)
+    build_once(tree, str(pgc), "18", lock_path=lock, runner=counting)
     expect.num(len(calls), 2, "an edited objstore module builds again")
 
 
