@@ -851,7 +851,9 @@ harness_selftest	460-the-controller-must-record-the-binary	control: without that
 harness_selftest	460-the-controller-must-record-the-binary	every caller records the installed library's digest (#961)	never	-
 harness_selftest	460-the-controller-must-record-the-binary	premise: all three stamp call sites were found with their arguments joined	never	-
 harness_selftest	460-the-controller-must-record-the-binary	premise: and it holds exactly one stamp write	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: nothing opens a deeper subshell inside the extracted block	never	-
 harness_selftest	460-the-controller-must-record-the-binary	premise: the controller's stamp block was extracted exactly once	never	-
+harness_selftest	460-the-controller-must-record-the-binary	premise: the extraction produced a block at all	never	-
 harness_selftest	460-the-controller-must-record-the-binary	premise: the matrix controller is present and parses	never	-
 harness_selftest	460-the-controller-must-record-the-binary	premise: the mutation removed the installed-digest argument	never	-
 harness_selftest	460-the-controller-must-record-the-binary	premise: this part was given an executable pg_config to read the prefix from	never	-
