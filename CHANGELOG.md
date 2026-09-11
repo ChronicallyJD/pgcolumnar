@@ -18,6 +18,24 @@ true until the next version shipped.
 
 ### Added
 
+- A serial inner Hash Join can push the build-side keys into a direct
+  columnar scan (#752).
+
+  The coordinator wraps core Hash Join. It does not keep a HashPath from
+  `joinrel->pathlist`. It builds a private path, drains the build side into a
+  tuplestore, then lets Hash replay that spool. The scan skips chunk groups
+  outside the conservative key interval when types and collations match. It
+  also rejects non-matching rows with a Bloom filter of those keys, using the
+  same saturation cap as on-disk bloom filters.
+
+  The path is serial and INNER only. LEFT, SEMI, ANTI, CROSS, parallel, and
+  projection-backed outers are refused. `pgcolumnar.enable_join_runtime_filter`
+  is on by default.
+
+  `EXPLAIN (ANALYZE)` reports `Runtime Filter Groups Removed` and
+  `Runtime Filter Rows Rejected`. Those counters are dedicated. They are not
+  `InstrCountFiltered1`.
+
 - Every check result is machine-readable, and counting a check is the same
   operation as recording it (#917).
 

@@ -70,6 +70,11 @@ settings see the [configuration reference](configuration.md); for constraints se
 - A fetch by row number decodes only the columns that the executor asks for. It
   keeps the decoded row group for the rest of the statement. An index-driven read
   of a wide table therefore does not decode the columns that it will not return.
+- Serial join runtime filter for a star-schema Hash Join.
+  A serial inner Hash Join can skip fact-table groups using the build-side key range.
+  It can also reject non-matching rows with a Bloom filter of those keys.
+  The GUC `pgcolumnar.enable_join_runtime_filter` is on by default.
+  It does not wrap LEFT, SEMI, ANTI, CROSS, parallel, or projection scans.
 - Parallel scan across a table's row groups.
 - Read stream prefetch of block reads on PostgreSQL 17 and later
   (`pgcolumnar.enable_read_stream`).

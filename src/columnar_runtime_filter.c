@@ -44,6 +44,16 @@ typedef struct PgColumnarRuntimeFilterState
     PlanState *joinState;
     CustomScanState *tapState;
     AttrNumber factAttno;
+    Oid factHashOid;
+    Oid hashCollation;
+    FmgrInfo factHashFn;
+    MemoryContext filterContext;
+    char *bloom;
+    uint32 bloomLength;
+    bool hashAvailable;
+    bool bloomEnabled;
+    bool hasValues;
+    bool buildEmpty;
     bool rangeAttached;
     bool prepared;
 } PgColumnarRuntimeFilterState;
@@ -58,12 +68,17 @@ typedef struct PgColumnarRuntimeTapState
     Oid keyType;
     Oid keyCollation;
     FmgrInfo compareFn;
+    FmgrInfo buildHashFn;
     MemoryContext valueContext;
+    uint32 *hashes;
+    uint32 hashCount;
+    uint32 hashCapacity;
     Datum minimum;
     Datum maximum;
     int16 typeLength;
     bool typeByValue;
     bool intervalAvailable;
+    bool hashAvailable;
     bool hasValues;
     uint64 buildRows;
     bool replay;
@@ -164,7 +179,10 @@ static bool
 PgColumnarRuntimeFilterVars(PlannerInfo *root,
                             HashPath *hashPath,
                             Var **factVarOut,
-                            Var **buildVarOut)
+                            Var **buildVarOut,
+                            bool *factIsLeftOut,
+                            Oid *hashCollationOut,
+                            bool *intervalAllowedOut)
 {
     RestrictInfo *restrictInfo;
     OpExpr *operatorExpr;
@@ -175,6 +193,9 @@ PgColumnarRuntimeFilterVars(PlannerInfo *root,
     Relids factRelids;
     Relids buildRelids;
     RangeTblEntry *rte;
+    Relation relation;
+    Oid factCollation;
+    bool factIsLeft;
 
     if (list_length(hashPath->path_hashclauses) != 1)
         return false;
@@ -199,12 +220,14 @@ PgColumnarRuntimeFilterVars(PlannerInfo *root,
     {
         factVar = (Var *) left;
         buildVar = (Var *) right;
+        factIsLeft = true;
     }
     else if (bms_is_member(((Var *) right)->varno, factRelids) &&
              bms_is_member(((Var *) left)->varno, buildRelids))
     {
         factVar = (Var *) right;
         buildVar = (Var *) left;
+        factIsLeft = false;
     }
     else
         return false;
@@ -218,8 +241,17 @@ PgColumnarRuntimeFilterVars(PlannerInfo *root,
         !PgColumnarIsColumnarRelation(rte->relid))
         return false;
 
+    relation = table_open(rte->relid, NoLock);
+    factCollation =
+        TupleDescAttr(RelationGetDescr(relation), factVar->varattno - 1)->attcollation;
+    table_close(relation, NoLock);
     *factVarOut = factVar;
     *buildVarOut = buildVar;
+    *factIsLeftOut = factIsLeft;
+    *hashCollationOut = operatorExpr->inputcollid;
+    *intervalAllowedOut =
+        (operatorExpr->inputcollid == factCollation &&
+         factVar->vartype == buildVar->vartype);
     return true;
 }
 
@@ -276,6 +308,13 @@ PgColumnarSetJoinPathlist(PlannerInfo *root,
     CustomPath *customPath;
     Var *factVar = NULL;
     Var *buildVar = NULL;
+    bool factIsLeft = false;
+    bool intervalAllowed = false;
+    Oid hashCollation = InvalidOid;
+    Oid leftHashOid = InvalidOid;
+    Oid rightHashOid = InvalidOid;
+    Oid factHashOid;
+    Oid buildHashOid;
     ListCell *cell;
     Cost availableOuterWork;
     Cost cappedSaving;
@@ -308,7 +347,17 @@ PgColumnarSetJoinPathlist(PlannerInfo *root,
             !PgColumnarRuntimeFilterVars(root,
                                          hashPath,
                                          &factVar,
-                                         &buildVar))
+                                         &buildVar,
+                                         &factIsLeft,
+                                         &hashCollation,
+                                         &intervalAllowed))
+            continue;
+
+        if (!get_op_hash_functions(
+                ((OpExpr *) linitial_node(RestrictInfo,
+                    hashPath->path_hashclauses)->clause)->opno,
+                &leftHashOid,
+                &rightHashOid))
             continue;
 
         candidate = hashPath;
@@ -334,8 +383,10 @@ PgColumnarSetJoinPathlist(PlannerInfo *root,
     customPath->path.parallel_safe = false;
     customPath->path.parallel_workers = 0;
     customPath->path.rows = privateHashPath->jpath.path.rows;
+#if PG_VERSION_NUM >= 180000
     customPath->path.disabled_nodes =
         privateHashPath->jpath.path.disabled_nodes;
+#endif
     customPath->path.startup_cost =
         privateHashPath->jpath.path.startup_cost;
 
@@ -358,12 +409,18 @@ PgColumnarSetJoinPathlist(PlannerInfo *root,
     customPath->path.pathkeys = NIL;
     customPath->flags = 0;
     customPath->custom_paths = list_make1(privateHashPath);
+    factHashOid = factIsLeft ? leftHashOid : rightHashOid;
+    buildHashOid = factIsLeft ? rightHashOid : leftHashOid;
     customPath->custom_private =
-        list_make4(makeInteger(factVar->varattno),
+        list_make5(makeInteger(factVar->varattno),
                    makeInteger(buildVar->varno),
                    makeInteger(buildVar->varattno),
-                   makeInteger(((OpExpr *) linitial_node(RestrictInfo,
-                       candidate->path_hashclauses)->clause)->opno));
+                   makeInteger(factHashOid),
+                   makeInteger(buildHashOid));
+    customPath->custom_private =
+        lappend(customPath->custom_private, makeInteger(hashCollation));
+    customPath->custom_private =
+        lappend(customPath->custom_private, makeInteger(intervalAllowed ? 1 : 0));
 #if PG_VERSION_NUM >= 170000
     customPath->custom_restrictinfo = extra->restrictlist;
 #endif
@@ -430,7 +487,11 @@ PgColumnarPlanRuntimeFilterPath(PlannerInfo *root,
     tapScan->scan.scanrelid = 0;
     tapScan->flags = 0;
     tapScan->custom_plans = list_make1(sourcePlan);
-    tapScan->custom_private = list_make1(makeInteger(keyResno));
+    tapScan->custom_private =
+        list_make4(makeInteger(keyResno),
+                   copyObject(list_nth(bestPath->custom_private, 4)),
+                   copyObject(list_nth(bestPath->custom_private, 5)),
+                   copyObject(list_nth(bestPath->custom_private, 6)));
     tapScan->custom_scan_tlist = copyObject(sourcePlan->targetlist);
     tapScan->methods = &PgColumnarRuntimeTapScanMethods;
     outerPlan(hashPlan) = &tapScan->scan.plan;
@@ -486,8 +547,7 @@ PgColumnarBeginRuntimeTap(CustomScanState *node,
     state->keyResno = intVal(linitial(customScan->custom_private));
     state->keyType = TupleDescAttr(ExecGetResultType(state->sourceState),
                                    state->keyResno - 1)->atttypid;
-    state->keyCollation = TupleDescAttr(ExecGetResultType(state->sourceState),
-                                        state->keyResno - 1)->attcollation;
+    state->keyCollation = intVal(list_nth(customScan->custom_private, 2));
     get_typlenbyval(state->keyType,
                     &state->typeLength,
                     &state->typeByValue);
@@ -495,12 +555,24 @@ PgColumnarBeginRuntimeTap(CustomScanState *node,
         TypeCacheEntry *typeCache =
             lookup_type_cache(state->keyType, TYPECACHE_CMP_PROC_FINFO);
 
-        if (OidIsValid(typeCache->cmp_proc_finfo.fn_oid))
+        if (intVal(list_nth(customScan->custom_private, 3)) != 0 &&
+            OidIsValid(typeCache->cmp_proc_finfo.fn_oid))
         {
             fmgr_info_copy(&state->compareFn,
                            &typeCache->cmp_proc_finfo,
                            estate->es_query_cxt);
             state->intervalAvailable = true;
+        }
+    }
+    {
+        Oid buildHashOid = intVal(list_nth(customScan->custom_private, 1));
+
+        if (OidIsValid(buildHashOid))
+        {
+            fmgr_info_cxt(buildHashOid,
+                          &state->buildHashFn,
+                          estate->es_query_cxt);
+            state->hashAvailable = true;
         }
     }
     state->valueContext =
@@ -511,6 +583,36 @@ PgColumnarBeginRuntimeTap(CustomScanState *node,
     state->replaySlot = ExecInitExtraTupleSlot(estate,
                                                ExecGetResultType(state->sourceState),
                                                &TTSOpsMinimalTuple);
+}
+
+static void
+PgColumnarRuntimeTapAddHash(PgColumnarRuntimeTapState *state, Datum value)
+{
+    uint32 hash;
+    MemoryContext oldContext;
+
+    if (!state->hashAvailable)
+        return;
+
+    if (state->hashCount == state->hashCapacity)
+    {
+        uint32 newCapacity = state->hashCapacity == 0
+            ? 256 : state->hashCapacity * 2;
+
+        oldContext = MemoryContextSwitchTo(state->valueContext);
+        if (state->hashes == NULL)
+            state->hashes = palloc(sizeof(uint32) * newCapacity);
+        else
+            state->hashes = repalloc(state->hashes,
+                                     sizeof(uint32) * newCapacity);
+        MemoryContextSwitchTo(oldContext);
+        state->hashCapacity = newCapacity;
+    }
+
+    hash = DatumGetUInt32(FunctionCall1Coll(&state->buildHashFn,
+                                            state->keyCollation,
+                                            value));
+    state->hashes[state->hashCount++] = hash;
 }
 
 static void
@@ -580,35 +682,52 @@ static TupleTableSlot *
 PgColumnarExecRuntimeTap(CustomScanState *node)
 {
     PgColumnarRuntimeTapState *state = (PgColumnarRuntimeTapState *) node;
+
+    if (!state->replay)
+        elog(ERROR, "pgcolumnar runtime filter tap read before drain");
+
+    ExecClearTuple(state->replaySlot);
+    if (!tuplestore_gettupleslot(state->store,
+                                 true,
+                                 false,
+                                 state->replaySlot))
+        return NULL;
+    return PgColumnarRuntimeTapOutput(node, state->replaySlot);
+}
+
+static void
+PgColumnarDrainRuntimeTap(PgColumnarRuntimeTapState *state)
+{
     TupleTableSlot *slot;
 
-    if (state->replay)
+    /*
+     * Consume the build child into the spool without producing CustomScan
+     * output slots.  ExecProcNode(tap) would copy each heap tuple into the
+     * tap's virtual slot and hand that pointer to a caller that discards it;
+     * Hash later replays the tuplestore.  The two consumers must not share
+     * that discarded-slot path.
+     */
+    for (;;)
     {
-        ExecClearTuple(state->replaySlot);
-        if (!tuplestore_gettupleslot(state->store,
-                                     true,
-                                     false,
-                                     state->replaySlot))
-            return NULL;
-        return PgColumnarRuntimeTapOutput(node, state->replaySlot);
-    }
-
-    slot = ExecProcNode(state->sourceState);
-    if (TupIsNull(slot))
-        return NULL;
-
-    tuplestore_puttupleslot(state->store, slot);
-    {
-        bool isNull;
-        Datum value = slot_getattr(slot, state->keyResno, &isNull);
-
-        if (!isNull)
+        slot = ExecProcNode(state->sourceState);
+        if (TupIsNull(slot))
+            break;
+        tuplestore_puttupleslot(state->store, slot);
         {
-            state->buildRows++;
-            PgColumnarRuntimeTapAddValue(state, value);
+            bool isNull;
+            Datum value = slot_getattr(slot, state->keyResno, &isNull);
+
+            if (!isNull)
+            {
+                state->buildRows++;
+                PgColumnarRuntimeTapAddValue(state, value);
+                PgColumnarRuntimeTapAddHash(state, value);
+            }
         }
+        CHECK_FOR_INTERRUPTS();
     }
-    return PgColumnarRuntimeTapOutput(node, slot);
+    state->replay = true;
+    tuplestore_rescan(state->store);
 }
 
 static void
@@ -616,6 +735,9 @@ PgColumnarResetRuntimeTap(PgColumnarRuntimeTapState *state)
 {
     tuplestore_clear(state->store);
     MemoryContextReset(state->valueContext);
+    state->hashes = NULL;
+    state->hashCount = 0;
+    state->hashCapacity = 0;
     state->hasValues = false;
     state->buildRows = 0;
     state->replay = false;
@@ -683,6 +805,19 @@ PgColumnarBeginRuntimeFilter(CustomScanState *node,
 
     state->tapState = (CustomScanState *) outerPlanState(hashState);
     state->factAttno = intVal(linitial(customScan->custom_private));
+    state->factHashOid = intVal(list_nth(customScan->custom_private, 3));
+    state->hashCollation = intVal(list_nth(customScan->custom_private, 5));
+    if (OidIsValid(state->factHashOid))
+    {
+        fmgr_info_cxt(state->factHashOid,
+                      &state->factHashFn,
+                      estate->es_query_cxt);
+        state->hashAvailable = true;
+    }
+    state->filterContext =
+        AllocSetContextCreate(estate->es_query_cxt,
+                              "pgcolumnar runtime filter",
+                              ALLOCSET_SMALL_SIZES);
     node->custom_ps = list_make1(state->joinState);
 }
 
@@ -692,8 +827,29 @@ PgColumnarPrepareRuntimeFilter(PgColumnarRuntimeFilterState *state)
     PgColumnarRuntimeTapState *tapState =
         (PgColumnarRuntimeTapState *) state->tapState;
 
-    while (!TupIsNull(ExecProcNode((PlanState *) state->tapState)))
-        CHECK_FOR_INTERRUPTS();
+    PgColumnarDrainRuntimeTap(tapState);
+
+    state->hasValues = tapState->hasValues;
+    state->buildEmpty = (tapState->buildRows == 0);
+    if (state->hashAvailable && tapState->hashAvailable &&
+        tapState->hashCount > 0)
+    {
+        MemoryContext oldContext =
+            MemoryContextSwitchTo(state->filterContext);
+
+        state->bloomEnabled =
+            PgColumnarBloomBuild(tapState->hashes,
+                                 tapState->hashCount,
+                                 &state->bloom,
+                                 &state->bloomLength);
+        MemoryContextSwitchTo(oldContext);
+    }
+
+    /* Ready before attach so the first outer probe can hash-match. */
+    state->prepared = true;
+    PgColumnarAttachRuntimeBloom(outerPlanState(state->joinState),
+                                 state,
+                                 state->factAttno);
 
     if (tapState->hasValues && tapState->intervalAvailable)
         state->rangeAttached =
@@ -703,9 +859,6 @@ PgColumnarPrepareRuntimeFilter(PgColumnarRuntimeFilterState *state)
                                          tapState->minimum,
                                          tapState->maximum);
 
-    tapState->replay = true;
-    tuplestore_rescan(tapState->store);
-    state->prepared = true;
 }
 
 static TupleTableSlot *
@@ -727,6 +880,8 @@ PgColumnarEndRuntimeFilter(CustomScanState *node)
         (PgColumnarRuntimeFilterState *) node;
 
     ExecEndNode(state->joinState);
+    if (state->filterContext != NULL)
+        MemoryContextDelete(state->filterContext);
 }
 
 static void
@@ -735,8 +890,17 @@ PgColumnarReScanRuntimeFilter(CustomScanState *node)
     PgColumnarRuntimeFilterState *state =
         (PgColumnarRuntimeFilterState *) node;
 
+    PgColumnarAttachRuntimeBloom(outerPlanState(state->joinState),
+                                 NULL,
+                                 InvalidAttrNumber);
     ExecReScan(state->joinState);
     PgColumnarResetRuntimeTap((PgColumnarRuntimeTapState *) state->tapState);
+    MemoryContextReset(state->filterContext);
+    state->bloom = NULL;
+    state->bloomLength = 0;
+    state->bloomEnabled = false;
+    state->hasValues = false;
+    state->buildEmpty = false;
     state->rangeAttached = false;
     state->prepared = false;
 }
@@ -759,6 +923,27 @@ PgColumnarExplainRuntimeFilter(CustomScanState *node,
         (PgColumnarRuntimeFilterState *) node;
 
     ExplainPropertyBool("Runtime Filter Ready", state->prepared, es);
+    ExplainPropertyBool("Runtime Filter Bloom", state->bloomEnabled, es);
+}
+
+bool
+PgColumnarRuntimeBloomMatch(void *opaque, Datum value, bool isNull)
+{
+    PgColumnarRuntimeFilterState *state =
+        (PgColumnarRuntimeFilterState *) opaque;
+    uint32 hash;
+
+    if (state == NULL || !state->prepared)
+        return true;
+    if (isNull || state->buildEmpty)
+        return false;
+    if (!state->bloomEnabled)
+        return true;
+
+    hash = DatumGetUInt32(FunctionCall1Coll(&state->factHashFn,
+                                            state->hashCollation,
+                                            value));
+    return PgColumnarBloomProbe(state->bloom, state->bloomLength, hash);
 }
 
 void

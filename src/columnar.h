@@ -924,6 +924,9 @@ extern void PgColumnarSerializeFlushRows(uint64 storageId, const uint64 *rows,
 extern const CustomScanMethods pgcolumnar_scan_methods;
 extern bool pgcolumnar_enable_join_runtime_filter;
 extern void PgColumnarRuntimeFilterInit(void);
+extern void PgColumnarAttachRuntimeBloom(PlanState *scanState,
+										 void *filter, AttrNumber attno);
+extern bool PgColumnarRuntimeBloomMatch(void *filter, Datum value, bool isNull);
 extern bool PgColumnarAttachRuntimeRange(PlanState *scanState,
 										 AttrNumber attno, Oid subtype,
 										 Datum minimum, Datum maximum);

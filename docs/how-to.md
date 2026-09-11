@@ -132,6 +132,23 @@ then sit in few chunk groups. Read `Columnar Chunk Groups Removed by Filter` to
 confirm the skip. A scattered high-cardinality column gains little. Turn the
 feature off with `SET pgcolumnar.enable_bloom_filter = off` to compare.
 
+
+## Skip fact-table work under a star-schema join
+
+A serial inner Hash Join can push the dimension keys into the fact-table scan.
+The scan drops chunk groups outside the build-side key range.
+It also rejects rows whose keys are absent from a Bloom filter of those keys.
+
+```sql
+EXPLAIN (ANALYZE) SELECT sum(amount) FROM fact JOIN dim ON fact.k = dim.k;
+```
+
+**Tuning.** It is on by default (`pgcolumnar.enable_join_runtime_filter`).
+It applies only to a serial inner Hash Join whose outer path is a direct columnar scan.
+A LEFT, SEMI, ANTI, or CROSS join is unchanged.
+A covering projection is also unchanged.
+Read `Runtime Filter Groups Removed` and `Runtime Filter Rows Rejected` to confirm the skip.
+
 ## Add a projection for a second sort order
 
 A table has one physical sort order. A projection stores a column subset a second

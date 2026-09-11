@@ -124,6 +124,9 @@ typedef struct PgColumnarCustomScanState
 	bool	   *projNulls;
 	PgColumnarLivenessCache *livenessCache;	/* cached base liveness for the scan */
 	bool		runtimeRangeAttached;
+	void	   *runtimeBloom;
+	AttrNumber	runtimeBloomAttno;
+	uint64		runtimeRowsRejected;
 } PgColumnarCustomScanState;
 
 /* path -> plan */
@@ -3205,11 +3208,21 @@ static bool
 pgcolumnar_scan_row_filter(void *arg)
 {
 	ScanState  *ss = (ScanState *) arg;
+	PgColumnarCustomScanState *cstate = (PgColumnarCustomScanState *) ss;
 	ExprContext *econtext = ss->ps.ps_ExprContext;
 	TupleTableSlot *slot = ss->ss_ScanTupleSlot;
 
 	ExecClearTuple(slot);
 	ExecStoreVirtualTuple(slot);
+
+	if (cstate->runtimeBloom != NULL &&
+		!PgColumnarRuntimeBloomMatch(cstate->runtimeBloom,
+								 slot->tts_values[cstate->runtimeBloomAttno - 1],
+								 slot->tts_isnull[cstate->runtimeBloomAttno - 1]))
+	{
+		cstate->runtimeRowsRejected++;
+		return false;
+	}
 
 	ResetExprContext(econtext);
 	econtext->ecxt_scantuple = slot;
@@ -3246,11 +3259,18 @@ static bool
 pgcolumnar_scan_row_filter_nocount(void *arg)
 {
 	ScanState  *ss = (ScanState *) arg;
+	PgColumnarCustomScanState *cstate = (PgColumnarCustomScanState *) ss;
 	ExprContext *econtext = ss->ps.ps_ExprContext;
 	TupleTableSlot *slot = ss->ss_ScanTupleSlot;
 
 	ExecClearTuple(slot);
 	ExecStoreVirtualTuple(slot);
+
+	if (cstate->runtimeBloom != NULL &&
+		!PgColumnarRuntimeBloomMatch(cstate->runtimeBloom,
+								 slot->tts_values[cstate->runtimeBloomAttno - 1],
+								 slot->tts_isnull[cstate->runtimeBloomAttno - 1]))
+		return false;
 
 	ResetExprContext(econtext);
 	econtext->ecxt_scantuple = slot;
@@ -3435,6 +3455,7 @@ PgColumnarReScanCustomScan(CustomScanState *node)
 {
 	PgColumnarCustomScanState *cstate = (PgColumnarCustomScanState *) node;
 
+	cstate->runtimeRowsRejected = 0;
 	if (cstate->readState != NULL)
 	{
 		PgColumnarRescanRead(cstate->readState);
@@ -3714,6 +3735,10 @@ PgColumnarExplainCustomScan(CustomScanState *node, List *ancestors,
 			ExplainPropertyInteger("Runtime Filter Groups Removed", NULL,
 								   (int64) PgColumnarRuntimeGroupsRemoved(cstate->readState),
 								   es);
+		if (cstate->runtimeBloom != NULL)
+			ExplainPropertyInteger("Runtime Filter Rows Rejected", NULL,
+								   (int64) cstate->runtimeRowsRejected,
+								   es);
 	}
 }
 
@@ -3724,6 +3749,39 @@ PgColumnarExplainCustomScan(CustomScanState *node, List *ancestors,
  *		checking again here turns a planner mistake into an error, not a wrong
  *		answer.
  */
+void
+PgColumnarAttachRuntimeBloom(PlanState *scanState, void *filter, AttrNumber attno)
+{
+	PgColumnarCustomScanState *state;
+
+	if (scanState == NULL)
+		return;
+	if (!IsA(scanState, CustomScanState))
+		elog(ERROR, "pgcolumnar runtime bloom expected a custom scan");
+	state = (PgColumnarCustomScanState *) scanState;
+	if (state->css.methods != &pgcolumnar_exec_methods)
+		elog(ERROR, "pgcolumnar runtime bloom expected a columnar scan");
+
+	if (filter == NULL)
+	{
+		state->runtimeBloom = NULL;
+		state->runtimeBloomAttno = InvalidAttrNumber;
+		return;
+	}
+	if (state->projScan || state->readState == NULL)
+		elog(ERROR, "pgcolumnar runtime bloom expected a direct base scan");
+	if (attno <= 0 || attno > state->nTotalColumns)
+		elog(ERROR, "pgcolumnar runtime bloom key is out of range");
+
+	state->runtimeBloom = filter;
+	state->runtimeBloomAttno = attno;
+	state->runtimeRowsRejected = 0;
+	if (state->qualCols == NULL)
+		state->qualCols = palloc0(sizeof(bool) * state->nTotalColumns);
+	state->qualCols[attno - 1] = true;
+	state->lateMat = true;
+}
+
 bool
 PgColumnarAttachRuntimeRange(PlanState *scanState, AttrNumber attno, Oid subtype,
 							 Datum minimum, Datum maximum)

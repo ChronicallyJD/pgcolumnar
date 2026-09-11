@@ -137,6 +137,7 @@ controlled by a setting in the [Configuration reference](configuration.md):
 - Vectorized aggregate. The zone-map metadata answers an ungrouped count, sum,
   avg, min, or max on a supported type.
 - `count(*)` answered from catalog metadata when there is no filter.
+- Join runtime filter: a serial inner Hash Join can skip fact-table groups and reject non-matching rows using the build-side keys.
 
 #### Reading the filter counters
 
