@@ -262,8 +262,25 @@ Python that reaches into shell:
   real `lib.sh` from a suite it writes, and executes the real runner.
 - `pgc_cluster.py` -- sources the real `test/lib.sh`.
 
-Shell whose subject is python: `lib.sh`, and `selftest/030`, `040`, `350`, `360`,
-`370`, `380`.
+Shell whose subject is python: `selftest/350`, `360` and `380`. **Three, not the
+seven this line first named, and the three it dropped were rule 3 all along.**
+`lib.sh`, `selftest/030` and `selftest/040` reference NO path under `test/pytest`:
+their only matches were the shell functions `pgc_cluster_datadir` and
+`pgc_cluster_is_ours`, both defined in `lib.sh` itself -- "a word that merely looks
+like a filename", caught for the second time in the entry that states the rule.
+`selftest/370` was the fourth and is **deleted**: every property it pinned was a text
+pin on `pgc_vacuity.py`, and #927 is the precedent -- a shell arm asserting a text pin
+cannot prove a python arm is caught. Its one property that the pytest corpus did not
+already assert behaviourally moved to `test_guards_pinned.py`, where python reads its
+own module rather than the other harness's.
+
+**And that property is not behaviourally observable today, which is why it moved as a
+SOURCE check and says so.** Measured: with `plan_marker`'s empty-plan refusal moved to
+the very end of the function, `plan_marker([], absent=True)` still refuses --
+`plan_marker` has no early return, so the refusal fires wherever it sits. 370's stated
+reason, that "the absent arm returns a pass first", describes a shape the function does
+not have. The arm is prospective insurance against a refactor that adds an early return,
+and it is labelled as that rather than as a live guard.
 
 **`test_build_refusal.py` is the example worth studying, because it does both.**
 It writes a fake `test/lib.sh` into a `tmp_path` and drives that -- rule 2, not a

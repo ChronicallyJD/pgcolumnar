@@ -324,6 +324,7 @@ as the failure.
 | `test_plan_marker_absent_arm_passes_on_a_plan_that_lacks_the_key` | **control** |
 | `test_plan_marker_refuses_an_absence_claim_over_an_empty_plan` | the hole under both arms |
 | `test_refusal_itself_refuses_an_empty_pattern_list` | the new helper must not become the defect it removes |
+| `test_the_empty_plan_refusal_precedes_the_arms_it_protects` | the refusal's **position**: no arm may answer ahead of it |
 
 ### plan_marker, and the three ways it could not fail
 
@@ -343,6 +344,23 @@ exit 0, because a plan that never arrived looks exactly like a plan that
 legitimately lacks the node. That is now a `VacuityError`, and it is refused for
 the present arm too — an empty plan means the `EXPLAIN` did not arrive, so
 neither question can be answered.
+
+**The empty-plan refusal is pinned by position, not only by behaviour.** A guard
+that sits after the code it protects is a guard that never runs. So one arm reads
+`plan_marker`'s own source and asserts the empty-plan refusal comes before both
+arms. Two measurements say what that arm is worth today:
+
+- Move the refusal to the end of the function and the arm fails; leave it where it
+  is and it passes. It discriminates.
+- With the refusal moved to the end, `plan_marker([], absent=True)` **still
+  refuses**, because `plan_marker` has no early return for the absent arm. So the
+  order is not load-bearing right now.
+
+It is therefore prospective insurance: the day someone adds an early return, the
+refusal stops being reachable and this arm is the only thing that says so. The
+check was a shell part (`test/selftest/370`) until the two harnesses were
+separated; a shell part can pin the text of a Python function but cannot run it,
+so the arm moved here and 370 was deleted.
 
 The four arm tests are behavioural rather than refusals, because `plan_marker`'s
 two arms raise `AssertionError`: `expect.refusal` does not apply and
