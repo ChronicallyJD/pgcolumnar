@@ -122,7 +122,7 @@ fail=0
 # looking for the ACCOUNTING line -- `run_all_versions.sh` calls
 # `pgc_log_shows_accounting`, which greps for
 # `accounting: N passed + N failed + N unrunnable + N skipped = N` -- and this
-# suite emits none, because it does not call `pgc_summary`. Measured: 0 accounting
+# suite emits none, because it emits no accounting line. Measured: 0 accounting
 # lines here against 1 in any suite that does.
 #
 # The line is still correct and still wanted: it is the total the records

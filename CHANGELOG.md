@@ -1445,7 +1445,7 @@ true until the next version shipped.
   The refusal on a changed source had never been exercised by anyone before this
   change, only read. It is now driven end to end, along with the three other states.
 
-- `smoke.sh` records its checks, so the ledger can see them (#965).
+- The ten suites that recorded nothing now record their checks (#965).
 
   Ten registered suites print their own `PASS <name>: <value>` lines and their own
   verdict and emit no machine-readable records at all. Counted across the ten, 293
@@ -1468,6 +1468,23 @@ true until the next version shipped.
   `set -euo pipefail`, so a failing command aborts it, and the verdict is what
   distinguishes a suite that finished from one that stopped. Removing it in the same
   change would make the suite report less than it did before.
+
+  This converts nine more of the ten, the same way, after the shape was reviewed on
+  the first. Measured on PG18: 227 records where there were none, and every suite's
+  human output byte-for-byte unchanged.
+
+  It also fixes a call that was failing silently. `unique_conc.sh` calls `check_skip`
+  for the case where the citext extension is absent, and that function lives in
+  `lib.sh`, which the suite did not source -- so the baseline log carries
+  `line 392: check_skip: command not found`, the suite continued under
+  `set -uo pipefail`, and the case was reported nowhere at all. It now emits a SKIP
+  record with its reason.
+
+  Fifty-seven checks across four of the suites are still not recorded, because those
+  suites have further check-like helpers of their own -- `eq_on_off` in `phase6`
+  alone accounts for thirty-nine -- each printing its own display. Those need a
+  second pass rather than the same substitution, and the count in #965 should be read
+  as the number of checks rather than the number of helpers.
 
   It does not add the suite to the ledger. Making a suite coverable and covering it
   are separate decisions, and the second one is blocked on a measurement: check NAMES

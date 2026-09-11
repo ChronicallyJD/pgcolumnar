@@ -27,7 +27,10 @@
 
 set -euo pipefail
 
-. "$(dirname "${BASH_SOURCE[0]}")/portlib.sh"
+# lib.sh for the check vocabulary (#965). It sources portlib.sh itself
+# (lib.sh:110), so this is a superset of what was here, and its top level is
+# assignments and function definitions only, so sourcing it starts nothing.
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PG_CONFIG="${1:-/usr/local/pg17/bin/pg_config}"
 BINDIR="$("$PG_CONFIG" --bindir)"
@@ -80,12 +83,32 @@ PSQL="psql -p $PORT -d p6 -qAtX -v ON_ERROR_STOP=1"
 q() { run_pg "$PSQL -c \"$1\""; }
 
 fail=0
+# RECORDS RATHER THAN ONLY PRINTING (#965). This suite emitted human PASS lines
+# and no RESULT records, so every mechanism built on the record vocabulary -- the
+# ledger, the census, checks_never_observed_red, the red-observation record,
+# duplicate-name detection -- was blind to all of them. The ledger did not merely
+# return nothing on this log, it REFUSED it: "no RESULT records, so there is
+# nothing to reconcile".
+#
+# `pgc_record` takes the DISPLAY whole, so the human output below is byte-for-byte
+# what it was. NOT lib.sh's own `check`: that composes its own display and would
+# drop the `: $got` suffix, which is the measured value rather than a label.
+#
+# `fail` is still set, so this suite's exit logic is untouched. Its verdict line
+# stays for the same reason: under `set -euo pipefail` a failing command aborts the
+# suite, and the verdict is what distinguishes finished from stopped.
+#
+# The `checks run:` line is READ BY NOTHING YET. The matrix gates reconciliation on
+# the ACCOUNTING line via `pgc_log_shows_accounting`, and this suite emits none
+# because it emits no accounting line. The line is still correct and wanted --
+# it is the total the records reconcile against -- so the remaining step is a gate
+# flip rather than new work (@jdatcmd, #969 review).
 check() {
 	local name="$1" got="$2" want="$3"
 	if [ "$got" = "$want" ]; then
-		echo "PASS  $name: $got"
+		pgc_record PASS "$name" "PASS  $name: $got"
 	else
-		echo "FAIL  $name: got [$got] want [$want]"
+		pgc_record FAIL "$name" "FAIL  $name: got [$got] want [$want]"
 		fail=1
 	fi
 }
@@ -252,8 +275,10 @@ fi
 
 echo
 if [ "$fail" = "0" ]; then
+	echo "checks run: $PGC_CHECKS"
 	echo "PHASE 6 TEST PASSED"
 else
+	echo "checks run: $PGC_CHECKS"
 	echo "PHASE 6 TEST FAILED"
 	echo "---- server log tail ----"
 	run_pg "tail -60 '$LOGFILE'" || true
