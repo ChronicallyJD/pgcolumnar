@@ -1941,6 +1941,21 @@ that the mutation kills that check. A run with more than one failing check is
 refused with the count, and a single failure still carries the mutation on the
 check that reddened.
 
+### `test_a_reconciling_log_with_a_red_is_not_evidence_on_its_own`
+
+`merge` already refuses a log that does not **reconcile**, and reconciliation is not
+the property that matters: both logs that poisoned this ledger on the day it landed
+reconciled. One was 827 records against `checks run: 827`, with fifteen checks red
+because the tree had been copied without `.git`; the other was a single `FAIL` from
+an unfinished change.
+
+An environment red and a real regression are identical in the log, so the tool cannot
+tell them apart and makes the caller say which it is: `--mutation NAME` for a
+deliberate break, `--reds-are-real` for a genuine observation. Refusing reds outright
+was rejected — a real CI red is the most valuable row the ledger holds and has no
+mutation to name. An all-`PASS` log still merges with no flag, which is the control.
+See #946.
+
 ### `test_two_runs_of_a_check_are_not_a_duplicate_of_it`
 
 Merging logs first cannot tell *the same check in two runs* from *the same name twice in

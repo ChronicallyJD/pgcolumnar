@@ -136,7 +136,7 @@ def test_two_runs_of_a_check_are_not_a_duplicate_of_it(tmp_path, expect):
     twice = _w(tmp_path, "twice.log",
                "RESULT\tdemo\tpart1\tsame\tPASS\t\n"
                "RESULT\tdemo\tpart1\tsame\tFAIL\t\nchecks run: 2\n")
-    out, _ = _run("merge", "--ledger", _w(tmp_path, "l2.tsv", ""), "--date", "2026-09-10", twice)
+    out, _ = _run("merge", "--reds-are-real", "--ledger", _w(tmp_path, "l2.tsv", ""), "--date", "2026-09-10", twice)
     expect.num(out.count("duplicate check name in one run, so one ledger row covers 2: "
                          "demo\tpart1\tsame"), 1,
                "the same name twice in ONE log is a duplicate, and is named")
@@ -158,7 +158,7 @@ def test_renames_are_grouped_by_part_and_scanned_against_one_run(tmp_path, expec
                "RESULT\tdemo\tpartA\tnew A\tPASS\t\n"
                "RESULT\tdemo\tpartB\tstable B\tPASS\t\n"
                "RESULT\tdemo\tpartB\tadded B\tPASS\t\nchecks run: 3\n")
-    _run("merge", "--ledger", ledger, "--date", "2026-09-01", before)
+    _run("merge", "--reds-are-real", "--ledger", ledger, "--date", "2026-09-01", before)
 
     out, rc = _run("rename-scan", "--ledger", ledger, after)
     expect.num(out.count("possible rename: old A -> new A"), 1,
@@ -354,14 +354,14 @@ def test_last_red_may_only_move_forward(tmp_path, expect):
                 return f[3]
         return None
 
-    _run("merge", "--ledger", led, "--date", "2026-09-10", red)
-    _run("merge", "--ledger", led, "--date", "2026-09-01", red)
+    _run("merge", "--reds-are-real", "--ledger", led, "--date", "2026-09-10", red)
+    _run("merge", "--reds-are-real", "--ledger", led, "--date", "2026-09-01", red)
     expect.text(stored(), "2026-09-10", "an older observation does not overwrite a newer one")
-    _run("merge", "--ledger", led, "--date", "2026-09-20", red)
+    _run("merge", "--reds-are-real", "--ledger", led, "--date", "2026-09-20", red)
     expect.text(stored(), "2026-09-20", "and a newer one does")
-    _run("merge", "--ledger", led, red)
+    _run("merge", "--reds-are-real", "--ledger", led, red)
     expect.text(stored(), "2026-09-20", "and an undated merge does not erase a known date")
-    expect.num(_run("merge", "--ledger", led, "--date", "not-a-date", red)[1], 2,
+    expect.num(_run("merge", "--reds-are-real", "--ledger", led, "--date", "not-a-date", red)[1], 2,
                "a date that is not a date is refused rather than stored")
 
 
@@ -380,8 +380,8 @@ def test_a_mutation_names_one_check_not_every_casualty(tmp_path, expect):
     expect.num(rc, 2, "--mutation across two failing checks in one run is refused")
     expect.num(out.count("2 checks failed"), 1,
                "and the refusal counts them, so the author can narrow the run")
-    expect.num(_run("merge", "--ledger", led, "--date", "2026-09-10", two)[1], 0,
-               "control: the same log merges without --mutation")
+    expect.num(_run("merge", "--reds-are-real", "--ledger", led, "--date", "2026-09-10", two)[1], 0,
+               "control: the same log merges with a different reason, so the\n                  refusal above is --mutation-across-two-checks and not the log")
 
     one = _w(tmp_path, "one.log", RED)
     _run("merge", "--ledger", led, "--date", "2026-09-10", "--mutation", "M", one)
@@ -389,3 +389,46 @@ def test_a_mutation_names_one_check_not_every_casualty(tmp_path, expect):
     tagged = [r[2] for r in rows if len(r) > 4 and "M" in r[4].split(";")]
     expect.rows([[n] for n in sorted(tagged)], [["first check"]],
                 "and a single failure still carries it, on the check that reddened")
+
+
+def test_a_reconciling_log_with_a_red_is_not_evidence_on_its_own(tmp_path, expect):
+    """#946: self-consistency is not the property that matters.
+
+    `merge` already refuses a log that does not reconcile. Both of the logs that
+    poisoned this ledger on the day it landed RECONCILED: @jdatcmd's was 827 records
+    against `checks run: 827` with fifteen checks red because the tree was copied
+    without `.git`, and @OffgridwithJD's was one FAIL from an unfinished change. A
+    rule about reconciliation would have caught neither.
+
+    An environment red and a real regression are IDENTICAL in the log, so the tool
+    cannot tell them apart and must make the caller say which it is -- the same move
+    `check_ledger_budget.txt` makes when it names a census apart from a ceiling.
+    """
+    led = _w(tmp_path, "l.tsv", "")
+    red = _w(tmp_path, "red.log", RED)
+
+    out, rc = _run("merge", "--ledger", led, "--date", "2026-09-10", red)
+    expect.num(rc, 2, "a log carrying a FAIL is refused when no reason is given")
+    expect.at_least(out.count("first check"), 1,
+                    "and the refusal names the check that reddened")
+    expect.text("absent" if not pathlib.Path(led).read_text().strip() else "written",
+                "absent", "and nothing is written, so a refused merge is not half-applied")
+
+    # THE TWO WAYS TO SAY WHY, both of which must still work. Refusing reds outright
+    # would refuse the most valuable row the ledger can hold -- a genuine CI red, which
+    # has no mutation to name -- and that is the deadlock the budget file already
+    # argues against for checks_never_observed_red.
+    led2 = _w(tmp_path, "l2.tsv", "")
+    expect.num(_run("merge", "--ledger", led2, "--date", "2026-09-10",
+                    "--mutation", "M", red)[1], 0,
+               "a deliberate break says so with --mutation")
+    led3 = _w(tmp_path, "l3.tsv", "")
+    expect.num(_run("merge", "--ledger", led3, "--date", "2026-09-10",
+                    "--reds-are-real", red)[1], 0,
+               "and a genuine observation says so with --reds-are-real")
+
+    # THE CONTROL, without which this arm passes on a tool that refuses everything.
+    led4 = _w(tmp_path, "l4.tsv", "")
+    green = _w(tmp_path, "green.log", GREEN)
+    expect.num(_run("merge", "--ledger", led4, "--date", "2026-09-10", green)[1], 0,
+               "control: an all-PASS log still merges with no flag at all")

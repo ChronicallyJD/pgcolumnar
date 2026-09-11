@@ -258,6 +258,38 @@ def cmd_merge(args):
                 f"collateral damage as evidence. Merge without --mutation, or narrow the "
                 f"run to the check the mutation targets.")
 
+    # A RED NEEDS A REASON (#946). `merge` already refuses a log that does not
+    # RECONCILE, and reconciliation is not the property that matters: both logs that
+    # poisoned this ledger on the day it landed reconciled. One was 827 records
+    # against `checks run: 827` with fifteen checks red because the tree was copied
+    # without `.git`; the other was one FAIL from an unfinished change. Two
+    # independent routes on day one, from the two people who knew the tool best, and
+    # a third -- a run against a stale .so -- costs no imagination at all.
+    #
+    # An environment red and a real regression are IDENTICAL in the log. Nothing in a
+    # RESULT record says which, so the tool makes the caller assert it rather than
+    # guess, the same way check_ledger_budget.txt names a census apart from a ceiling.
+    #
+    # NOT "refuse FAILs unless --mutation". A genuine CI red is the most valuable row
+    # this ledger can hold and it has no mutation to name, so that rule would refuse
+    # precisely the entry the ledger exists for -- the deadlock the budget file
+    # already argues against for checks_never_observed_red.
+    #
+    # Refused BEFORE any row is built, so a declined merge is never half-applied.
+    if not args.mutation and not args.reds_are_real:
+        reddened = sorted({key for _p, seen in runs
+                           for key, vs in seen.items() if "FAIL" in vs})
+        if reddened:
+            listed = "\n".join(f"      {s}\t{p}\t{n}" for s, p, n in reddened[:6])
+            more = "" if len(reddened) <= 6 else f"\n      ... and {len(reddened) - 6} more"
+            raise LedgerError(
+                f"{len(reddened)} check(s) are red in these logs and nothing says "
+                f"why:\n{listed}{more}\n    A log can reconcile perfectly and still "
+                f"be evidence about your environment rather than about the code -- a "
+                f"tree without .git, an unfinished change, a stale .so. Pass "
+                f"--mutation NAME if you broke it deliberately, or --reds-are-real if "
+                f"this is a genuine observation of the code under test.")
+
     for path, seen in runs:
         for key, verdicts in sorted(seen.items()):
             if key not in rows:
@@ -591,6 +623,9 @@ def main(argv=None):
     m.add_argument("--ledger", required=True)
     m.add_argument("--date", default="unknown")
     m.add_argument("--mutation", default="")
+    m.add_argument("--reds-are-real", action="store_true",
+                   help="the FAIL records in these logs are a genuine observation "
+                        "of the code under test, not an artifact of the environment")
     m.add_argument("logs", nargs="+")
     m.set_defaults(fn=cmd_merge)
 
