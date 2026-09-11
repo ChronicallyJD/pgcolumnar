@@ -1175,20 +1175,29 @@ class _RecordCollector:
     WHAT IT DOES NOT, and the first version of this comment claimed the first of
     these, wrongly:
 
-    * A RECORD CREATED AFTER THE REPORT WAS BUILT. Both values are taken from one
-      read of the recorder at one instant, so a later append is invisible to both
-      and the run passes. Measured, by appending from a hook outside this layer's:
+    * ANYTHING THAT CHANGES THE RECORDER OUTSIDE THE SINGLE INSTANT IT IS READ,
+      in EITHER direction. Both values come from one read, so:
 
-          recorder now holds 4; report carries 3
-          checks run: 3
-          accounting: 3 pass + 0 fail + 0 unrun = 3
-          1 passed, rc=0
+          a record appended AFTER the read    invisible, run passes
+          a record removed BEFORE the read    invisible, run passes
 
-      It is not straightforwardly fixable either, and that is the honest reason it
-      is a limit rather than a TODO: the totals are BUILT from what arrived, and
-      under -n the controller has no recorder to consult -- the worker's is in
-      another process. An arm in test_check_records.py pins this so it cannot be
-      re-claimed.
+      Measured both ways. The first version of this comment named only the later
+      half, and @OffgridwithJD injected the earlier one -- which is the MORE
+      reachable of the two, because a late append needs someone outside the layer
+      while an early loss is what a bug inside the recorder would look like.
+
+      THE REASON IS NOT XDIST. An earlier version said the controller has no
+      recorder to consult under -n. The real reason needs no xdist: the `expect`
+      fixture's teardown pops the recorder, so nothing after makereport can read
+      it in a single process either.
+
+      AND IT IS NOT UNFIXABLE, which that version also implied. @OffgridwithJD's
+      proposal: keep the final COUNT -- an int, not the records -- in a
+      session-level map that survives teardown, and reconcile the sum at
+      worker-side sessionfinish, where the worker has its own slice and needs
+      nothing from the controller. Unbuilt and unmeasured here, so it is named
+      rather than planned. An arm in test_check_records.py pins both halves of
+      the gap so neither can be claimed away.
 
     * A record that is present, transported and well-formed, and WRONG. That is
       phase 2's job.

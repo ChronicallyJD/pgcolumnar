@@ -2475,10 +2475,11 @@ taken, so no record exists to mark. That is scanned rather than trusted.
 | test | what it pins |
 |---|---|
 | `test_the_session_totals_are_reconciled` | the positive control: a clean run reports and does not refuse |
-| `test_the_total_is_printed_from_the_records_not_from_the_test_count` | 5 claims across 2 tests is 5, not 2 |
+| `test_the_total_separates_records_from_passes_and_from_tests` | records 5, passes 4, tests 2 — three distinct numbers |
+| `test_the_two_values_are_not_aliases_of_one_list` | the attack that fails: an **in-place** removal is refused too |
 | `test_a_record_lost_in_transport_is_refused` | **the arm this phase exists for** |
 | `test_a_verdict_outside_the_closed_set_is_refused` | the schema half |
-| `test_a_record_created_after_the_report_is_NOT_caught` | **the limit**, pinned because I claimed the opposite |
+| `test_the_recorder_is_only_observed_once_and_both_sides_of_that_are_blind` | **the limit**, pinned in both directions |
 
 **The obvious reconciliation here is vacuous by construction, and phase 1 made it
 so on purpose.** `count` *is* `len(self._records)`, so checking one against the
@@ -2503,16 +2504,29 @@ Measured on the pinned runner, `user_properties` survive that crossing intact.
 **What it catches:** a record dropped or mangled between the report being built and
 the report being read, and a verdict outside the closed set.
 
-**What it does not**, and the first version of this section claimed the first of
-these wrongly: a record created **after** the report was built, because both
-quantities come from one read of the recorder at one instant — measured, the
-recorder held 4, the report carried 3, and the run passed; and a record that is
-present, transported, well-formed and **wrong**, which is phase 2's job.
+**What it does not:** anything that changes the recorder outside the single
+instant it is read, in **either** direction — a record appended after, or removed
+before. Both are invisible and the run passes. It also does not catch a record
+that is present, transported, well-formed and **wrong**; that is phase 2's job.
 
-So it is a transport check rather than a completeness check. The limit is not
-straightforwardly fixable — the totals are built from what arrived, and under `-n`
-the controller has no recorder to consult — so it is pinned by an arm instead of
-described by a sentence.
+The earlier version of this section named only the later half. The **earlier** half
+is the more reachable one: a late append needs someone outside the layer, while an
+early loss is what a bug inside the recorder would look like.
+
+**The reason is not xdist**, which an earlier version also claimed. The `expect`
+fixture's teardown pops the recorder, so nothing after `makereport` can read it in
+a single process either. And it is not unfixable: keeping the final *count* in a
+session-level map past teardown and reconciling at worker-side `sessionfinish`
+would close it — unbuilt and unmeasured, so named rather than planned.
+
+So it is a transport check rather than a completeness check, and both halves of the
+gap are pinned by an arm instead of described by a sentence.
+
+**The two values are not aliases**, which is the objection worth recording because
+the attack on it fails: the transport arm drops a record with a slice, which copies,
+so an in-place `value.pop()` was injected instead — still refused. That shows
+separate storage **in a single process**, which the xdist run cannot, since
+serialisation copies everything by definition.
 
 **The arms inject the failure from a conftest**, because no in-tree code drops a
 record — an arm that waits for a real defect to appear is not evidence the check
