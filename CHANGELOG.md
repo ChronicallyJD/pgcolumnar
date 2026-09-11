@@ -1273,9 +1273,10 @@ true until the next version shipped.
 
   The installed library is now part of the marker, so a prefix someone else wrote is
   rebuilt rather than certified. A library that is absent counts as changed. Where
-  the prefix genuinely cannot be read the comparison is skipped, which is the only
-  option that leaves the existing arms meaning what they say, and the marker records
-  `unobserved` so the degraded decision is readable rather than inferred.
+  the prefix cannot be observed at all, no marker is written, so the next call builds
+  rather than matching another unobservable run. The arms that exercise the marker
+  supply a `pg_config` that answers, so whether the skip happens no longer depends on
+  whether the machine running the tests has one.
 
   The digest cannot be predicted from the source, because the build path is compiled
   in: one commit built in two directories produces two different libraries. So what

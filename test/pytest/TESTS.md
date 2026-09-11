@@ -833,7 +833,7 @@ fix; noticing is.
 | --- | --- |
 | `test_build_once_rebuilds_when_another_process_replaced_the_library` | a third party overwriting the library rebuilds instead of certifying, and the build actually runs |
 | `test_build_once_rebuilds_when_the_library_was_deleted` | absent is not fresh |
-| `test_a_prefix_that_cannot_be_observed_is_recorded_as_unobserved` | the degraded path is exercised, and says so in the marker |
+| `test_a_prefix_that_cannot_be_observed_never_certifies` | a prefix that cannot be seen is never certified: no marker, so the next call builds |
 
 **Why a per-source constant cannot work.** The library's digest is not a function of the
 source: the build path is compiled in. @jdatcmd measured `2c9559d087b0` and
@@ -842,11 +842,25 @@ source: the build path is compiled in. @jdatcmd measured `2c9559d087b0` and
 is every worktree and every `devloop` arm. What is recorded instead is **the digest that
 was installed when the marker was written** — a claim about this prefix over time.
 
-**The degraded path is tested rather than assumed.** `pg_config` may not be answerable;
-three tests in this file pass one that is not. Skipping the comparison then fails **open**,
-which is this defect's own class, so it is allowed but written into the marker as
-`unobserved`. A reader can see the decision was degraded instead of inferring it from an
-absence.
+**The degraded path fails CLOSED**, which it did not in the first version of this change.
+When the prefix cannot be observed, **no marker is written at all**, so the next call finds
+nothing to match and builds.
+
+The first version recorded `unobserved` in the marker instead, reasoning that a degraded
+decision should be readable. @jdatcmd constructed the hole rather than arguing about it:
+two consecutive unobservable calls match each other and skip, which is a fail-open inside
+a change about a fail-open. It was only reachable with an injected stub runner, because
+`build_and_install` shells `make PG_CONFIG=<that>` and raises when it fails — but that
+argument depends on `build_and_install` staying unable to succeed without a usable
+`pg_config`, and nothing enforces it. One condition removes the argument.
+
+**And the fixtures now answer, which is what makes the closure safe.** Three arms passed
+`/bin/pg_config`, whose answer depends on the machine: it resolves in this container and
+a CI runner may not have it. Once the prefix is observed, "does the skip happen" would
+depend on that, and a guard must not. `_answerable()` supplies a `pg_config` that really
+answers `--pkglibdir`, so those arms assert exactly what they asserted before, everywhere.
+Verified by running the module in a mount namespace with `/bin/pg_config` bound to
+`/dev/null`: premise asserted (`installed_library` returns `None` there), **39 passed**.
 
 **The digest is computed once.** `so_md5()` already fingerprinted the installed library
 with `md5sum`, so `installed_library()` shares that path rather than adding a second way

@@ -532,11 +532,22 @@ def build_once(srcdir, pg_config, major, lock_path=None, runner=None):
             except OSError:
                 pass
             build_and_install(srcdir, pg_config, major, runner=runner)
-            if fp:
-                # AFTER the install, because the install is what writes the library:
-                # a fingerprint taken before it would record the previous one and
-                # certify exactly the state this guard exists to refuse.
-                pathlib.Path(marker).write_text(key(installed_library(pg_config)))
+            lib = installed_library(pg_config)
+            # AFTER the install, because the install is what writes the library: a
+            # fingerprint taken before it would record the previous one and certify
+            # exactly the state this guard exists to refuse.
+            #
+            # AND NO MARKER AT ALL WHEN THE PREFIX COULD NOT BE OBSERVED (#956
+            # review, @jdatcmd). Writing `unobserved` made two consecutive
+            # unobservable calls match each other and skip -- a fail-open inside a
+            # change about a fail-open. It was only reachable with an injected stub
+            # runner, because `build_and_install` shells `make PG_CONFIG=<that>` and
+            # raises when it fails, but that argument depends on build_and_install
+            # staying unable to succeed without a usable pg_config and nothing
+            # enforces it. Writing nothing costs one condition and removes the
+            # argument: the next call finds no marker and builds.
+            if fp and lib is not None:
+                pathlib.Path(marker).write_text(key(lib))
             return "built"
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)
