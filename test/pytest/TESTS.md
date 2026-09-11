@@ -69,6 +69,7 @@ behaviour, the source of that number is named.
 - [21. test_failed_query_sentinel.py: a failed query is not a comparison](#21-test_failed_query_sentinelpy-a-failed-query-is-not-a-comparison)
 - [22. test_writes_wrote_rows.py: a write that wrote nothing](#22-test_writes_wrote_rowspy-a-write-that-wrote-nothing)
 - [23. test_mutation_ledger.py: which checks have ever been red](#23-test_mutation_ledgerpy-which-checks-have-ever-been-red)
+- [24. test_loop_coverage_premise.py: a loop that never ran asserted nothing](#24-test_loop_coverage_premisepy-a-loop-that-never-ran-asserted-nothing)
 
 ## 1. How to read a test in here
 
@@ -1402,6 +1403,7 @@ fixtures are read off `conftest.py` rather than named in the classifier.
 | `test_a_cluster_test_still_needs_the_driver` | **control**: deferring made the IMPORT lazy, not the database optional |
 | `test_conftest_imports_no_database_driver_at_module_scope` | the regression named in one line, for whoever edits conftest next |
 | `test_the_declaration_is_exactly_the_database_free_half` | `NO_CLUSTER` equals the property, both ways, so an undeclared database-free file is named |
+| `test_the_declaration_names_each_file_once` | the list's cardinality, which `membership_report`'s set comparison cannot see. Measured: pytest deduplicates the paths, so the cost is the job's own printed file count, not a double run |
 | `test_the_partition_accounts_for_every_file_in_the_corpus` | **premise**: every file lands in exactly one bucket, and neither bucket is the whole corpus |
 | `test_the_cluster_fixtures_are_read_off_conftest_rather_than_named_here` | the roots of the property are derived from `conftest.py`, not typed |
 | `test_the_classifier_tells_a_plain_file_from_one_that_requests_a_cluster` | the base case and its control, over a fixture corpus |
@@ -2148,3 +2150,55 @@ If they disagree, one was edited by hand. `suites_not_covered` is 250 of 251, so
 gate cannot refuse a new check in 250 suites — a real limit, counted rather than hidden,
 which falls as suites are seeded.
 
+
+## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
+
+**Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5
+is two shapes, and the layer already refused one of them without anyone recording that
+it did.
+
+**The half already refused.** When a loop's body holds the test's ONLY counted
+assertions, a zero-trip loop leaves the count at 0 and `pytest_runtest_call` raises
+`VacuityError`. Measured on a planted test rather than read off the hook:
+
+```
+only assertion inside a zero-trip loop   VacuityError: made no counted assertion
+the same loop with one row               1 passed
+```
+
+**The half that was open.** When the test *also* asserts outside the loop, the count is
+non-zero, the test passes, and the loop's assertions simply never ran. Nothing noticed.
+That is the shape a query returning no rows produces, and the shape a glob matching
+nothing produces.
+
+**The population, measured before the arm was written:**
+
+| shape | loops | state |
+| --- | ---: | --- |
+| non-empty by construction (literal, `range`, local literal) | 20 | cannot be zero-trip |
+| derived, loop holds the only assertions | 0 | already refused |
+| derived, **with** assertions outside the loop | 2 | at risk, now guarded |
+
+Both at-risk loops already carried a premise, so this arm is **green on arrival**. That
+is the point rather than a weakness: the property was true of the corpus and nothing was
+holding it there, so what this catches is the third one. It is not insurance against an
+imagined shape — it has a population of two and locks it in.
+
+| test | asserts |
+| --- | --- |
+| `test_every_at_risk_loop_carries_a_coverage_premise` | the corpus itself: every derived loop carrying an assertion has a cardinality premise |
+| `test_the_sweep_finds_the_loops_it_is_meant_to_police` | **premise**: the sweep classified loops, because one that parses nothing reports no offenders either |
+| `test_a_loop_with_no_premise_is_caught` | **removal proof**: the real shape with the premise removed, with the clean control beside it |
+| `test_a_bounded_loop_needs_no_premise` | a literal, a `range` and a local dict's `.items()` are all exempt, because demanding a premise there would be noise a reader edits away |
+| `test_the_layer_already_refuses_a_loop_holding_every_assertion` | the measured half, so this file does not claim the whole mode — and that the sweep deliberately skips that shape rather than double-reporting it |
+
+### Why the rule is looser than the property, and what is left
+
+The honest requirement is *a premise bounding the cardinality of **this** iterable*. What
+is enforced is *a counted assertion outside the loop that takes `len(...)` of something*.
+
+The two differ, and the reason is dataflow. `test_harness_deps.py`'s loop iterates
+`sorted(found)` while its premise bounds `len(files)` — `found` is built from `files` in
+a preceding loop. A rule that demanded the names match would reject correct code, which
+is how a guard gets switched off. **So the residual is a loop whose premise bounds the
+wrong collection**, which a reviewer catches and a sweep does not. 3.5 names it.

@@ -407,6 +407,38 @@ true until the next version shipped.
 
 ### Fixed
 
+- A loop that never ran asserted nothing, and half of that was already refused by a
+  mechanism nobody had recorded covered it (#432).
+
+  `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5 is two shapes.
+
+  **Already refused.** When a loop's body holds a test's ONLY counted assertions, a
+  zero-trip loop leaves the count at 0 and `pytest_runtest_call` raises `VacuityError`.
+  Measured on a planted test rather than read off the hook: the zero-trip case fails
+  with "made no counted assertion" and the same loop with one row passes.
+
+  **Was open.** When the test ALSO asserts outside the loop, the count is non-zero, the
+  test passes, and the loop's assertions simply never ran. That is the shape a query
+  returning no rows produces, and the shape a glob matching nothing produces.
+
+  `test_loop_coverage_premise.py` requires a cardinality premise for exactly that shape.
+  THE POPULATION, measured over the whole corpus before the arm was written: 20 loops
+  non-empty by construction and so unable to be zero-trip, 0 in the already-refused
+  shape, and **2 at risk** -- both of which already carried a premise. The arm is green
+  on arrival, which is the point rather than a weakness: the property was true and
+  nothing was holding it there, so what this catches is the third one.
+
+  **IT NARROWS RATHER THAN CLOSES, and 3.5 names the residual.** The honest requirement
+  is a premise bounding the cardinality of THIS iterable; what is enforced is a counted
+  assertion outside the loop taking `len(...)` of something. `test_harness_deps.py`'s
+  loop iterates `sorted(found)` while its premise bounds `len(files)`, because `found` is
+  built from `files` in a preceding loop -- so a rule demanding the names match would
+  reject correct code, which is how a guard gets switched off. The residual is a loop
+  whose premise bounds the wrong collection: a reviewer catches it, a sweep does not.
+
+  Section 5 gains entry 6, struck and anchored to its mode id, which is the first use of
+  the rule the previous commit added.
+
 - Section 5 of VACUITY_MODES.md, the "what to add next" list, is checked (#432).
 
   1a, 2 and 3 are all compared against the mode ids on disk. Section 5 was prose, and

@@ -288,6 +288,42 @@ binds the exception and the body pins its SQLSTATE. See section 2.
   `db-derived-empty-parametrize`, `null-filter-matches-nothing`,
   `loop-over-zero-rows`, `assert-inside-a-loop-over-zero-rows`
 
+  **`assert-inside-a-loop-over-zero-rows` is NARROWED, and half of it was already
+  closed by a mechanism nobody had noticed covered it (#432).** The mode is two shapes:
+
+  *Already refused.* When a loop's body holds the test's ONLY counted assertions, a
+  zero-trip loop leaves the count at 0 and `pytest_runtest_call` raises `VacuityError`.
+  Measured on a planted test rather than read off the hook --
+
+      only assertion inside a zero-trip loop   VacuityError: made no counted assertion
+      the same loop with one row               1 passed
+
+  *Was open.* When the test ALSO asserts outside the loop the count is non-zero, the
+  test passes, and the loop's assertions simply never ran. `test_loop_coverage_premise.py`
+  now requires a cardinality premise for exactly that shape.
+
+  THE POPULATION, measured over the whole corpus before the arm was written:
+
+  | shape | loops | state |
+  | --- | ---: | --- |
+  | non-empty by construction (literal, range, local literal) | 20 | cannot be zero-trip |
+  | derived, loop holds the only assertions | 0 | already refused |
+  | derived, WITH assertions outside the loop | 2 | **at risk**, now guarded |
+
+  Both at-risk loops already carried a premise, so the arm is green on arrival. That is
+  the point rather than a weakness: the property was true and nothing held it there.
+
+  **WHY IT NARROWS RATHER THAN CLOSES.** The honest requirement is "a premise bounding
+  the cardinality of THIS iterable". What is enforced is "a counted assertion outside
+  the loop that takes `len(...)` of something". `test_harness_deps.py`'s loop iterates
+  `sorted(found)` while its premise bounds `len(files)` -- `found` is built from `files`
+  in a preceding loop -- so a rule demanding the names match would reject correct code.
+  The residual is a loop whose premise bounds the wrong collection, which a reviewer
+  catches and a sweep does not.
+
+  `loop-over-zero-rows` is untouched: it is the sibling about a loop that produces no
+  assertion at all, which the whole-run guard covers only when the test has no others.
+
 ### 3.6 psycopg's typed results introduce their own
 
 - `sql-null-to-python-none`, `none-conflates-null-no-row-and-missing-column`
@@ -411,6 +447,14 @@ Each entry names the red test to write first.
    `raises-catches-setup`.~~ **Done, and it NARROWS rather than closes** — 3.4 lists what
    remains, measured: a comprehension or a tuple instead of a `for`, and a helper defined
    in another file. Both are ordinary Python. The refused count therefore did not move.
+
+6. ~~`test_every_at_risk_loop_carries_a_coverage_premise` — narrows
+   `assert-inside-a-loop-over-zero-rows`.~~ **Done, and it NARROWS rather than closes**
+   — 3.5 has the measurement and names the residual. Half the mode was already refused
+   by `pytest_runtest_call`, which fails a test that counted nothing; the half that was
+   open is a loop whose assertions sit alongside others outside it. Population measured
+   before building: 20 loops non-empty by construction, 0 in the already-refused shape,
+   **2 at risk** and both already compliant.
 
 **Every entry on this list is now struck, and the list is checked (#432).** Section 5
 was the one part of this document with no mechanism: 1a, 2 and 3 are all compared
