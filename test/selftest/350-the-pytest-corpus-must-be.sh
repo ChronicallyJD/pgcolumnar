@@ -209,7 +209,7 @@ _dcv_absent() {	# _dcv_absent DIR DOC -> "[]" or "[n: a b c]"
 		# piped and 0 on a here-string. An independent run of the same shape in
 		# isolation gave 10 in 40, so the rate is load- and size-dependent rather
 		# than fixed -- the two measurements bracket it.
-		[ "$(grep -cxF "$name" <<<"$ondisk" || true)" != 0 ] && continue
+		[ "$(grep -cxF "$name" <<<"$ondisk" || true)" -ne 0 ] && continue
 		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $name"
 	done < <(grep -oE '`test_[A-Za-z0-9_]*(\.py)?`' "$doc" 2>/dev/null \
 	         | tr -d '`' | sort -u)
@@ -319,7 +319,7 @@ _toc_unresolved() {	# _toc_unresolved DOC -> "[]" or "[n: a b c]"
 	while IFS= read -r anchor; do
 		[ -n "$anchor" ] || continue
 		# grep -cxF on a here-string, for the reason given in _dcv_absent above.
-		[ "$(grep -cxF "$anchor" <<<"$anchors" || true)" != 0 ] && continue
+		[ "$(grep -cxF "$anchor" <<<"$anchors" || true)" -ne 0 ] && continue
 		n=$((n + 1)); [ "$n" -le 6 ] && bad="$bad $anchor"
 	done < <(grep -oE '\]\(#[A-Za-z0-9_-]+\)' "$doc" 2>/dev/null \
 	         | sed -e 's/^](#//' -e 's/)$//' | sort -u)

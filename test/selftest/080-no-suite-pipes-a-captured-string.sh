@@ -279,7 +279,7 @@ _epipe_hits="$(
 if [ -n "$_epipe_hd" ] && [ -n "$_epipe_hits" ]; then
 	_epipe_hits="$(printf '%s\n' "$_epipe_hits" | while IFS= read -r _eh; do
 		_ehk="${_eh%%:*}:$(printf '%s' "$_eh" | cut -d: -f2):"
-		[ "$(grep -cxF "$_ehk" <<<"$_epipe_hd" || true)" != 0 ] || printf '%s\n' "$_eh"
+		[ "$(grep -cxF "$_ehk" <<<"$_epipe_hd" || true)" -ne 0 ] || printf '%s\n' "$_eh"
 	done)"
 fi
 _epipe_count="$(printf '%s' "$_epipe_hits" | grep -c . || true)"
