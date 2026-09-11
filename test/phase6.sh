@@ -120,17 +120,20 @@ eq_on_off() {
 	local on off
 	on="$(run_pg "$PSQL -c \"SET pgcolumnar.enable_vectorization=on;  $query\"")"
 	off="$(run_pg "$PSQL -c \"SET pgcolumnar.enable_vectorization=off; $query\"")"
+	# THREE OUTCOMES, ONE RECORD EACH, including both early returns. A `return`
+	# that skips the record would leave the check counted nowhere, which is the
+	# state this whole conversion exists to end.
 	if [ -z "$on" ] || [ "$on" != "$off" ]; then
-		echo "FAIL  $name: vectorized [$on] != scalar [$off]"
+		pgc_record FAIL "$name" "FAIL  $name: vectorized [$on] != scalar [$off]"
 		fail=1
 		return
 	fi
 	if [ -n "$expect" ] && [ "$on" != "$expect" ]; then
-		echo "FAIL  $name: got [$on] want [$expect]"
+		pgc_record FAIL "$name" "FAIL  $name: got [$on] want [$expect]"
 		fail=1
 		return
 	fi
-	echo "PASS  $name: $on"
+	pgc_record PASS "$name" "PASS  $name: $on"
 }
 
 q "CREATE EXTENSION pgcolumnar;" >/dev/null

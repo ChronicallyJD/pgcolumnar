@@ -156,10 +156,10 @@ check() {
 expect_error() {
 	local name="$1" sql="$2"
 	if run_pg "$PSQL -c \"$sql\"" >/dev/null 2>&1; then
-		echo "FAIL  $name: statement unexpectedly succeeded"
+		pgc_record FAIL "$name" "FAIL  $name: statement unexpectedly succeeded"
 		fail=1
 	else
-		echo "PASS  $name (rejected)"
+		pgc_record PASS "$name" "PASS  $name (rejected)"
 	fi
 }
 
@@ -310,7 +310,15 @@ if [ "$audit_srv" -ge 170000 ]; then
 		"$(q "SELECT count(*) FROM pgcolumnar.options WHERE regclass = 'opt_part_1'::regclass;")" "1"
 	q "DROP TABLE opt_part;" >/dev/null
 else
-	echo "-- PG$((audit_srv / 10000)) refuses PARTITION BY ... USING pgcolumnar; parent arm not applicable"
+	# ONE SKIP FOR THE BLOCK, not one per gated check, which is the shape
+	# unique_conc.sh:546 already uses for its own version gate. Naming each of the
+	# four checks here would make the count major-invariant and would also duplicate
+	# four check names in a branch that never runs them, so they would drift. The
+	# real fix for comparing counts across majors is a major dimension in the
+	# ledger, which is #432's problem and not this file's.
+	check_skip "the partitioned-parent arm" \
+		"SKIP  the partitioned-parent arm (PG$((audit_srv / 10000)) refuses PARTITION BY ... USING pgcolumnar)" \
+		"PG$((audit_srv / 10000)) refuses PARTITION BY ... USING pgcolumnar"
 fi
 
 # valid values are accepted, and delete/update work (no divide-by-zero)
