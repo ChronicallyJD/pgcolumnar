@@ -96,7 +96,8 @@ if (
 	. "$BUILD/test/lib.sh"
 	pgc_write_source_stamp \
 		"$(pgc_source_stamp_path "$BUILD" "$PGC")" \
-		"$(pgc_source_fingerprint "$BUILD")"
+		"$(pgc_source_fingerprint "$BUILD")" \
+		"$(pgc_installed_library_digest "$PGC")"
 ); then
 	:
 else

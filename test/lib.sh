@@ -209,9 +209,13 @@ pgc_build_and_install() {
 	# tautological -- every run recorded the source it was about to compare
 	# against, so a suite measuring an edited tree reported "matches the binary
 	# under test". A red arm caught it, which is the only reason this exists.
+	# The digest is read AFTER the install, because the install is what writes the
+	# library. Taken before, it would record the previous one and certify exactly
+	# the state this check exists to refuse.
 	pgc_write_source_stamp \
 		"$(pgc_source_stamp_path "$_pgc_bi_src" "$_pgc_bi_cfg")" \
-		"$(pgc_source_fingerprint "$_pgc_bi_src")"
+		"$(pgc_source_fingerprint "$_pgc_bi_src")" \
+		"$(pgc_installed_library_digest "$_pgc_bi_cfg")"
 	return 0
 }
 
@@ -293,14 +297,34 @@ pgc_setup() {
 
 	# And verify it, whether this run built or skipped. A skipped build is exactly
 	# when the binary can be older than the source.
-	_pgc_fresh_recorded="$(pgc_read_source_stamp \
-		"$(pgc_source_stamp_path "$PGC_SRCDIR" "$PGC_PG_CONFIG")")"
+	_pgc_stamp_file="$(pgc_source_stamp_path "$PGC_SRCDIR" "$PGC_PG_CONFIG")"
+	_pgc_fresh_recorded="$(pgc_read_source_stamp "$_pgc_stamp_file")"
 	_pgc_fresh_current="$(pgc_source_fingerprint "$PGC_SRCDIR")"
-	case "$(pgc_freshness_verdict "$_pgc_fresh_recorded" "$_pgc_fresh_current")" in
-		fresh)
+	# AND THE ARTIFACT, not only the source (#959). The sentence below is about the
+	# BINARY, so the binary has to be evidence in it.
+	_pgc_bin_recorded="$(pgc_read_installed_stamp "$_pgc_stamp_file")"
+	_pgc_bin_current="$(pgc_installed_library_digest "$PGC_PG_CONFIG")"
+	case "$(pgc_freshness_claim \
+			"$(pgc_freshness_verdict "$_pgc_fresh_recorded" "$_pgc_fresh_current")" \
+			"$(pgc_binary_identity_verdict "$_pgc_bin_recorded" "$_pgc_bin_current")")" in
+		verified)
 			echo "-- source: $_pgc_fresh_current matches the binary under test"
 			;;
-		stale)
+		source-only)
+			# The stamp predates #959, so it records the source and not the library.
+			# The source claim is still earned; the binary claim is not, and saying
+			# the first while implying the second is the defect this removes.
+			echo "-- source: $_pgc_fresh_current matches what this tree last built;"
+			echo "   the installed library was not recorded, so it is UNVERIFIED"
+			;;
+		refuse-binary)
+			echo "FATAL: the installed library is not the one this tree built" >&2
+			echo "       library now $_pgc_bin_current, this tree installed $_pgc_bin_recorded" >&2
+			echo "       (another build wrote $("$PGC_PG_CONFIG" --pkglibdir 2>/dev/null)," >&2
+			echo "        so these checks would measure somebody else's binary)" >&2
+			exit 1
+			;;
+		refuse-source)
 			echo "FATAL: the binary under test was not built from this source" >&2
 			echo "       source now $_pgc_fresh_current, binary built from $_pgc_fresh_recorded" >&2
 			echo "       (refusing to report checks about code that is not installed)" >&2
@@ -313,7 +337,7 @@ pgc_setup() {
 			pgc_freshness_report "$PGC_SRCDIR" >&2
 			exit 1
 			;;
-		unknown)
+		unverified)
 			# Not a failure: a person who ran make install by hand has no stamp, and
 			# refusing would break a documented workflow. Said plainly so the reader
 			# knows which question was not answered.
@@ -844,7 +868,55 @@ pgc_running_binary_verdict() {	# pgc_running_binary_verdict SO_EPOCH PM_EPOCH
 	[ "$pm" -ge "$so" ] && echo fresh || echo predates
 }
 
-pgc_write_source_stamp() {	# pgc_write_source_stamp FILE HASH
+# THE BINARY, NOT ONLY THE SOURCE (#959). `pgc_freshness_verdict` compares two
+# SOURCE fingerprints, and the caller printed "source X matches the binary under
+# test" -- a claim about the BINARY from evidence about the SOURCE. It is false
+# whenever another process has written the shared prefix, and it is false in the
+# POSITIVE branch, which is the only one that asserts anything.
+#
+# Measured: two trees whose src/ differs by five files. B built and installed
+# through this function, A then installed its own library into the same prefix, and
+# B ran #945's suite under PGC_SKIP_BUILD=1 -- ".so: d312a10c0cfb" beside "source:
+# a0e6afc3e13e matches the binary under test", then nine failures with the code
+# entirely innocent. @jdatcmd measured the same sentence above two different
+# libraries on PG 17, 25+19 failed against 44+0.
+#
+# The stamp cannot see it because it is keyed per SOURCE TREE: two trees installing
+# into one prefix have two stamp files, and each records only what its own tree
+# built. So the evidence has to be the artifact itself.
+pgc_installed_library_digest() {	# pgc_installed_library_digest PG_CONFIG -> 12 hex or empty
+	local so
+	so="$("${1:-}" --pkglibdir 2>/dev/null)/pgcolumnar.so"
+	[ -r "$so" ] || { echo ""; return; }
+	md5sum "$so" 2>/dev/null | cut -c1-12
+}
+
+pgc_binary_identity_verdict() {	# pgc_binary_identity_verdict RECORDED CURRENT -> verdict
+	local recorded="${1:-}" current="${2:-}"
+	[ -z "$recorded" ] && { echo unknown; return; }
+	[ -z "$current" ] && { echo unknown; return; }
+	[ "$recorded" = "$current" ] && echo fresh || echo replaced
+}
+
+# ONE DECISION, so no caller can claim the binary on source evidence alone. Pure,
+# like its two siblings, because that is what let them be exercised without a build.
+#
+# A stale source outranks everything: the tree has moved, so nothing installed can
+# be what it would now produce, and saying which of two reasons came first is less
+# useful than refusing.
+pgc_freshness_claim() {	# pgc_freshness_claim SOURCE_VERDICT BINARY_VERDICT -> decision
+	case "${1:-}" in
+		stale)   echo refuse-source; return ;;
+		unknown) echo unverified;    return ;;
+	esac
+	case "${2:-}" in
+		replaced) echo refuse-binary ;;
+		fresh)    echo verified ;;
+		*)        echo source-only ;;
+	esac
+}
+
+pgc_write_source_stamp() {	# pgc_write_source_stamp FILE SOURCE_HASH [LIBRARY_DIGEST]
 	# NO `|| true`. It was there, and it made both controllers' warning branches
 	# UNREACHABLE: run_all_versions.sh and devloop.sh each wrap this in `if (...)`
 	# and promise to say so when the stamp cannot be written, and each carries a
@@ -856,7 +928,22 @@ pgc_write_source_stamp() {	# pgc_write_source_stamp FILE HASH
 	# The stamp absent, nothing warned, every child suite degraded to UNVERIFIED.
 	# A comment that argues for a guarantee the code does not provide is worse
 	# than no comment, because it stops the next person checking.
-	printf '%s\n' "${2:-}" > "${1:-/dev/null}" 2>/dev/null
+	# Two lines when a digest is known, one when it is not. A one-line stamp stays
+	# valid and reads as "source recorded, library unrecorded", which is what every
+	# stamp written before #959 is -- so the migration needs no special case.
+	if [ -n "${3:-}" ]; then
+		printf '%s\n%s\n' "${2:-}" "$3" > "${1:-/dev/null}" 2>/dev/null
+	else
+		printf '%s\n' "${2:-}" > "${1:-/dev/null}" 2>/dev/null
+	fi
+}
+
+pgc_read_installed_stamp() {	# pgc_read_installed_stamp FILE -> digest or empty
+	# THE SECOND LINE ONLY. Reading hex from the whole file would return the SOURCE
+	# fingerprint for every pre-#959 stamp, certifying a source hash as a library
+	# digest -- the exact confusion this change exists to remove.
+	[ -r "${1:-}" ] || { echo ""; return; }
+	sed -n '2p' "$1" | tr -dc 'a-f0-9' | head -c 12
 }
 
 pgc_read_source_stamp() {	# pgc_read_source_stamp FILE -> hash or empty

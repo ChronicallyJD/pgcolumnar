@@ -730,7 +730,8 @@ for pgc in "${CONFIGS[@]}"; do
 		. "$builddir/test/lib.sh"
 		pgc_write_source_stamp \
 			"$(pgc_source_stamp_path "$builddir" "$pgc")" \
-			"$(pgc_source_fingerprint "$builddir")"
+			"$(pgc_source_fingerprint "$builddir")" \
+			"$(pgc_installed_library_digest "$pgc")"
 	); then
 		:
 	else
