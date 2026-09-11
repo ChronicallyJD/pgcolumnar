@@ -22,8 +22,8 @@ for _f in $_cm_files; do
 	# The second test is grep -c on a captured value, not a pipe into grep -qv;
 	# see selftest 080. The first reads a FILE and is not a pipeline at all.
 	_cm_sorts="$(grep -E '\|[[:space:]]*sort' "$_f" || true)"
-	if [ "$(grep -cE '\|[[:space:]]*sort' "$_f" || true)" != 0 ] \
-		&& [ "$(grep -cv 'LC_ALL=C' <<<"$_cm_sorts" || true)" != 0 ]; then
+	if [ "$(grep -cE '\|[[:space:]]*sort' "$_f" || true)" -ne 0 ] \
+		&& [ "$(grep -cv 'LC_ALL=C' <<<"$_cm_sorts" || true)" -ne 0 ]; then
 		_cm_unpinned="$_cm_unpinned $(basename "$_f")"
 	fi
 done

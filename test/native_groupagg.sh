@@ -50,7 +50,7 @@ pgc_is_groupvec() {	# query -> yes|no
 	local _plan
 	_plan="$(env PATH="$PGC_BINDIR:$PATH" psql -h 127.0.0.1 -p "$PGC_PORT" -U postgres \
 		-d "$PGC_DB" -At -c "EXPLAIN (COSTS OFF) $1" 2>/dev/null)"
-	[ "$(grep -c 'Columnar Vectorized Group Keys' <<<"$_plan" || true)" != 0 ] \
+	[ "$(grep -c 'Columnar Vectorized Group Keys' <<<"$_plan" || true)" -ne 0 ] \
 		&& echo yes || echo no
 }
 

@@ -168,7 +168,7 @@ pg_restart_env "AWS_ENDPOINT_URL='https://127.0.0.1:$S3_PORT'" \
 MOD_SO="$(pgc_pg "$PGC_BINDIR/pg_config --pkglibdir" | tail -1)/pgcolumnar_objstore.so"
 # grep -c, not grep -q; see lib.sh's pgc_is_columnar_scan.
 _ldd_out="$(pgc_pg "ldd '$MOD_SO'" 2>/dev/null || true)"
-if [ "$(grep -c libssl <<<"$_ldd_out" || true)" != 0 ]; then
+if [ "$(grep -c libssl <<<"$_ldd_out" || true)" -ne 0 ]; then
 	HTTPS_WANT="08006"
 else
 	HTTPS_WANT="0A000"

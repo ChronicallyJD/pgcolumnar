@@ -407,6 +407,104 @@ true until the next version shipped.
 
 ### Fixed
 
+- A count `grep` never produced no longer reads as "present" (#929).
+
+  #922 replaced roughly 28 `producer | grep -q PAT` tests with
+  `[ "$(grep -c PAT ... || true)" != 0 ]`, which fixed a real EPIPE race (#486). The
+  replacement answered **present** where the original answered **absent** whenever grep
+  produced no stdout, and a pattern that does not compile is the way to get there:
+
+      grep -cE '[' file   ->  stdout is []   (empty, not "0")
+      [ "" != 0 ]         ->  TRUE           (a STRING comparison: "" is not "0")
+
+  So the test reported the pattern present for a question it never managed to ask.
+
+  Every pattern in the tree is valid today, so no site was wrong. The hazard is the
+  DIRECTION of the next edit: a premise arm phrased to want `present` -- and most are,
+  because a premise asserts the fixture really is in the state the test needs -- turns
+  GREEN when its pattern stops compiling. It passes BECAUSE the instrument broke, which
+  is the failure this harness spends most of its effort refusing. The old form failed
+  red.
+
+  **23 sites** compared a count as a string; they now compare numerically, which is
+  behaviour-preserving in every case that is not broken. Measured:
+
+      input                      [ "$n" != 0 ]   [ "$n" -ne 0 ]   stderr
+      a real count: 0            false           false            no
+      a real count: 3            true            true             no
+      EMPTY (grep usage error)    TRUE            false           YES
+
+  Both spellings failed the same way. `= 0` is an ABSENCE claim, and on an empty value
+  it is false -- which does not assert absence, and is the safe direction once it is
+  loud. All 23 sites pass exactly one input to grep, so the value is always a bare
+  number and a numeric comparison cannot be confused by `file:count` output.
+
+  THE POPULATION RECONCILES, and the first version of this entry did not. It said
+  "58 sites, of which 20 string-compared and 32 numeric" -- and 20 + 32 is 52. The 58
+  came from a broad grep and the 20 from the sweep's own narrower one, so two
+  instruments were reported as one measurement. With the sweep's pattern corrected:
+
+      on main (cfe1fde9)   58 inputs = 23 string-compared + 35 numeric
+      after this change    58 inputs =  0 string-compared + 58 numeric
+
+  `test/selftest/440-a-count-grep-never-produced.sh` holds the arms and a heredoc-aware
+  sweep requiring zero string comparisons on a `grep -c`, so the class is closed rather
+  than the 23 instances.
+
+  THE SWEEP'S FIRST PATTERN COULD NOT SEE THREE OF THEM. `[^)]*` stopped at the first
+  `)`, which is inside the GREP PATTERN rather than at the end of the substitution, so
+  any pattern containing a parenthesis hid its own site: `sorted_mark_rename.sh:183` and
+  `sorted_pathkeys.sh:53` and `:456`, each spelling
+  `grep -cE '^ *(->)? *(Incremental )?Sort'`. The guard and its population came out of
+  the same regex, so the guard agreed with the count by construction -- which is why one
+  plant now carries a parenthesis and differs from the plain one in nothing else.
+  Reported by @jdatcmd. The sweep skips comments as well as heredocs: a flat grep
+  counts the paragraph that documents the idiom, which is how a guard comes to flag its
+  own explanation.
+
+- `test/harness_selftest.sh` can no longer exit 0 having evaluated nothing (#934).
+
+  Handed a `pg_config` the box does not have, it printed four lines, never reached its
+  summary, and **exited 0**. Measured on main:
+
+      /usr/local/pg18a/bin/pg_config    rc=0  1246 lines  checks run: 610
+      /usr/local/pgNOPE/bin/pg_config   rc=0     4 lines  no summary at all
+
+  A caller cannot tell the second from the first. It is not hypothetical: it cost a
+  whole mutation round, because the control and the mutated arm both reported rc=0 with
+  zero FAIL lines -- which reads exactly like "the mutation changed nothing", the
+  conclusion the run existed to test. The log being 4 lines instead of 1246 was the only
+  thing that gave it away. The default argument is `/usr/local/pg17/bin/pg_config`, which
+  the audit container does not have, so the wrong invocation is the easy one to make.
+
+  TWO CAUSES, and the second is the one that generalises. `_bindir` was assigned from a
+  command that had failed, so every later PATH was wrong; and part 010, which is
+  SOURCED, then took its own skip path and called `exit 0` -- which exits the DRIVER
+  rather than the part.
+
+  The driver now refuses the argument before sourcing anything, on two predicates
+  because one is not enough: a `pg_config` can exist and be executable and still answer
+  nothing, which is the shape that produced the empty `_bindir`. Both of part 010's skip
+  paths now exit 66, the status `lib.sh` calls `PGC_EXIT_SKIPPED`, paired with the
+  `SKIPPED (ran no checks)` line the runners already require beside it.
+
+  `test/selftest/430-the-self-test-must-not-report.sh` holds the arms, including a
+  heredoc-aware sweep requiring that **no** part exits 0 -- closing the class rather
+  than the two instances. The sweep has to be heredoc-aware because the parts generate
+  fixture scripts that legitimately end in `exit 0`: it sees 2 sites before this change
+  and 0 after, where a flat `grep -c 'exit 0'` sees 13 before and 24 after -- the flat
+  count moves because the new part's own fixtures add ten, for a reason that has nothing
+  to do with the defect. It sees `exit 0` and a bare `exit`; it cannot decide `exit $?`
+  or `exit "$rc"`, and each of those is zero in the tree today.
+
+  After: `rc=2` and a named refusal for a missing `pg_config`, for a path that is not a
+  directory, and for one that answers nothing; `604 passed + 0 failed + 0 unrunnable`
+  with a real one.
+
+  The part's own comment at line 3 already said why this mattered -- "a quiet skip means
+  the guard stops being tested that run without anyone noticing" -- four lines above the
+  first `exit 0`.
+
 - The vacuity guard's PLACEMENT is now a checked property, because a guard in a
   teardown cannot fail the test it guards (#432).
 

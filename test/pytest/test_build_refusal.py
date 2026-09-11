@@ -182,8 +182,8 @@ def test_the_fingerprint_reads_content_not_mtime(tmp_path, expect):
     expect.text(source_fingerprint(tree), before,
                 "touching a file does not change the fingerprint")
     (tree / "src" / "columnar.c").write_text("int a = 2;\n")
-    expect.at_least(int(source_fingerprint(tree) != before), 1,
-                    "changing its content does")
+    expect.differ(source_fingerprint(tree), before,
+                  "changing its content does")
 
 
 def test_an_unfingerprintable_tree_always_rebuilds(tmp_path, expect):
@@ -294,8 +294,8 @@ def test_the_fingerprint_covers_a_separately_built_module(tmp_path, expect):
 
     (tree / "objstore" / "module.c").write_text("int b = 2;\n")
     after = source_fingerprint(tree)
-    expect.num(int(after != before), 1,
-               "editing a separately built module moves the fingerprint")
+    expect.differ(after, before,
+                  "editing a separately built module moves the fingerprint")
 
     (tree / "objstore" / "module.c").write_text("int b = 1;\n")
     expect.text(source_fingerprint(tree), before,

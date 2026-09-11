@@ -317,8 +317,9 @@ def test_a_stated_total_that_disagrees_with_disk_is_visible(tmp_path, expect):
     expect.text(repr(stated_totals(doc)), "(9, 4)", "the document states 9 in 4")
     expect.text(repr((sum(len(v) for v in found.values()), len(found))), "(2, 1)",
                 "while the fixture on disk holds 2 in 1")
-    expect.num(int(stated_totals(doc) == (sum(len(v) for v in found.values()), len(found))), 0,
-               "a stated total that disagrees with disk does not compare equal")
+    expect.differ(stated_totals(doc),
+                  (sum(len(v) for v in found.values()), len(found)),
+                  "a stated total that disagrees with disk does not compare equal")
 
 
 # ---------------------------------------------------------------------------
