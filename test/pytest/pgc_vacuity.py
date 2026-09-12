@@ -1396,6 +1396,17 @@ class _RunShape:
         """
         self.collected.update(ids)
 
+    def pytest_testnodedown(self, node, error):
+        """Re-raise a collection refusal the worker could not (#963).
+
+        Per-config, because pytester inner runs share this interpreter and a
+        module-level hook would fire for the outer session's nodes too.
+        """
+        wo = getattr(node, "workeroutput", None) or {}
+        msg = wo.get("pgc_vacuity_refusal")
+        if msg:
+            raise pytest.UsageError(msg)
+
     def pytest_runtest_logreport(self, report):
         """Record that a test produced an outcome, and catch a skip during SETUP.
 
@@ -1458,26 +1469,66 @@ def pytest_addoption(parser):
     )
 
 
+def _collection_usage_error(session, config, items, msg):
+    """Refuse collection as a UsageError, including under xdist (#963).
+
+    Serial: raise UsageError. wrap_session sets rc 4 and pytest.main prints
+    `ERROR: <msg>` on stderr.
+
+    Under xdist the same raise happens inside a worker. pytest still runs
+    `pytest_collection_finish` in a `finally`, so the worker tells the
+    controller it collected the tests, then exits. The controller's
+    `worker_workerfinished` then asserts that a worker which collected tests
+    must not finish with them still pending -- a 35-line INTERNALERROR, rc 1,
+    and the sentence is gone. Measured.
+
+    So a worker does not raise. It records the sentence on workeroutput,
+    clears the items so collection_finish sends no ids, and sets shouldfail
+    so worker_workerfinished does not take the crashitem branch even if a
+    race leaves one. The controller re-raises UsageError from
+    pytest_testnodedown, which is the process wrap_session already knows
+    how to print.
+    """
+    if hasattr(config, "workerinput"):
+        wo = getattr(config, "workeroutput", None)
+        if wo is None:
+            config.workeroutput = {}
+            wo = config.workeroutput
+        wo["pgc_vacuity_refusal"] = msg
+        items[:] = []
+        session.shouldfail = msg
+        return
+    raise pytest.UsageError(msg)
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_finish(session):
     """Assert the run's own shape, so a filtered or truncated run cannot be green.
 
     lib.sh does the equivalent in pgc_summary, which reconciles passed plus failed
     plus unrunnable against the total and fails when the arithmetic does not close.
+
+    tryfirst so a refusal clears session.items before xdist's collection_finish
+    sends the ids. Sending first is the INTERNALERROR in `_collection_usage_error`.
     """
     want = session.config.getoption("--pgc-expect-tests")
     if want is None:
         return
     if want <= 0:
-        raise pytest.UsageError(
+        _collection_usage_error(
+            session, session.config, session.items,
             f"--pgc-expect-tests {want} would be satisfied by a run that collected "
-            f"nothing, so it asserts nothing. Give the real number."
+            f"nothing, so it asserts nothing. Give the real number.",
         )
+        return
     got = len(session.items)
     if got != want:
-        raise pytest.UsageError(
+        _collection_usage_error(
+            session, session.config, session.items,
             f"collected {got} test(s) but expected {want}. A run that quietly "
-            f"collects fewer tests than it should is a green that means nothing."
+            f"collects fewer tests than it should is a green that means nothing.",
         )
+        return
 
 
 # A broad except in a test swallows the failure the test exists to find.
@@ -2064,7 +2115,7 @@ _arm_bindings, _changed_bindings, _restore_bindings = _binding_guard()
 _arm_expect, _changed_expect, _restore_expect = _public_attr_guard(Expect)
 
 
-def pytest_collection_modifyitems(config, items,
+def pytest_collection_modifyitems(session, config, items,
                                   _changed=_changed_bindings,
                                   _restore=_restore_bindings,
                                   _changed_methods=_changed_expect,
@@ -2085,7 +2136,11 @@ def pytest_collection_modifyitems(config, items,
         if _methods:
             _restore_methods()
         names = _rebound + _methods
-        raise pytest.UsageError(
+        # #963's reporter rather than a bare `raise`: a UsageError raised in a
+        # WORKER never reaches the controller, so the refusal arrived as a bare
+        # exit code. Both surfaces this hook now guards report through it.
+        _collection_usage_error(
+            session, config, items,
             "the pgColumnar vacuity layer refuses this run: a conftest or plugin "
             "rebound the layer's own "
             + ("names " if len(names) > 1 else "name ")
@@ -2094,8 +2149,9 @@ def pytest_collection_modifyitems(config, items,
             "run would have reported on rules that were switched off. The bindings "
             "have been restored. If a check is wrong for your case, say so where the "
             "run records it: expect.cannot_run(REASON, detail), which names a reason "
-            "from a closed list, or fix the test the rule is objecting to."
+            "from a closed list, or fix the test the rule is objecting to.",
         )
+        return
 
     offenders = []
     seen_files = set()
@@ -2129,13 +2185,15 @@ def pytest_collection_modifyitems(config, items,
         if "empty parameter set" in reason:
             empty_params.append(f"{item.name}: {reason}")
     if empty_params:
-        raise pytest.UsageError(
+        _collection_usage_error(
+            session, config, items,
             "the pgColumnar vacuity layer refuses this run: a parametrize over an "
             "empty parameter set produces one skipped placeholder and exits 0, so a "
             "corpus that matched nothing reads as a suite that ran: "
             + "; ".join(empty_params)
-            + " -- assert the corpus is non-empty before parametrizing over it."
+            + " -- assert the corpus is non-empty before parametrizing over it.",
         )
+        return
     if offenders:
         # One hook, two offences, so the message must say which. An earlier version
         # reused the skip wording and told a reader with a broad `except` to call
@@ -2191,9 +2249,11 @@ def pytest_collection_modifyitems(config, items,
                 + " -- move the setup above the block, leaving the statement under "
                   "test alone inside it"
             )
-        raise pytest.UsageError(
-            "the pgColumnar vacuity layer refuses this run: " + ". ".join(parts) + "."
+        _collection_usage_error(
+            session, config, items,
+            "the pgColumnar vacuity layer refuses this run: " + ". ".join(parts) + ".",
         )
+        return
 
 
 # ARMED HERE, AT THE BOTTOM, because a snapshot taken earlier would miss every name

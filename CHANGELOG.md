@@ -28,9 +28,24 @@ true until the next version shipped.
   change is its own argument for that rule. Written against an earlier base the same
   seed produced `913 -> 1117`; #983 then landed forty rows and pruned two, and the
   census became 1155. Carrying 1117 forward would have been arithmetic that was true
-  when it was written and false when it shipped. The census is `grep -c` over the
-  ledger, re-run after the rebase; the ceiling is the registered list minus the
-  ledger's own suites.
+  when it was written and false when it shipped.
+
+  CORRECTION, and the wrong version is left visible because the sentence was an
+  INSTRUCTION. This entry first said the census is `grep -c` over the ledger. It is
+  not. The gate compares the budget against the count of rows whose last-red is
+  `never`:
+
+      awk -F'\t' '$4=="never"' test/check_ledger.tsv | wc -l
+
+  A plain row count agrees with that only while nothing has ever been seen red, which
+  is true of this tree today (1155 rows, 1155 never, 0 ever red) and stops being true
+  the first time a check is attacked -- the event the ledger exists to record. So the
+  number here was right by luck and the method was wrong, in an entry whose whole
+  subject is derive rather than carry. Reported by @OffgridwithJD. The correct
+  derivation now sits in `check_ledger_budget.txt` beside the number it governs, so
+  the next person does not have to find it in a changelog.
+
+  The ceiling is the registered list minus the ledger's own suites.
 
   WHY THIS SUITE, measured rather than chosen by taste. It is the heap-versus-columnar
   differential correctness suite, so a check that cannot fail there is a wrong answer
@@ -2247,6 +2262,20 @@ true until the next version shipped.
   the comparison. A snapshot of `Expect.__dict__` cannot see either. #967 stays
   open for those two routes.
 
+- A collection-time vacuity refusal keeps its reason under pytest-xdist (#963).
+
+  `pytest_collection_modifyitems` raises `UsageError`. Serial, that is rc 4 and
+  the sentence on stderr. Under `-n` pytest still runs `pytest_collection_finish`
+  in a `finally`, so the worker tells the controller it collected the tests and
+  then exits. xdist's `worker_workerfinished` asserts a worker that collected
+  tests must not finish with them pending: a 35-line INTERNALERROR, rc 1, and
+  the sentence is gone. Measured on the pinned runner (pytest 9.1.1,
+  pytest-xdist 3.8.0).
+
+  A worker now records the sentence on `workeroutput` and clears the items so
+  no ids cross. The controller re-raises `UsageError` from `pytest_testnodedown`,
+  which is the process serial already used. The in-test control (a body that
+  concludes nothing) is unchanged in both modes.
 
 ## [1.0-alpha3] - 2026-09-02
 
