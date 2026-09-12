@@ -1979,6 +1979,39 @@ true until the next version shipped.
   than replace it, so each renamed line still matches its own old form. Anchoring on the
   closing quote gives 1, which is the one that matters.
 
+- Nine git bundles are out of the tree, `*.bundle` is ignored, and
+  `310-a-compiled-artifact-must-not-be.sh` now covers transfer artifacts as well as
+  compiled ones.
+
+  **I put them there.** 76,194 bytes across nine files went into `c697c8cd` -- a merged
+  commit whose subject is a check name in `sorted_pathkeys.sh`. I create bundles in my clone
+  to move a branch into the audit container, and I staged with `git add -A`. That is the
+  same mechanism the existing comment in part 310 calls out for a stray `.pyc`: *a tracked
+  build artifact joins whichever commit is next.*
+
+  **Nothing caught it.** Five suites and the whole selftest ran green either side, because
+  no suite has an opinion about files it does not read. What found it was a later rebase
+  printing the filenames in a list I happened to read.
+
+  Part 310's scope note said Python only, and deferred the wider question:
+
+  > Whether every derived file in the tree deserves one rule is a larger judgement and is
+  > deliberately not decided here.
+
+  This decides it for one more class, and only that class. **A bundle is a transfer
+  artifact**, which is why it belongs beside the `.pyc` rather than beside the Parquet
+  fixtures: it is derived from commits already in the history, it is named after whatever
+  branch was in flight, nothing in the tree opens one, and the next person to make one will
+  choose a different name -- so it can never become a fixture anything depends on.
+
+  Same two-part rule, same `no-repo` discipline as the Python arms, and a control: a source
+  file merely *named* like a bundle (`test/bundle_notes.sh`) must not be ignored, or the
+  suffix rule is broader than it claims.
+
+  The blobs stay reachable in the repository's history -- removing a file from the tree does
+  not unwrite it, and rewriting `main` is not something a stray artifact justifies. What this
+  stops is the tree carrying them, and the next `git add -A` re-adding them.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
