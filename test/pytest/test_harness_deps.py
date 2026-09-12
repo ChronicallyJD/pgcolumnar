@@ -883,6 +883,87 @@ def test_ci_derives_the_file_list_rather_than_repeating_it(expect):
                 "the job and its comment state no corpus count")
 
 
+def test_the_cluster_job_runs_the_other_half_and_derives_it(expect):
+    """The complement of NO_CLUSTER must be RUN, and derived rather than listed (#1016).
+
+    93 test functions in 8 files ran in no CI job at all: ci.yml had one pytest job and it
+    installs psycopg deliberately not, nightly.yml mentions pytest zero times, and
+    run_all_versions.sh must mention it zero times because the two harnesses stay
+    independent. A quarter of the corpus passed when somebody ran it by hand and nothing
+    noticed when it stopped.
+
+    Derived, for the reason `pytest-guards` derives its half: two hand-maintained copies of
+    which file needs a database is a value whose correct content is a function of the tree,
+    and it goes stale silently because nothing compares them.
+    """
+    ci = (HERE.parent.parent / ".github" / "workflows" / "ci.yml")
+    expect.text(repr(ci.is_file()), "True", "premise: ci.yml is where this expects")
+    text = ci.read_text()
+
+    expect.at_least(text.count("pytest-cluster:"), 1,
+                    "a job runs the half that needs a cluster")
+    job = text[text.index("pytest-cluster:"):]
+    job = job[:job.index("\n  build:")] if "\n  build:" in job else job
+
+    expect.at_least(job.count("NO_CLUSTER"), 1,
+                    "and it derives its file list from this module rather than listing it")
+    expect.at_least(job.count("requirements-test.txt"), 1,
+                    "and installs the pins from requirements-test.txt, not whatever is there")
+    # The control for pytest-guards' own assertion. That job proves its files need no
+    # database by psycopg's ABSENCE, so this one has to state its presence or the pair
+    # proves nothing about the split.
+    expect.at_least(job.count("pip show psycopg"), 1,
+                    "and asserts the driver IS present, which is what makes it the other half")
+
+    # It must not list the corpus either way round: neither the files it runs nor the
+    # files it does not.
+    hardcoded = [n for n in NO_CLUSTER if n in job]
+    expect.text(", ".join(hardcoded) or "none", "none",
+                "the cluster job names no database-free file literally")
+
+
+def test_both_pytest_jobs_assert_how_many_tests_they_collected(expect):
+    """A run that collects fewer tests than it should is a green that means nothing (#1016).
+
+    `--pgc-expect-tests` existed and nothing passed it. What it closes is narrower than
+    "pytest passed having run nothing" and worse: a nonexistent path already fails on its
+    own, but a file list that resolves to REAL files and collects FEWER tests does not.
+    Measured by dropping one file from the guard list:
+
+        unarmed   rc=0   "255 passed"                              17 tests gone, silently
+        armed     rc=4   "collected 255 test(s) but expected 272"
+
+    THE NUMBERS LIVE IN A TRACKED FILE, for the reason check_ledger_budget.txt gives about
+    its own: a change to one is then a diff a reviewer sees, next to the test that moved
+    it. PGC_SKIP_TIMING is the precedent for the alternative -- set in two workflow files,
+    suppressing whole suites for months, with no diff ever showing it.
+    """
+    ci = (HERE.parent.parent / ".github" / "workflows" / "ci.yml")
+    text = ci.read_text()
+    counts = HERE / "expected_tests.txt"
+    expect.text(repr(counts.is_file()), "True",
+                "premise: the expected counts are in a tracked file")
+
+    nums = {}
+    for line in counts.read_text().splitlines():
+        f = line.split()
+        if len(f) == 2 and f[1].isdigit() and not line.startswith("#"):
+            nums[f[0]] = int(f[1])
+    for key in ("guard_tests", "cluster_tests"):
+        expect.at_least(nums.get(key, 0), 1,
+                        f"{key} is named and positive, or the flag it feeds asserts nothing")
+
+    # BOTH jobs, not one. Arming half of them would leave the other able to collect
+    # nothing and pass, which is the state this closes.
+    expect.num(text.count("--pgc-expect-tests"), 2,
+               "both pytest jobs pass the flag")
+    expect.num(text.count("expected_tests.txt"), 2,
+               "and both read the number from the tracked file rather than stating it")
+    # An empty read would OMIT the flag and fail open, so the value is guarded in the job.
+    expect.num(text.count('test -n "$WANT"'), 2,
+               "and each guards the read, because an empty value would fail open")
+
+
 def test_the_job_installs_no_database_driver(expect):
     """The job's value is that it runs where there is no database.
 

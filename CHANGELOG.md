@@ -146,6 +146,46 @@ true until the next version shipped.
   Field 5 because the entry above inserted the majors as field 4. At the moment this
   change landed on its own it was field 4; both ship in the same release, so the form
   here is the one that works on the shipped tree.
+- The 93 pytest tests that needed a cluster now run in CI, and both pytest jobs assert
+  how many tests they collected (#1016).
+
+  `ci.yml` had one pytest job, `pytest-guards`, and it installs psycopg deliberately NOT
+  -- that absence is what proves those files need no database. `nightly.yml` mentions
+  pytest zero times. `run_all_versions.sh` mentions it zero times and must, because the
+  two harnesses stay independent and the shell runner invoking pytest is the cross-harness
+  call the project forbids. So 8 files and 93 test functions, 26% of the corpus, ran
+  nowhere: green when somebody ran them by hand, silent when they stopped.
+
+  They were never broken. Measured on `pg18a` with the driver present: 99 collected,
+  289 checks, 289 pass, 40 seconds.
+
+  `--pgc-expect-tests` is now passed by BOTH jobs, from `test/pytest/expected_tests.txt`.
+  The flag existed and nothing used it. What it closes is narrower than "pytest passed
+  with no tests" and worse: a file list that resolves to real files and collects FEWER
+  tests than it should. Measured, dropping one file from the guard list:
+
+      unarmed   rc=0   "255 passed"          17 tests gone, nothing said
+      armed     rc=4   "collected 255 test(s) but expected 272"
+
+  A nonexistent path already fails on its own, so that was not the hole. A valid-but-short
+  list was.
+
+  THE NUMBERS ARE IN A TRACKED FILE, not in the workflow and not in an environment
+  variable, for the reason `check_ledger_budget.txt` gives about its own: a change to one
+  is then a diff a reviewer sees, sitting next to the test that moved it. `PGC_SKIP_TIMING`
+  is the precedent for the other choice -- set in two workflow files, suppressing whole
+  suites for months, with no diff ever showing it.
+
+  The SPLIT is derived from `NO_CLUSTER` in `test_harness_deps.py`, in both jobs, rather
+  than written out again: two copies of which file needs a database is a thing that goes
+  stale silently. `test -n` guards every derived value, because an empty read would omit
+  the flag and fail OPEN.
+
+  `test/pytest/README.md` recorded the old reason and it had gone stale twice over: it
+  said CI would have to install from `requirements-test.txt` first, which `pytest-guards`
+  already does, and it proposed registering the run in `SUITES`, which is the
+  cross-harness invocation the independence rule forbids. A second CI job was always the
+  mechanism.
 
 - The mutation ledger covers a third suite: `differential`, 204 checks (#752).
 
