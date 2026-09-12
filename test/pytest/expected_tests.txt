@@ -42,9 +42,12 @@ guard_tests 277
 # in no CI job at all -- a quarter of the corpus, green when somebody ran them by hand and
 # silent when they stopped.
 #
-# This number has moved twice already while the change was in flight: 99 -> 101 when this
-# PR added two arms about the jobs, and 101 -> 106 when #1012 merged test_join_vector_agg.py
-# into this half. Both times the number moved BEFORE CI ran, because re-deriving it is part
-# of rebasing; had it not, the job would have failed naming the drift rather than running a
-# different suite than the one declared. That is the mechanism working, not a nuisance.
-cluster_tests 106
+# This number has moved FOUR times while the change was in review: 99 -> 101 when this PR
+# added two arms about the jobs, 101 -> 106 when #1012 merged test_join_vector_agg.py into
+# this half, and 106 -> 166 when #1020 merged test_differential.py into it. Every move was
+# re-derived during a rebase; had one been missed, the job would have failed naming the drift
+# rather than running a different suite than the one declared.
+#
+# The rate is the point. The ungated half grew by 67 tests in the time this took to review,
+# which is the argument for gating it rather than a detail about it.
+cluster_tests 166

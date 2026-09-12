@@ -158,8 +158,13 @@ true until the next version shipped.
   which was #537's whole complaint. Written on this side rather than called across the
   boundary, because the harnesses stay independent.
 
-- The 93 pytest tests that needed a cluster now run in CI, and both pytest jobs assert
-  how many tests they collected (#1016).
+- The pytest tests that need a cluster now run in CI, and both pytest jobs assert how many
+  tests they collected (#1016).
+
+  **166 collected tests in 9 files**, counted on this tree: 93 when the gap was filed, plus
+  #1012's `test_join_vector_agg.py` and #1020's `test_differential.py`, which landed into the
+  ungated half while this change was in review. That is the argument for the change rather
+  than a detail about it -- the half was growing faster than it was being gated.
 
   `ci.yml` had one pytest job, `pytest-guards`, and it installs psycopg deliberately NOT
   -- that absence is what proves those files need no database. `nightly.yml` mentions
@@ -168,8 +173,8 @@ true until the next version shipped.
   call the project forbids. So 8 files and 93 test functions, 26% of the corpus, ran
   nowhere: green when somebody ran them by hand, silent when they stopped.
 
-  They were never broken. Measured on `pg18a` with the driver present: 99 collected,
-  289 checks, 289 pass, 40 seconds.
+  They were never broken. Measured on `pg18a` with the driver present, at the time the gap
+  was filed: 99 collected, 289 checks, 289 pass, 40 seconds. Nothing ran them.
 
   `--pgc-expect-tests` is now passed by BOTH jobs, from `test/pytest/expected_tests.txt`.
   The flag existed and nothing used it. What it closes is narrower than "pytest passed

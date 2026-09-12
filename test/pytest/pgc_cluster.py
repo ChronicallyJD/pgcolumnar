@@ -536,8 +536,35 @@ def build_once(srcdir, pg_config, major, lock_path=None, runner=None):
     reintroduce the defect for anyone who runs the corpus twice against two
     majors.
     """
-    lock_path = lock_path or os.path.join(
-        tempfile.gettempdir(), "pgc-pytest-build.lock")
+    # A PER-USER DIRECTORY, because a fixed path in /tmp is not a collision, it is a
+    # permanent denial. `fs.protected_regular = 2` (default on this kernel) forbids opening
+    # a regular file for write in a world-writable STICKY directory when the file's owner is
+    # neither the directory's owner nor the caller -- so once one user creates
+    # /tmp/pgc-pytest-build.lock, every other user on the box is locked out of the corpus
+    # FOREVER, and so is root:
+    #
+    #     running as: root uid=0
+    #     lock: -rw-r--r-- 1 ciuser ciuser 0 /tmp/pgc-pytest-build.lock
+    #     PermissionError: [Errno 13] Permission denied
+    #
+    # Measured after running the corpus as one user and then as another; it cost two runs
+    # before I read the sysctl. CAP_DAC_OVERRIDE does not help, which is what makes it
+    # surprising.
+    #
+    # The DIRECTORY carries the uid, not the filename: a per-user directory is owned by that
+    # user and is not world-writable, so protected_regular does not apply inside it at all.
+    # A per-user FILENAME in /tmp would still be a file in a sticky shared directory.
+    #
+    # WHAT THIS GIVES UP, said out loud: the lock no longer serialises two DIFFERENT users
+    # installing into one shared prefix. That is already covered, and better, by the marker
+    # key -- it includes `installed_library(pg_config)` (#956), so another user's install
+    # invalidates this user's marker and forces a rebuild rather than being silently
+    # accepted. The lock's job is the xdist-worker race within one run, and workers share a
+    # uid.
+    if lock_path is None:
+        lock_dir = os.path.join(tempfile.gettempdir(), f"pgc-pytest-{os.getuid()}")
+        os.makedirs(lock_dir, mode=0o700, exist_ok=True)
+        lock_path = os.path.join(lock_dir, "build.lock")
     marker = lock_path + ".done"
     # THE FINGERPRINT IS PART OF THE KEY. Keying on pg_config and major alone
     # would skip the build after a source edit, which is the staleness this
