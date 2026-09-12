@@ -1342,6 +1342,40 @@ os_resolve_s3(PgColumnarObjHandle *h, const char *url,
 				 errmsg("columnar: \"%s\" is not %s://bucket/key", url,
 						isGs ? "gs" : "s3")));
 
+	/*
+	 * Userinfo is refused here, the same as os_open and http_request do for
+	 * http(s) (#706). This path never did, and the failure was quiet rather than
+	 * open: the '@' is not special to a bucket name, so `s3://u:p@bucket/key`
+	 * parsed, the userinfo became part of the BUCKET, and the caller was told the
+	 * object does not exist.
+	 *
+	 * Measured on main with an endpoint configured (#995):
+	 *
+	 *   path style     HEAD /u%3Ap%40pgc-bucket/vh.parquet, Host untouched
+	 *                  -> "does not exist (HTTP 404)"
+	 *   virtual host   the bucket is the leftmost Host label, so the whole string
+	 *                  goes to the resolver -> "could not resolve
+	 *                  \"u:p@pgc-bucket.s3.local\""
+	 *   write          export_parquet raised NO ERROR and PUT to
+	 *                  /u%3Ap%40pgc-bucket/ui.parquet -- a bucket the caller
+	 *                  never named
+	 *
+	 * So this is a wrong-reason defect and not an SSRF: nothing here splits the
+	 * authority at '@', and the userinfo never becomes basic auth or moves the
+	 * host. The write row is why it is worth refusing rather than documenting --
+	 * acceptance there sends bytes somewhere nobody asked for.
+	 *
+	 * BEFORE THE ENDPOINT IS RESOLVED, deliberately. Placed after it, the refusal
+	 * would be unreachable whenever no endpoint is configured, because the s3
+	 * branch demands one first (28000) -- and the arms for this in
+	 * test/objstore_userinfo.sh would then need an object-store fixture to say
+	 * anything at all.
+	 */
+	if (memchr(bucket, '@', slash - bucket) != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("columnar: userinfo in \"%s\" is not supported", url)));
+
 	if (cfg != NULL && cfg->endpoint != NULL)
 		ep = cfg->endpoint;
 	else
