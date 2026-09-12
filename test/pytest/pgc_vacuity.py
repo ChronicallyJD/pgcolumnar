@@ -1999,6 +1999,13 @@ def _raises_sites(path):
 # assignment are not. It also checks at COLLECTION only, so a test that rebinds a
 # name inside its own body and restores it is untouched; two arms in
 # test_failed_query_sentinel.py do exactly that, legitimately.
+#
+# Module bindings are not the only writable surface. `Expect.num = a stub` leaves
+# the name `Expect` pointing at the same class (#967), so the snapshot below cannot
+# see it. Public methods of Expect are snapshotted separately, by identity, the
+# same way. Leading-underscore names including `_record` are excluded: stubbing
+# the recorder leaves the count at 0 and `pytest_runtest_call` refuses the test,
+# which is a different mechanism and must stay the one that fires.
 def _binding_guard():
     snapshot = {}
     missing = object()
@@ -2020,12 +2027,45 @@ def _binding_guard():
     return arm, changed, restore
 
 
+def _public_attr_guard(cls):
+    """Snapshot the public attributes of a class, by identity.
+
+    #964's module snapshot cannot see `Expect.num = a stub`: the binding
+    `Expect` is unchanged. This is the next frame (#967). Names that start
+    with `_` are excluded, so `Expect._record` stays the control: stubbing it
+    leaves the count at 0 and is refused by `pytest_runtest_call`, not here.
+    """
+    snapshot = {}
+    missing = object()
+
+    def arm():
+        snapshot.update(
+            {k: v for k, v in cls.__dict__.items() if not k.startswith("_")}
+        )
+
+    def changed():
+        return sorted(
+            f"{cls.__name__}.{k}"
+            for k, v in snapshot.items()
+            if cls.__dict__.get(k, missing) is not v
+        )
+
+    def restore():
+        for k, v in snapshot.items():
+            setattr(cls, k, v)
+
+    return arm, changed, restore
+
+
 _arm_bindings, _changed_bindings, _restore_bindings = _binding_guard()
+_arm_expect, _changed_expect, _restore_expect = _public_attr_guard(Expect)
 
 
 def pytest_collection_modifyitems(config, items,
                                   _changed=_changed_bindings,
-                                  _restore=_restore_bindings):
+                                  _restore=_restore_bindings,
+                                  _changed_methods=_changed_expect,
+                                  _restore_methods=_restore_expect):
     """Refuse a bare skip, which exits 0 and reads as success.
 
     Measured: two skipped tests report `2 skipped` and exit 0. A skip is allowed
@@ -2035,13 +2075,18 @@ def pytest_collection_modifyitems(config, items,
     # Captured in this signature at DEFINITION time, so rebinding `_changed_bindings`
     # or `_restore_bindings` on the module does not reach what runs here.
     _rebound = _changed(globals())
-    if _rebound:
-        _restore(globals())
+    _methods = _changed_methods()
+    if _rebound or _methods:
+        if _rebound:
+            _restore(globals())
+        if _methods:
+            _restore_methods()
+        names = _rebound + _methods
         raise pytest.UsageError(
             "the pgColumnar vacuity layer refuses this run: a conftest or plugin "
             "rebound the layer's own "
-            + ("names " if len(_rebound) > 1 else "name ")
-            + ", ".join(_rebound)
+            + ("names " if len(names) > 1 else "name ")
+            + ", ".join(names)
             + " -- a rule this layer enforces is read through that binding, so the "
             "run would have reported on rules that were switched off. The bindings "
             "have been restored. If a check is wrong for your case, say so where the "
@@ -2153,3 +2198,4 @@ def pytest_collection_modifyitems(config, items,
 # module is fully executed before pytest imports any conftest, so nothing the policed
 # tree writes can be in the snapshot.
 _arm_bindings(globals())
+_arm_expect()

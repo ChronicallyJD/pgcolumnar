@@ -647,6 +647,74 @@ def test_a_conftest_cannot_switch_off_the_raises_scan(pytester, expect):
     hatched.stderr.fnmatch_lines(["*_raises_sites*"])
 
 
+def test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes(pytester, expect):
+    """#967. #964 snapshots module bindings. `Expect.num = a stub` is not a
+    rebind of `Expect` -- the name still points at the same class -- so a false
+    claim reports as a pass if the stub still increments the count.
+
+    The three rows the issue named, and a fix must keep 1 and 3 while turning 2
+    into a refusal:
+
+        no conftest                         failed, correctly
+        Expect.num stubbed, still counting  PASSED -- the hatch
+        Expect._record stubbed              failed, count 0 (separate control)
+    """
+    pytester.makepyfile(
+        """
+        def test_one_equals_two(expect):
+            expect.num(1, 2, "one equals two, which it does not")
+        """
+    )
+    plain = pytester.runpytest("-p", "pgc_vacuity")
+    expect.outcomes(plain, "premise: a false claim fails when nobody stubs",
+                    failed=1, passed=0)
+
+    import pgc_vacuity
+    original = pgc_vacuity.Expect.num
+    pytester.makeconftest(
+        "import pgc_vacuity\n"
+        "pgc_vacuity.Expect.num = "
+        "lambda self, got, want, name: self._record(name)\n"
+    )
+    try:
+        hatched = pytester.runpytest("-p", "pgc_vacuity")
+    finally:
+        pgc_vacuity.Expect.num = original
+    expect.run_failed(hatched, "stubbing Expect.num so it still counts is refused")
+    hatched.stderr.fnmatch_lines(["*Expect.num*"])
+
+
+def test_stubbing_the_recorder_still_fails_closed_by_count(pytester, expect):
+    """#967 row 3. Stubbing `_record` leaves the count at 0, so the test is
+    refused for making no counted assertion. That is a different mechanism from
+    the public-method snapshot, and it must stay the one that fires -- a snapshot
+    of `_record` would swallow this into a collection-time refusal and the
+    control would no longer mean what it says.
+    """
+    pytester.makepyfile(
+        """
+        def test_one_is_one(expect):
+            expect.num(1, 1, "one is one")
+        """
+    )
+    import pgc_vacuity
+    original = pgc_vacuity.Expect._record
+    pytester.makeconftest(
+        "import pgc_vacuity\n"
+        "pgc_vacuity.Expect._record = lambda self, name: None\n"
+    )
+    try:
+        result = pytester.runpytest("-p", "pgc_vacuity")
+    finally:
+        # pytester is in-process: the inner conftest writes the shared class.
+        # This arm deliberately does not snapshot `_record`, so nothing restores
+        # it for us -- and the outer expect.outcomes would then count nothing.
+        pgc_vacuity.Expect._record = original
+    expect.outcomes(result, "stubbing _record is refused by count 0, not by snapshot",
+                    failed=1, passed=0)
+    result.stdout.fnmatch_lines(["*no counted assertion*"])
+
+
 def test_the_refusal_names_the_binding_that_changed(pytester, expect):
     """A refusal that does not say what was rebound sends the reader to the
     wrong file. The offending test here is HONEST -- the only thing wrong with

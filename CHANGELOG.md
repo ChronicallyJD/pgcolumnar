@@ -1816,6 +1816,22 @@ true until the next version shipped.
   the extracted block holds one and the premise passes. The static caller sweep catches
   it -- injected, both the premise and the arm report `got [4] want [3]`.
 
+- A `conftest.py` can no longer stub an `Expect` method so a false claim reports
+  as a pass (#967).
+
+  #964 snapshots the module's bindings. `Expect.num = a stub that still counts`
+  is not a rebind of `Expect` -- the name still points at the same class -- so a
+  test asserting `1 == 2` printed `1 passed` and exited 0. That is strictly worse
+  than switching off a meta-rule: the comparison never happens, the count still
+  rises, and every guard downstream is satisfied by a test that concluded nothing.
+
+  Public methods of `Expect` are now snapshotted by identity, the same way the
+  module bindings are. The refusal names `Expect.num` and restores the method
+  before raising, so an in-process `pytester` inner session cannot poison the
+  rest of the file. Names that start with `_` are excluded: stubbing `_record`
+  still leaves the count at 0 and is refused by `pytest_runtest_call`, which is a
+  different mechanism and the control this issue asked to keep.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
