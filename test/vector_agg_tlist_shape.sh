@@ -129,7 +129,7 @@ ansq "and GROUP BY still answers correctly" \
 
 check "REFUSE: an unsupported aggregate declines the whole target list" \
 	"$([ "$(vec "SELECT count(*)::text, string_agg(t, ',') FROM c")" -gt 0 ] && echo yes || echo no)" "no"
-ansq "and it still answers correctly" \
+ansq "and the unsupported aggregate still answers correctly" \
 	"SELECT count(*)::text, length(string_agg(t, ',')) FROM %T"
 
 # --- the surface this change OPENS ------------------------------------------
@@ -168,11 +168,11 @@ ansq "and DISTINCT still answers correctly" 'SELECT count(DISTINCT b)::text FROM
 
 check "REFUSE: FILTER inside an expression over aggregates" \
 	"$([ "$(vec 'SELECT avg(a) FILTER (WHERE b < 50) + 1 FROM c')" -gt 0 ] && echo yes || echo no)" "no"
-ansq "and it still answers correctly" 'SELECT avg(a) FILTER (WHERE b < 50) + 1 FROM %T'
+ansq "and FILTER inside an expression still answers correctly" 'SELECT avg(a) FILTER (WHERE b < 50) + 1 FROM %T'
 
 check "REFUSE: ORDER BY inside an aggregate, wrapped" \
 	"$([ "$(vec "SELECT length(string_agg(t, ',' ORDER BY a)) FROM c")" -gt 0 ] && echo yes || echo no)" "no"
-ansq "and it still answers correctly" \
+ansq "and a wrapped ORDER BY still answers correctly" \
 	"SELECT length(string_agg(t, ',' ORDER BY a NULLS LAST, id)) FROM %T"
 
 # --- empty and all-NULL, which a projection can get wrong quietly -----------
@@ -194,7 +194,7 @@ check_text "an all-NULL relation answers the wrapped shape as heap does" \
 
 check "REFUSE: an aggregate over an expression of two columns" \
 	"$([ "$(vec 'SELECT sum(a + b) FROM c')" -gt 0 ] && echo yes || echo no)" "no"
-ansq "and it still answers correctly" 'SELECT sum(a + b) FROM %T'
+ansq "and an aggregate over an expression still answers correctly" 'SELECT sum(a + b) FROM %T'
 
 # --- the parallel arm, which this change also unblocked ---------------------
 #

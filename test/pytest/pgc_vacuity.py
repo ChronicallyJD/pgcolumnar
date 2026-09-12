@@ -2031,9 +2031,12 @@ def _public_attr_guard(cls):
     """Snapshot the public attributes of a class, by identity.
 
     #964's module snapshot cannot see `Expect.num = a stub`: the binding
-    `Expect` is unchanged. This is the next frame (#967). Names that start
-    with `_` are excluded, so `Expect._record` stays the control: stubbing it
-    leaves the count at 0 and is refused by `pytest_runtest_call`, not here.
+    `Expect` is unchanged. This is the next frame (#967), and it is the
+    CLASS dictionary. An instance attribute or a subclass yielded by an
+    overridden fixture is a different object: `Expect.__dict__` is untouched,
+    so this snapshot cannot see it. Names that start with `_` are excluded,
+    so `Expect._record` stays the control: stubbing it leaves the count at 0
+    and is refused by `pytest_runtest_call`, not here.
     """
     snapshot = {}
     missing = object()

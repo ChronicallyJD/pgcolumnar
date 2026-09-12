@@ -648,9 +648,11 @@ def test_a_conftest_cannot_switch_off_the_raises_scan(pytester, expect):
 
 
 def test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes(pytester, expect):
-    """#967. #964 snapshots module bindings. `Expect.num = a stub` is not a
-    rebind of `Expect` -- the name still points at the same class -- so a false
-    claim reports as a pass if the stub still increments the count.
+    """#967, the class-attribute frame. #964 snapshots module bindings.
+    `Expect.num = a stub` is not a rebind of `Expect` -- the name still points
+    at the same class -- so a false claim reports as a pass if the stub still
+    increments the count. An instance attribute or a subclass fixture is a
+    different object and is not this test.
 
     The three rows the issue named, and a fix must keep 1 and 3 while turning 2
     into a refusal:

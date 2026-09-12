@@ -72,6 +72,7 @@ behaviour, the source of that number is named.
 - [24. test_loop_coverage_premise.py: a loop that never ran asserted nothing](#24-test_loop_coverage_premisepy-a-loop-that-never-ran-asserted-nothing)
 - [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
 - [26. test_check_records.py: every counted assertion is a record](#26-test_check_recordspy-every-counted-assertion-is-a-record)
+- [27. test_skip_loop_arms.py: a skipped arm records under its own name](#27-test_skip_loop_armspy-a-skipped-arm-records-under-its-own-name)
 
 ## 1. How to read a test in here
 
@@ -266,7 +267,7 @@ the general case was hand-rolled.
 | `test_a_conftest_cannot_switch_off_the_broad_except_scan` | the same hatch, a second scan |
 | `test_a_conftest_cannot_switch_off_the_raises_scan` | and a third |
 | `test_the_refusal_names_the_binding_that_changed` | an honest run, refused, naming the conftest's name |
-| `test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes` | a conftest replacing `Expect.num` with a stub that still counts is refused at collection, naming `Expect.num` |
+| `test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes` | a conftest replacing `Expect.num` **on the class** with a stub that still counts is refused at collection, naming `Expect.num` |
 | `test_stubbing_the_recorder_still_fails_closed_by_count` | **control**: stubbing `_record` still fails via count 0, so the public-method snapshot did not swallow the recorder's own protection |
 | `test_a_new_attribute_on_the_layer_is_not_a_rebind` | the control: a check that fires on anything is not a check |
 | `test_the_rebind_does_not_leak_into_this_session` | the binding is restored, so `pytester` does not poison the outer run |
@@ -289,6 +290,12 @@ them changed, which covers names added after it was written. It is a cost guard,
 a lock: the criterion #924 set is that silencing a rule must cost more than stating a
 reason. **The shell harness needs no equivalent** — `selftest/260` greps `lib.sh` from
 a separate process and never sources the file it judges.
+
+**#967 closes the class, not the instance.** `pgc_vacuity.Expect.num = stub` is
+refused at collection. `expect.num = stub` on the instance, or a subclass yielded
+by an overridden `expect` fixture, still keep the count and drop the comparison:
+`Expect.__dict__` is unchanged, so the snapshot cannot see them. A stub that still
+records satisfies the zero-assertion backstop. Those two routes stay #967.
 
 
 **Two failed queries are not two observable arms.** `query_error()` produces a value
@@ -2238,10 +2245,46 @@ A global positional pairing misses a real rename whenever unrelated movement in 
 part shifts the ordering. Given a before-log and an after-log together the vanished name
 is present in the union, so the scan **refuses** rather than silently finding nothing.
 
+### `test_an_orphan_row_is_named_and_the_unscanned_rows_are_counted`
+
+`rename-scan` pairs an appearance with a disappearance, so an **unpaired** disappearance
+— a check deleted, or renamed in a run where nothing appeared — printed `vanished=N` and
+refused nothing. Two rows in the committed ledger named checks that no longer existed;
+the census counted both and every run returned 0.
+
+The assertion that matters is the **scope**. A row in a part the run does not contain is
+not an orphan, because the run cannot speak about it — counting those as present would
+let a one-suite log certify the whole ledger. So the scan states how many rows it could
+not speak about, and this test pins that number as well as the orphan it found.
+
+### `test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal`
+
+The first version of `--prune` **deleted a suite**. One SKIP record put the part in the
+run's `parts`, so every other row of that suite became an orphan, and the prune removed them
+while reporting `not checked=0` and `rc=0` — the most confident output the tool can produce.
+`not checked` protects a part the run does not contain; a part *contained but skipped
+wholesale* fell in the gap between the two.
+
+The rule is deliberately broader than that case: a SKIP **anywhere** in the part means some
+arm did not run, so the run cannot tell a deleted check from one skipped under a name that
+does not match it. One skipped timing check blocks pruning that whole part, which is the
+direction a deleting command should err in.
+
+The control is the half that matters — the same two rows must still be pruned when the
+part's record is a `PASS`, or this is simply a tool that refuses to prune anything.
+
+### `test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history`
+
+The catalogue of what has been seen red is what the ledger exists to be, and no run can
+recreate it. `--prune` therefore refuses the **whole** prune when any orphan carries
+history, rather than removing the safe ones and leaving a partial job for whoever reads
+the output. A historyless orphan is removed and named as it goes; the row in the part the
+run never mentioned survives, which is the control that the scope holds under a write.
+
 ### `test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers`
 
 The suite restriction is the *meaning* of `suites_not_covered`, not a softening: without
-it the gate refuses every check of all 250 uncovered suites and reddens the whole matrix
+it the gate refuses every check of every uncovered suite and reddens the whole matrix
 on its first run. It tightens on its own as suites are seeded, and the deadlock that
 shipped is pinned as its own arm — regenerating the ledger lets a new check through.
 
@@ -2536,3 +2579,93 @@ can fail. `tryfirst=True` on those hooks is load-bearing: a wrapper's post-`yiel
 code runs in the reverse of call order, so `trylast` made the injector run *before*
 the layer attached anything, the inner run passed, and the arm read exactly like a
 reconciliation that does not fire.
+
+
+## 27. test_skip_loop_arms.py: a skipped arm records under its own name
+
+#994. A site skipped a whole block under **one** name that none of its arms had. When
+the condition failed those arms produced no record at all, so a reader could not tell
+which did not run and the ledger could not tell a skipped arm from a deleted one — a
+skipped arm's row has no matching record, exactly as a removed check's would.
+
+The convention that fixes it was already in the tree: skip under each arm's own name,
+in a loop over those names. The loop then **duplicates** the names, so a rename in the
+sibling branch desynchronises the two silently, and the skip records under a name
+nothing emits — the failure the fix exists to remove, reintroduced by an edit nobody
+thought was risky.
+
+### Why this exists separately from `test/selftest/470`
+
+`470` shipped in #998 with no pytest half, against the owner's rule that a test in one
+harness is not finished. This is that half, and it is **not a port**.
+
+| | measures | can it see |
+| --- | --- | --- |
+| `test/selftest/470` | the real corpus | a loop that drifted from its arms |
+| `test_skip_loop_arms.py` | the instrument | a classifier that stopped being able to tell |
+
+A classifier that filed every site as `armless` would report zero mismatches, and
+`470`'s population premises would still pass on whatever loops remained. So this file
+drives the same tool over **planted trees whose right answer is known** and asserts the
+classification itself. Two measurements of one property: the shell says the corpus is
+clean, this says the thing that reads the corpus can tell the difference.
+
+It drives `.github/scripts/skip-loop-arms.py` by subprocess and never the shell
+harness — a python tool rather than `test/lib.sh`, so this is a second measurement and
+not the first one wearing a Python wrapper.
+
+| test | what it pins |
+| --- | --- |
+| `test_a_loop_naming_its_siblings_arms_is_compared_and_agrees` | the clean site is **compared**, not quietly filed as armless or interpolated |
+| `test_a_rename_in_the_sibling_branch_is_caught` | the whole point: a drifted name is a mismatch |
+| `test_the_mismatch_names_the_loop_that_drifted_and_not_the_clean_one` | it names the **line it broke**, not merely that something is wrong |
+| `test_an_armless_branch_is_counted_as_armless_and_not_compared` | a site nobody compared and a site that agreed are not the same number |
+| `test_an_interpolated_sibling_is_reported_rather_than_compared_wrongly` | it declines to compare a site where a literal comparison would be **false in both directions** |
+| `test_every_loop_is_classified_into_exactly_one_category` | `compared + armless + interpolated == loops`, so nothing fell out of the report |
+
+### Removal proofs
+
+Each mutation was asserted to apply before the run, because a clean pass reads
+identically whether the code is load-bearing or the edit never landed.
+
+| mutation | goes red |
+| --- | --- |
+| stop reporting mismatches | `..._rename_in_the_sibling_branch_is_caught`, `..._differ_by_exactly_the_rename` |
+| compare the interpolated site literally | `..._interpolated_sibling_is_reported...`, `..._classified_into_exactly_one_category` |
+
+The second is the one worth keeping: removing the tool's *refusal* to compare produces
+a **false** mismatch on a correct site, and a guard that manufactures a red is the guard
+people switch off.
+
+| mutation | goes red |
+| --- | --- |
+| report a mismatch but name the **wrong line** | `..._mismatch_names_the_loop_that_drifted...` |
+| return 2 from `main()`, counters still correct | **all six** |
+
+That third one is why the control is shaped as it is. Its first version compared two
+trees — clean reports nothing, drifted reports something — and **a classifier naming the
+wrong line passes that**: `0/1` either way. Measured, on the mutant above. So the test
+plants both loops in one file and pins `two.sh:12`, which is the only form that can tell
+"it found my bug" from "it found something".
+
+### The exit code is asserted in the helper, not in one test
+
+Every test here reads the tool's stdout, and **none of them would notice the tool
+becoming unusable**. Measured: returning `2` from `main()` while still printing correct
+counters left all six green at 18 checks. The shell half catches that through
+`|| _sk_out="TOOL FAILED"` — so the pair was stronger than this half alone, and on that
+side it was a *premise* that failed while the headline arm stayed green.
+
+So `_sweep` asserts `returncode == 0` once, covering all six. Under the same mutation
+all six now fail. Reported by @OffgridwithJD, whose first probe of it was invalid and
+said so: an `sys.exit(2)` appended after the `__main__` guard applied cleanly and changed
+nothing, `rc` still 0. **Asserting that a mutation applied is not asserting that the
+behaviour moved** — both halves, or the proof is of the edit rather than of the code.
+
+### The partition is not the guard
+
+`compared + armless + interpolated == loops` is the strongest line in the file and the
+cheapest to satisfy wrongly: a classifier that filed **everything** as `armless` satisfies
+it perfectly. It is load-bearing only because the per-bucket tests assert that a known
+site lands in the right bucket; the identity then says nothing else escaped. Both halves
+or neither.

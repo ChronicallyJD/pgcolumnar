@@ -517,7 +517,7 @@ S3HI_MOVED="$(changed "$S3HI_SEQ0" "$(scanorder s3hi)")"
 check "premise: vacuum_sorted moved s3lex from its own baseline" "$S3LEX_MOVED" "moved"
 check "premise: cluster moved s3zo from its own baseline" "$S3ZO_MOVED" "moved"
 check "premise: cluster_hilbert moved s3hi from its own baseline" "$S3HI_MOVED" "moved"
-check "premise: the plan being digested here is the columnar custom scan too" \
+check "premise: the plan being digested for s3hi is the columnar custom scan too" \
 	"$(pgc_is_columnar_scan 'SELECT * FROM s3hi')" "yes"
 
 psql_run "ALTER TABLE s3hi OWNER TO h_owner;"
@@ -704,19 +704,19 @@ check_text "premise: the two (d) twins are byte-identical before either is reclu
 S4D1_RET="$(q "SELECT pgcolumnar.recluster_hilbert('s4d1','b','a');")"
 S4D1_MOVED="$([ "$S4D1_RET" -gt 0 ] 2>/dev/null && echo yes || echo no)"
 check "(d) recluster_hilbert over DIFFERENT columns still rewrites (>0)" "$S4D1_MOVED" "yes"
-check "(d) and that rewrite moved the layout" \
+check "(d) and that rewrite moved s4d1's layout" \
 	"$(changed "$S4D1_PHYS" "$(physlayout s4d1)")" "moved"
 check_text "(d) and it is still a hilbert table, now on the new key" "$(skind s4d1)/$(skey s4d1)" "hilbert/{b,a}"
-check_num "(d) and no row was lost" "$(q 'SELECT count(*) FROM s4d1;')" "20000"
+check_num "(d) and no row was lost from s4d1" "$(q 'SELECT count(*) FROM s4d1;')" "20000"
 
 S4D2_RET="$(q "SELECT pgcolumnar.recluster('s4d2','b','a');")"
 S4D2_MOVED="$([ "$S4D2_RET" -gt 0 ] 2>/dev/null && echo yes || echo no)"
 check "(d) plain recluster over DIFFERENT columns rewrites a hilbert table (>0)" "$S4D2_MOVED" "yes"
-check "(d) and that rewrite moved the layout" \
+check "(d) and that rewrite moved s4d2's layout" \
 	"$(changed "$S4D2_PHYS" "$(physlayout s4d2)")" "moved"
 check_text "(d) and naming the plain verb with a NEW key is the explicit switch back to zorder" \
 	"$(skind s4d2)/$(skey s4d2)" "zorder/{b,a}"
-check_num "(d) and no row was lost" "$(q 'SELECT count(*) FROM s4d2;')" "20000"
+check_num "(d) and no row was lost from s4d2" "$(q 'SELECT count(*) FROM s4d2;')" "20000"
 
 # THE ONLINE VERB'S CURVE DEFENCE, and it is gated on both rewrites having
 # happened. Untouched, s4d1 is still on the (a,b) layout while s4d2 is on the
@@ -760,7 +760,7 @@ S5ZO_BEFORE="$(scanorder s5zo)"
 S5HI_SET="$(setof s5hi)"
 S5ZO_SET="$(setof s5zo)"
 check_text "premise: the two single-column fixtures start identical" "$S5HI_BEFORE" "$S5ZO_BEFORE"
-check "premise: the plan being digested here is the columnar custom scan too" \
+check "premise: the plan being digested for s5hi is the columnar custom scan too" \
 	"$(pgc_is_columnar_scan 'SELECT * FROM s5hi')" "yes"
 
 hrun "cluster_hilbert('s5hi','a')" "SELECT pgcolumnar.cluster_hilbert('s5hi','a');"
@@ -801,7 +801,7 @@ check_text "and each records its own verb's kind" "$(skind s5hi)/$(skind s5zo)" 
 mk4 s6t
 hrun "cluster_hilbert('s6t','a','b')" "SELECT pgcolumnar.cluster_hilbert('s6t','a','b');"
 check_text "premise: s6t is a hilbert table before vacuum_sorted touches it" "$(skind s6t)" "hilbert"
-check "premise: the plan being digested here is the columnar custom scan too" \
+check "premise: the plan being digested for s6t is the columnar custom scan too" \
 	"$(pgc_is_columnar_scan 'SELECT * FROM s6t')" "yes"
 # THE ORDER DIGEST IS THE INSTRUMENT HERE, NOT physlayout. vacuum_sorted is an
 # EAGER verb, and an eager rewrite reproduces the stripe geometry exactly, so
@@ -887,7 +887,7 @@ check_text "premise: and the key the daemon will read off it is the one it was c
 check_text "premise: the daemon agrees a recluster is due, and that a compaction is NOT" \
 	"$(q "SELECT recluster_due::text || '/' || compact_rewrite_due::text FROM pgcolumnar.maintenance_due('av_hi');")" \
 	"true/false"
-check "premise: the plan being digested here is the columnar custom scan too" \
+check "premise: the plan being digested for av_hi is the columnar custom scan too" \
 	"$(pgc_is_columnar_scan 'SELECT * FROM av_hi')" "yes"
 
 # The two references, driven by hand while the daemon is still off.

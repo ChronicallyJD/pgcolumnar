@@ -173,10 +173,146 @@ def test_renames_are_grouped_by_part_and_scanned_against_one_run(tmp_path, expec
                "a before-log and an after-log together are refused, not silently empty")
 
 
+def test_an_orphan_row_is_named_and_the_unscanned_rows_are_counted(tmp_path, expect):
+    """The other direction of the set-compare: a ledger row no record matches.
+
+    `rename-scan` pairs an appearance with a disappearance, so an UNPAIRED
+    disappearance printed `vanished=N` and refused nothing -- two rows naming checks
+    that no longer existed sat in the committed ledger while the census counted both.
+
+    THE SCOPE IS THE ASSERTION THAT MATTERS. A row in a part the run does not contain
+    is not an orphan, because the run cannot speak about it; counting those as present
+    would let a one-suite log certify the whole ledger. So the scan says how many rows
+    it could not speak about, and this test pins that number rather than only the
+    orphan it found.
+    """
+    ledger = _w(tmp_path, "l.tsv", "")
+    before = _w(tmp_path, "b.log",
+                "RESULT\tdemo\tpart1\tstill here\tPASS\t\n"
+                "RESULT\tdemo\tpart1\tgone tomorrow\tPASS\t\n"
+                "RESULT\tdemo\tpartZ\telsewhere\tPASS\t\nchecks run: 3\n")
+    after = _w(tmp_path, "a.log",
+               "RESULT\tdemo\tpart1\tstill here\tPASS\t\nchecks run: 1\n")
+    _run("merge", "--ledger", ledger, "--date", "2026-09-01", before)
+    expect.num(len(_rows(ledger)), 3, "premise: the ledger holds all three rows")
+
+    out, rc = _run("orphan-scan", "--ledger", ledger, after)
+    expect.num(out.count("orphan: demo\tpart1\tgone tomorrow"), 1,
+               "a row no record in its own part matches is named an orphan")
+    expect.num(rc, 1, "and it is refused, not merely printed")
+    expect.num(out.count("still here"), 0, "the check the run still emits is not an orphan")
+    expect.num(out.count("elsewhere"), 0,
+               "nor is a row in a part the run does not contain")
+    expect.num(out.count("not checked=1"), 1,
+               "and the scan states how many rows it could not speak about")
+
+    expect.num(_run("orphan-scan", "--ledger", ledger, before)[1], 0,
+               "a run that emits every row in its parts is clean")
+    expect.num(_run("orphan-scan", "--ledger", ledger, before, after)[1], 2,
+               "a before-log and an after-log together are refused, as rename-scan refuses them")
+
+
+def test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history(tmp_path, expect):
+    """The catalogue of what has been seen red is what this ledger exists to be.
+
+    No run can recreate it, so dropping an entry because a name moved is the precise
+    loss `rename-scan` was written to prevent. `--prune` refuses the WHOLE prune when
+    any orphan carries history, rather than removing the safe ones and leaving a
+    partial job for whoever reads the output.
+    """
+    after = _w(tmp_path, "a.log",
+               "RESULT\tdemo\tpart1\tstill here\tPASS\t\nchecks run: 1\n")
+
+    plain = _w(tmp_path, "plain.tsv", "")
+    _run("merge", "--ledger", plain, "--date", "2026-09-01",
+         _w(tmp_path, "p.log",
+            "RESULT\tdemo\tpart1\tstill here\tPASS\t\n"
+            "RESULT\tdemo\tpart1\tgone tomorrow\tPASS\t\n"
+            "RESULT\tdemo\tpartZ\telsewhere\tPASS\t\nchecks run: 3\n"))
+    out, rc = _run("orphan-scan", "--prune", "--ledger", plain, after)
+    expect.num(out.count("pruned: demo\tpart1\tgone tomorrow"), 1,
+               "a historyless orphan is pruned, and named as it goes")
+    expect.num(rc, 0, "and a prune that did its job is not an error")
+    names = {r[2] for r in _rows(plain)}
+    expect.num(len(names), 2, "the ledger is one row shorter")
+    expect.num(1 if "elsewhere" in names else 0, 1,
+               "control: the row in the part the run never mentioned survives the prune")
+    expect.num(_run("orphan-scan", "--prune", "--ledger", plain, after)[1], 0,
+               "and a prune with nothing left to remove is clean, not an error")
+
+    hist = _w(tmp_path, "hist.tsv", "")
+    _run("merge", "--reds-are-real", "--mutation", "drop the guard", "--ledger", hist,
+         "--date", "2026-09-01",
+         _w(tmp_path, "h.log",
+            "RESULT\tdemo\tpart1\tstill here\tPASS\t\n"
+            "RESULT\tdemo\tpart1\tgone tomorrow\tFAIL\t\nchecks run: 2\n"))
+    expect.text({r[2]: r[3] for r in _rows(hist)}["gone tomorrow"], "2026-09-01",
+                "premise: the orphan now carries a date")
+
+    out, rc = _run("orphan-scan", "--prune", "--ledger", hist, after)
+    expect.num(out.count("ORPHAN CARRYING HISTORY"), 1,
+               "an orphan carrying history is reported as carrying it")
+    expect.num(out.count("last red 2026-09-01"), 1,
+               "and the history it would lose is printed with it")
+    expect.num(rc, 2, "the prune is refused")
+    expect.num(out.count("the catalogue is what this ledger is for"), 1,
+               "and it says why, rather than only that it refused")
+    expect.num(len([r for r in _rows(hist) if r[2] == "gone tomorrow"]), 1,
+               "premise: and the refusal removed NOTHING")
+
+
+def test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal(tmp_path, expect):
+    """The first version of `--prune` deleted a suite.
+
+    One SKIP record put the part in `parts`, so every other row of that suite became an
+    orphan, and `--prune` removed them while reporting `not checked=0` and rc=0 -- the
+    most confident output the tool can produce. `not checked` protects a part the run does
+    not contain; a part CONTAINED BUT SKIPPED WHOLESALE fell in the gap between the two.
+
+    The rule is deliberately broader than that case: a SKIP anywhere in the part means
+    some arm did not run, so the run cannot tell a deleted check from one skipped under a
+    name that does not match it. One skipped timing check blocks pruning that whole part,
+    which is the direction a deleting command should err in.
+
+    The CONTROL is the half that matters: the same two rows must still be pruned when the
+    part's record is a PASS, or this is a tool that refuses to prune anything.
+    """
+    ledger = _w(tmp_path, "l.tsv", "")
+    _run("merge", "--ledger", ledger, "--date", "2026-09-01",
+         _w(tmp_path, "full.log",
+            "RESULT\tdemo\tpart1\tarm one\tPASS\t\n"
+            "RESULT\tdemo\tpart1\tarm two\tPASS\t\n"
+            "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 3\n"))
+    expect.num(len(_rows(ledger)), 3, "premise: the ledger holds all three rows")
+    skipped = _w(tmp_path, "skipped.log",
+                 "RESULT\tdemo\tpart1\tthe whole thing\tSKIP\tno fixture on this box\n"
+                 "checks run: 1\n")
+
+    out, rc = _run("orphan-scan", "--ledger", ledger, skipped)
+    expect.num(out.count("unprunable: 2 row(s)"), 1,
+               "a row in a part that skipped is unprunable, not an orphan")
+    expect.num(out.count("orphans=0 (0 carrying history), unprunable=2"), 1,
+               "and the summary keeps the two apart")
+    expect.num(rc, 1, "it is still a finding, so the scan does not return success")
+
+    _run("orphan-scan", "--prune", "--ledger", ledger, skipped)
+    expect.num(len(_rows(ledger)), 3, "--prune removes nothing from a part that skipped")
+    expect.num(_run("orphan-scan", "--prune", "--ledger", ledger, skipped)[0]
+               .count("the run did not exercise those checks"), 1,
+               "and it says so rather than declining silently")
+
+    passed = _w(tmp_path, "pass.log",
+                "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 1\n")
+    out, _ = _run("orphan-scan", "--prune", "--ledger", ledger, passed)
+    expect.num(out.count("removed 2 row(s)"), 1,
+               "control: the same rows ARE pruned when that part's record is a PASS")
+    expect.num(len(_rows(ledger)), 1, "control: and the ledger really is shorter")
+
+
 def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect):
     """The suite restriction is the MEANING of `suites_not_covered`, not a softening.
 
-    Without it the gate refuses every check of all 250 uncovered suites and reddens the
+    Without it the gate refuses every check of every uncovered suite and reddens the
     whole matrix on its first run -- a gate somebody turns off within the week, which is
     the failure this issue family exists to prevent. It tightens on its own as suites
     are seeded.

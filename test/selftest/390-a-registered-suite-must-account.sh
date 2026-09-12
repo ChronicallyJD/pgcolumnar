@@ -695,5 +695,18 @@ check "the breakdown headline counts the wide set, not the narrow one" \
 	"$(grep -c 'of those, \$_acc_any accounted for their checks' "$_rv")" "1"
 check "and the population reconciliation counts that same file" \
 	"$(grep -c '_acc_any="\$(grep -c \. "\$_acc_accounted"' "$_rv")" "1"
+# THE LABEL WAS REWORDED AND THIS ARM FOLLOWS IT. It used to grep "by their own
+# mechanism", which was read as "emits no RESULT records" twice in one night by two
+# different readers, and a planning number came out of the misreading: twelve suites
+# called unseedable when ten of them emit records and only two do not.
+#
+# THE DISCLAIMER IN THAT LABEL IS NOT SEPARATELY PINNED, and the reason is worth
+# stating rather than leaving as an omission. Pinning it means either a second check
+# or renaming this one to match a wider assertion. A second check costs a ledger row;
+# renaming this one ORPHANS its existing row -- and `main` currently has no tool to
+# remove an orphan, which is exactly what #983 is about. So the honest sequence is:
+# #993 lands the prune, and then this arm can be renamed and widened in the change
+# that regenerates the ledger anyway. Until then the reword is protected by this grep
+# breaking on any further edit, and by the comment at the echo itself.
 check "premise: and the narrow count is still printed, as the lib.sh half" \
-	"$(grep -c 'via lib.sh.s accounting; by their own mechanism' "$_rv")" "1"
+	"$(grep -c "printed lib.sh's accounting line" "$_rv")" "1"

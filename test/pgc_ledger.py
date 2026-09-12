@@ -28,6 +28,14 @@ fall: the gate compares the working value against the previously committed one a
 refuses an increase, so widening the debt is an edit a reviewer sees AND a gate
 refuses, rather than either alone.
 
+THE COMPARISON RUNS BOTH WAYS
+-----------------------------
+`gate` refuses a check the ledger has never seen. `orphan-scan` reports a ledger
+row no record in its own part matches -- the other direction, which for a long
+time printed `vanished=N` and refused nothing while two rows named checks that no
+longer existed. It reports rather than gates, for a measured reason given in its
+own docstring: an absent record does not yet mean a removed check.
+
 WHAT THE GATE REFUSES
 ---------------------
 A check the committed ledger has never seen. That is the allowlist the issue asks
@@ -45,6 +53,30 @@ itself would be a file nobody reads changing under everybody.
 
 It is not only mutation runs. Every real CI red fills it, every flake, every
 bisect. A mutation run is the deliberate accelerator.
+
+REGENERATING ACROSS A REBASE, in this order, and the order is the point
+-----------------------------------------------------------------------
+Paid four times on one PR before it was written down. A rebase moves the LEDGER
+without moving the BUDGET: git merges both sides' rows into the tsv and keeps one
+side's number in the budget, so the committed pair contradicts itself before
+anything is run. Four arms then fail and all four trace to that one cause -- one
+asserts the pair agrees, three run the real gate, which correctly refuses a
+contradiction. Diagnosing it from those four failures costs an hour.
+
+    1. rebase onto the new base FIRST
+    2. DERIVE to reconcile       the budget from the merged tsv, before running
+    3. run the suite             on the REBASED tree, and guard the log
+    4. merge                     the guarded run
+    5. prune                     orphans, if any
+    6. DERIVE again              the final census, read back from the file
+
+Two derives, not one: step 2 makes the tree self-consistent so the suite can pass at
+all, step 6 records the result of steps 4 and 5. Both are READ BACK from the tsv --
+`old + n` is right once and wrong every time after.
+
+And re-run whatever your evidence names whose FILES moved in the rebase. A gate
+statement is a claim about a tree, and a rebase silently changes which tree; saying
+which suites you re-ran and which you did not is part of the claim.
 
 FAIL CLOSED
 -----------
@@ -357,6 +389,159 @@ def cmd_rename_scan(args):
     return rc
 
 
+def cmd_orphan_scan(args):
+    """A ledger row that no record in its OWN PART matches: the unpaired half.
+
+    `rename-scan` pairs an appearance with a disappearance. An unpaired
+    disappearance -- a check deleted, or renamed in a run where nothing appeared --
+    was printed as `vanished=N` and refused nothing. Two such rows sat in the
+    committed ledger naming checks that no longer existed; the census counted both,
+    and every run returned 0 while the note scrolled past. A guard that compels one
+    list and ignores the second manufactures the confidence that the thing is
+    handled.
+
+    SCOPED TO THE PARTS THE RUN CONTAINS, and the scope is REPORTED, not assumed.
+    A one-suite log has nothing to say about another suite's rows. Counting those
+    as present would make a single-suite run certify the whole ledger, so they are
+    counted OUT LOUD as `not checked` instead.
+
+    WHY THIS REPORTS AND IS NOT WIRED INTO THE GATE. Measured, not assumed: part
+    340 records ONE skip under a DIFFERENT name ("the unreadable-source refusal")
+    when the box has no non-root user to read as, rather than skipping its two
+    named arms. On such a box two committed rows have no matching record and are
+    not removed checks, so a gate refusing on absence would redden a correct run.
+    Arming this needs those branches to record a SKIP under the names they stand
+    in for -- the same conversion #965 made for the eleven timeout paths.
+
+    A ROW CARRYING HISTORY IS NEVER PRUNED. The catalogue of what has been seen
+    red is the thing this ledger exists to be, and no run can recreate it. Dropping
+    an entry because a name moved is the precise loss `rename-scan` was written to
+    prevent, so `--prune` refuses the WHOLE prune when any orphan carries history
+    rather than removing the safe ones and leaving a partial job to be finished by
+    whoever reads the output.
+
+    AND A PART HOLDING ANY SKIP IS UNPRUNABLE, which is the first version's worst
+    bug rather than a refinement of it. `not checked` protects a part the run does
+    not contain at all. A part the run CONTAINS BUT SKIPPED WHOLESALE fell between
+    the two: one SKIP record put the part in `parts`, every other row of that suite
+    became an orphan, and `--prune` deleted the suite while reporting
+    `not checked=0` and rc=0 -- the most confident output the tool can produce.
+    Measured on a three-row fixture for `analyze_differential`, whose run is one
+    SKIP on PG17; reported by @pgcolumnar-9b reviewing this change.
+
+    THE RULE IS BROADER THAN THAT CASE ON PURPOSE. A SKIP anywhere in the part
+    means some arm did not run, so the run cannot distinguish "this row's check was
+    deleted" from "this row's check was skipped under a name that does not match
+    it" -- which is #994's defect, at suite granularity instead of branch
+    granularity. That is the same sentence this docstring already uses about part
+    340, so writing the hole one level up was not an oversight I get to call
+    subtle.
+
+    It is deliberately conservative: one skipped timing check blocks pruning that
+    whole part. Prune is a rare, deliberate act; a refusal costs a sentence and a
+    deletion costs history no run can recreate.
+
+    THE EXIT CODES, stated because a caller only ever sees the code:
+
+        0   nothing left to report: no orphan and nothing unprunable
+        1   something is still there -- an orphan, or a row this run cannot speak for
+        2   an integrity failure, or a prune refused because history would be lost
+
+    `--prune` returning 0 when it had pruned NOTHING was the first version's subtler
+    bug, reported by @jdatcmd in review. A caller that scans, sees 1, re-runs with
+    `--prune` and sees 0 reads "it pruned them" -- when nothing was pruned and nothing
+    could be. Prose covers a human; a script sees only the code. So 0 now means the
+    ledger and the run agree, and anything outstanding keeps the 1 the scan gave.
+    """
+    runs = _by_run(args.logs)
+    if len(runs) > 1:
+        raise LedgerError(
+            f"orphan-scan compares ONE run against the ledger, but got {len(runs)} logs: "
+            "the union of a before-log and an after-log hides the disappearance")
+    rows = read_ledger(args.ledger)
+    verdicts = runs[0][1]
+    now = set(verdicts)
+
+    parts = {(s, p) for s, p, _ in now}
+    # A part holding ANY SKIP cannot speak about absence: see the docstring.
+    skipped_parts = {(s, p) for (s, p, _), v in verdicts.items() if "SKIP" in v}
+    checkable = {k for k in rows if (k[0], k[1]) in parts}
+    unchecked = sorted(set(rows) - checkable)
+    absent = sorted(checkable - now)
+    orphans = [k for k in absent if (k[0], k[1]) not in skipped_parts]
+    unprunable = [k for k in absent if (k[0], k[1]) in skipped_parts]
+
+    with_history = [k for k in orphans
+                    if rows[k][0] != NEVER or rows[k][1]]
+    historyless = [k for k in orphans if k not in with_history]
+
+    for k in orphans:
+        last, muts = rows[k]
+        if k in with_history:
+            print(f"    ORPHAN CARRYING HISTORY: {k[0]}\t{k[1]}\t{k[2]} "
+                  f"(last red {last}, mutations: {';'.join(sorted(muts)) or NONE})")
+        else:
+            print(f"    orphan: {k[0]}\t{k[1]}\t{k[2]} (no history)")
+
+    # The parts the run never mentioned, named rather than counted alone: a number
+    # with no names is a number nobody can act on.
+    if unchecked:
+        silent = sorted({(k[0], k[1]) for k in unchecked})
+        print(f"    not checked: {len(unchecked)} row(s) in {len(silent)} part(s) this run "
+              f"does not contain, so it cannot speak about them: "
+              + ", ".join(f"{a}/{b}" for a, b in silent[:5])
+              + (" ..." if len(silent) > 5 else ""))
+
+    # NAMED, not just counted: a number with no names is a number nobody can act on.
+    if unprunable:
+        parts_named = sorted({(k[0], k[1]) for k in unprunable})
+        print(f"    unprunable: {len(unprunable)} row(s) in {len(parts_named)} part(s) that "
+              f"SKIPPED at least one check, so absence there is not removal: "
+              + ", ".join(f"{a}/{b}" for a, b in parts_named[:5])
+              + (" ..." if len(parts_named) > 5 else ""))
+        for k in unprunable[:5]:
+            print(f"      {k[0]}\t{k[1]}\t{k[2]}")
+
+    print(f"  orphan scan: parts in the run={len(parts)}, rows in those parts={len(checkable)}, "
+          f"orphans={len(orphans)} ({len(with_history)} carrying history), "
+          f"unprunable={len(unprunable)}, not checked={len(unchecked)}")
+    # The four categories must account for every row, or a row went missing in the
+    # classification itself -- which is the failure this tool exists to report.
+    matched = len(set(rows) & now)
+    if matched + len(orphans) + len(unprunable) + len(unchecked) != len(rows):
+        raise LedgerError(
+            f"classification lost rows: matched {matched} + orphans {len(orphans)} + "
+            f"unprunable {len(unprunable)} + not checked {len(unchecked)} != {len(rows)} "
+            f"ledger rows -- every row must land in exactly one of the four")
+
+    if not args.prune:
+        return 1 if (orphans or unprunable) else 0
+
+    if unprunable:
+        print(f"    not pruning {len(unprunable)} row(s) in a part that skipped: the run did "
+              "not exercise those checks, so their absence is not removal")
+
+    if with_history:
+        print(f"    refusing to prune: {len(with_history)} orphan row(s) carry history, and "
+              "the catalogue is what this ledger is for -- no run can recreate it")
+        print("      reconcile them instead: rename the ledger row to the check's new name, "
+              "or say in the commit why the history may go")
+        return 2
+
+    if not historyless:
+        # Nothing WAS pruned. If anything is still outstanding the caller must not read
+        # that as success, so the scan's own verdict stands.
+        return 1 if unprunable else 0
+
+    for k in historyless:
+        print(f"    pruned: {k[0]}\t{k[1]}\t{k[2]}")
+        del rows[k]
+    write_ledger(args.ledger, rows)
+    print(f"  orphan prune: removed {len(historyless)} row(s), the ledger now holds {len(rows)}")
+    # Pruning some of it is not finishing it.
+    return 1 if unprunable else 0
+
+
 def read_budget(path):
     out = {}
     text = pathlib.Path(path).read_text()
@@ -539,7 +724,7 @@ def cmd_gate(args):
     # The suite restriction is not a softening, it is the meaning of
     # suites_not_covered: the gate cannot refuse a new check in a suite it has
     # never seen, because it has no idea which of that suite's checks are new.
-    # Without it the gate refuses every check of all 250 uncovered suites and
+    # Without it the gate refuses every check of every uncovered suite and
     # reddens the whole matrix on the first run -- which is a gate somebody turns
     # off, the failure mode this issue family exists to prevent.
     #
@@ -668,6 +853,15 @@ def main(argv=None):
     r.add_argument("--ledger", required=True)
     r.add_argument("logs", nargs="+")
     r.set_defaults(fn=cmd_rename_scan)
+
+    o = sub.add_parser("orphan-scan",
+                       help="refuse a ledger row no record in its own part matches")
+    o.add_argument("--ledger", required=True)
+    o.add_argument("--prune", action="store_true",
+                   help="remove orphan rows that carry no history; refuse the whole "
+                        "prune if any of them does")
+    o.add_argument("logs", nargs="+")
+    o.set_defaults(fn=cmd_orphan_scan)
 
     g = sub.add_parser("gate", help="refuse a check the ledger has never seen")
     g.add_argument("--ledger", required=True)

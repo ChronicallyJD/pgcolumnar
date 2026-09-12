@@ -50,11 +50,27 @@
 #                         writes a one-line gitfile into the build dir, which
 #                         costs no bytes and makes the question answerable.  ok
 #
-# SCOPE. Python only. The tree tracks Iceberg .avro/.puffin and Parquet
-# fixtures, which are inputs rather than output and are meant to be there;
-# .gitignore already covers the C artifacts (*.o, *.so, *.bc). Whether every
-# derived file in the tree deserves one rule is a larger judgement and is
-# deliberately not decided here.
+# SCOPE. Python artifacts, and git bundles. The tree tracks Iceberg
+# .avro/.puffin and Parquet fixtures, which are inputs rather than output and are
+# meant to be there; .gitignore already covers the C artifacts (*.o, *.so, *.bc).
+# Whether every derived file deserves one rule is still a larger judgement and is
+# still not decided here.
+#
+# THE SECOND CLASS WAS ADDED THE SAME WAY AS THE FIRST: expensively. Nine git
+# bundles, 76,194 bytes, went into c697c8cd -- a merged commit whose subject is a
+# check name in sorted_pathkeys.sh. I made them in my clone to move a branch into a
+# container and then staged with `git add -A`, which is the same mechanism the
+# comment above calls out for the .pyc: a tracked artifact joins whichever commit is
+# next. Nothing caught it. Five suites and the whole selftest ran green either side,
+# because no suite has any opinion about files it does not read.
+#
+# A BUNDLE IS A TRANSFER ARTIFACT, which is why it belongs with the .pyc and not
+# with the Parquet fixtures. It is derived from commits that are already in the
+# history, it is named after whatever branch was in flight, nothing in the tree
+# opens one, and the next person to make one will give it a different name -- so it
+# can never be a fixture somebody depends on. The same two-part rule therefore
+# applies: not tracked, and ignored, because ignoring is what stops the deletion
+# being undone by the next `git add -A`.
 
 _pyc_root="$(cd "$PGC_TESTDIR/.." && pwd)"
 _pyc_repo="$(git -C "$_pyc_root" rev-parse --is-inside-work-tree 2>/dev/null || echo no)"
@@ -69,6 +85,11 @@ _pyc_tracked_list() {
 _pyc_ignored() {  # _pyc_ignored PATH -> ignored | not-ignored | no-repo
 	[ "$_pyc_repo" = true ] || { echo no-repo; return; }
 	git -C "$_pyc_root" check-ignore -q -- "$1" && echo ignored || echo not-ignored
+}
+
+_pyc_bundles() {	# -> the tracked git bundles, or `no-repo`
+	[ "$_pyc_repo" = true ] || { printf 'no-repo'; return; }
+	git -C "$_pyc_root" ls-files -- '*.bundle' | sort | tr '\n' ' '
 }
 
 # PREMISE. git has to be able to answer, and it has to be answering about THIS
@@ -122,5 +143,36 @@ check_text "and the tree ignores the directory Python writes them to" \
 check_text "and a compiled artifact written beside its source" \
 	"$(_pyc_ignored test/x.pyc)" "ignored"
 
-unset _pyc_root _pyc_tracked _pyc_repo
-unset -f _pyc_tracked_list _pyc_ignored
+# ---- and a transfer artifact is the same rule, for the same reason ------------
+
+# Counted rather than compared against an empty string: `check_text` refuses a side
+# that is empty, because "nothing was compared" and "the two agreed" are the same
+# observation otherwise. My first version of these three arms compared against "" and
+# all three were refused on exactly that ground -- the harness catching an arm that
+# asserted nothing.
+_pyc_bund="$(_pyc_bundles)"
+check_text "no git bundle is tracked" \
+	"$([ "$_pyc_bund" = no-repo ] && echo no-repo \
+		|| printf '%s tracked' "$(printf '%s' "$_pyc_bund" | wc -w)")" \
+	"0 tracked"
+# Named for the thing it lists, not "them": the Python half four arms up already owns
+# `and the tracked list names none of them`, and the ledger's duplicate-name detector
+# caught the collision on the first merge -- `distinct checks this merge=866` against
+# `checks run=867`. #982's defect, created in the session that finished removing the
+# last of its 24 instances.
+check_text "and the tracked BUNDLE list names none of them" \
+	"[${_pyc_bund}]" "[]"
+
+# The other half, as for the .pyc: without the ignore rule the deletion lasts until
+# the next `git add -A` in a clone where somebody has moved a branch about.
+check_text "and the tree ignores a git bundle, so the next add cannot re-add it" \
+	"$(_pyc_ignored some-branch.bundle)" "ignored"
+
+# CONTROL. The rule keys on the SUFFIX, so a source file merely named like one must
+# not be swept up -- and without this, a check-ignore answering "ignored" to
+# everything would make the arm above vacuous.
+check_text "control: a source file named like a bundle is not ignored" \
+	"$(_pyc_ignored test/bundle_notes.sh)" "not-ignored"
+
+unset _pyc_root _pyc_tracked _pyc_repo _pyc_bund
+unset -f _pyc_tracked_list _pyc_ignored _pyc_bundles
