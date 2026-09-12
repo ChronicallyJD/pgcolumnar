@@ -18,6 +18,61 @@ true until the next version shipped.
 
 ### Added
 
+- A UNIQUE-constraint check passed on any psql failure, and a recursive sweep passed on a
+  tree it never read (#1033).
+
+  `native_recluster.sh` decided "unique still enforced" from psql's exit code:
+
+      psql ... -c "INSERT INTO n VALUES (1, 0, 0, 'x');" >/dev/null 2>&1 && echo no || echo yes
+
+  `|| echo yes` cannot tell a unique violation from any other failure, and
+  `>/dev/null 2>&1` discards the message so nothing else can either. Measured on the
+  identical expression: a missing table, a wrong port, psql absent from PATH and a syntax
+  error all produced `yes`.
+
+  THE CONTRAST, RUN END TO END on PG 18 rather than argued. The same mutation -- point the
+  probe at a table that does not exist -- against both versions of the arm:
+
+      main's arm    PASS  "unique still enforced"       suite PASSED, rc=0, 12 passed
+      this arm      FAIL  got [42P01] want [23505]      suite FAILED, rc=1
+
+  And the arm is observable in the direction that matters. Replace the unique index with a
+  plain one and the duplicate INSERT succeeds. The arm goes red there too, so it tests the
+  constraint rather than merely the SQLSTATE plumbing.
+
+  The arm now reads the SQLSTATE. 23505 is `ERRCODE_UNIQUE_VIOLATION` and comes from the
+  index; 42P01, 42601 and a connection failure do not. `arrow_import.sh` and `audit.sh`
+  already read SQLSTATE this way, so this is the convention rather than a new one.
+
+  SECOND, A SWEEP WITH NO POPULATION. `local_open_race_free.sh` asserted that a removed
+  helper leaves no trace:
+
+      "$(grep -rc 'PgColumnarRejectNonRegularFile' "$SRC" | awk -F: '{s+=$2} END{print s+0}')" "0"
+
+  `grep -rc` prints one `file:count` line per file and prints NOTHING for a path it cannot
+  open, and `END{print s+0}` then manufactures the `0` the check wants. The three arms above
+  it read `$OBJ`, not `$SRC`, so nothing established that `$SRC` was a source tree.
+  Measured:
+
+      SRC=src            files=56  premise=yes  arm=0   both agree
+      SRC=/no/such/tree  files=0   premise=no   arm=0   the premise catches it, the arm alone passes
+
+  A premise now counts the lines the recursive grep emitted, which is exactly what the
+  arm's `awk` sums over.
+
+  NEITHER SUITE NEEDS A LEDGER ROW, which is why these two and not a third.
+  `check_ledger.tsv` holds zero rows for `native_recluster` and `local_open_race_free`, so
+  the gate cannot refuse a new check there.
+
+  A third site has the same shape and is left alone: `selftest/400`'s tree-wide piped-loop
+  sweep. It lives in `harness_selftest`, which the ledger covers with 934 rows. Its detector
+  IS premised, since `:549` proves it fires on a planted offence, and only its glob
+  population is not. So it belongs to a change that carries the five-major ledger merge.
+
+  Verified on PG 18 in the container: `local_open_race_free.sh` PASSED, 11 checks;
+  `native_recluster.sh` PASSED, 12 checks; both mutations red; main's arm green under the
+  same mutation.
+
 - `native_ownership.sh` has a pytest twin, and it asserts the SQLSTATE (#432).
 
   Nine maintenance and DDL functions, each refused to a non-owner with 42501 rather
