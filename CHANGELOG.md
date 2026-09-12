@@ -579,11 +579,25 @@ true until the next version shipped.
 
 ### Changed
 
-- Serial join runtime filter is on by default, now that clustering guidance exists (#752).
+- Serial join runtime filter is on by default (#752).
 
-  Group skip still needs the fact table clustered on the join key. A scattered
-  fact table still cannot drop groups. Bloom rejection still applies. SET the GUC
-  off to compare.
+  Three measured cases, which is the argument. The docs being ready is why the
+  guidance exists, not why the default is right:
+
+      clustered on the join key   19 of 20 chunk groups removed, 1 read
+      scattered                   0 groups removed, but Bloom rejects more
+                                  than 15,000 of 19,800 non-matches
+      build side too large        the Bloom disables itself
+
+  The third is why this is safe everywhere. A filter that is on for every user
+  needs an answer for the case where it helps nothing, and turning itself off is
+  that answer. Group skip still needs the fact table clustered on the join key,
+  and a scattered fact table still cannot drop groups. SET the GUC off to compare.
+
+  NOT MEASURED: the overhead of a filter that is on, not saturated, and rejecting
+  almost nothing, which is a join where nearly every row matches. Saturation bounds
+  the pathological end and the scattered case bounds the middle, so this is reasoned
+  rather than measured. It is the gap to close if the default is ever doubted.
 
 ### Fixed
 
@@ -592,8 +606,7 @@ true until the next version shipped.
   Group skip was already measured: 19 of 20 groups when the keys are local,
   0 of 20 when they cycle. The page named the GUC and not that discriminator.
   A fact table that is not clustered on the join key still holds every key in
-  every group, so the filter cannot skip. The GUC stays off. The fold over a
-  join is a later slice.
+  every group, so the filter cannot skip. The fold over a join is a later slice.
 
 - A skipped arm records under the name it would have used, so a skipped arm and
   a deleted one are no longer indistinguishable (#994).
