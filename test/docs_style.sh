@@ -112,6 +112,42 @@ check "no document carries a merge conflict marker" \
 # CHANGELOG.md: dash characters only. See the scope note above.
 dashes=$(grep -c '—\|–' "$SRCDIR/CHANGELOG.md" || true)
 check "CHANGELOG.md carries no em or en dash" "$dashes" "0"
+# ---- a star-schema fact table is clustered on the join key (#752) ----------
+#
+# The runtime-filter how-to named the GUC and not the layout that makes group
+# skip a no-op. native_join_runtime_filter already measured it: 19 of 20 groups
+# removed when the keys are local, 0 of 20 when they cycle. Nothing in docs/
+# said so. These two checks read the published pages, not the test suite.
+_howto_rf() {
+	python3 - "$SRCDIR/docs/how-to.md" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+heading = "## Skip fact-table work under a star-schema join"
+start = text.find(heading)
+if start < 0:
+    print("missing-heading")
+    raise SystemExit(0)
+rest = text[start + len(heading):]
+nxt = rest.find("\n## ")
+section = (rest if nxt < 0 else rest[:nxt]).lower()
+print("yes" if ("cluster" in section and "join key" in section) else "no")
+PY
+}
+check "how-to names clustering on the join key for the runtime filter" \
+	"$(_howto_rf)" "yes"
+
+_practices_jk() {
+	python3 - "$SRCDIR/docs/best-practices.md" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text(encoding="utf-8").lower()
+print("yes" if "join key" in text else "no")
+PY
+}
+check "best-practices names clustering on the join key" \
+	"$(_practices_jk)" "yes"
+
 # ---- a document that quotes the version must quote the current one ----------
 #
 # Nothing reads the VERSION file mechanically: no Makefile rule, no CI step. Two

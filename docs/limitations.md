@@ -690,6 +690,9 @@ A covering projection as the outer path is unchanged.
 A mixed-type or mixed-collation join still hashes both sides.
 It does not attach a key-range skip in those cases.
 A build side past the on-disk bloom saturation cap disables Bloom rather than emitting a saturated filter.
+Group skip needs the fact table clustered on the join key.
+A scattered join key still holds every key in every group.
+Bloom rejection still applies in that case.
 
 ## Skipping and collation
 

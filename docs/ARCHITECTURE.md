@@ -208,6 +208,7 @@ Serial join runtime filter. A `set_join_pathlist_hook` wraps a serial inner
 Hash Join whose outer path is a direct columnar scan. Core Hash Join keeps the
 answers. The coordinator drains the build side first. It then attaches a
 conservative key range and a Bloom filter to that scan.
+Group skip needs the fact table clustered on the join key.
 
 ### columnar_vector.c
 The vectorized aggregate path and its shared filter. A column-at-a-time filter

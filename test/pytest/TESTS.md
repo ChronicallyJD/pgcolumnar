@@ -73,6 +73,7 @@ behaviour, the source of that number is named.
 - [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
 - [26. test_check_records.py: every counted assertion is a record](#26-test_check_recordspy-every-counted-assertion-is-a-record)
 - [27. test_skip_loop_arms.py: a skipped arm records under its own name](#27-test_skip_loop_armspy-a-skipped-arm-records-under-its-own-name)
+- [28. test_docs_join_clustering.py: the runtime filter's layout precondition](#28-test_docs_join_clusteringpy-the-runtime-filters-layout-precondition)
 
 ## 1. How to read a test in here
 
@@ -2690,3 +2691,19 @@ cheapest to satisfy wrongly: a classifier that filed **everything** as `armless`
 it perfectly. It is load-bearing only because the per-bucket tests assert that a known
 site lands in the right bucket; the identity then says nothing else escaped. Both halves
 or neither.
+
+## 28. test_docs_join_clustering.py: the runtime filter's layout precondition
+
+#752's skip is measured. The how-to named the GUC and not the layout that
+makes group skip a no-op. These two tests read the published pages. They
+do not import the shell suite.
+
+| test | asserts |
+| --- | --- |
+| `test_how_to_names_join_key_clustering_for_the_runtime_filter` | the star-schema how-to section names clustering on the join key |
+| `test_best_practices_names_join_key_clustering_for_a_fact_table` | best-practices names that join key, not only timestamps |
+
+The shell twin is two checks in `test/docs_style.sh`. Documentation may
+identify the two files as counterparts. That is the only cross-reference.
+
+Public seams: `docs/how-to.md` and `docs/best-practices.md`.

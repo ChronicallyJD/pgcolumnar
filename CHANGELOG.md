@@ -579,6 +579,14 @@ true until the next version shipped.
 
 ### Fixed
 
+- The star-schema join how-to names clustering on the join key (#752).
+
+  Group skip was already measured: 19 of 20 groups when the keys are local,
+  0 of 20 when they cycle. The page named the GUC and not that discriminator.
+  A fact table that is not clustered on the join key still holds every key in
+  every group, so the filter cannot skip. The GUC stays off. The fold over a
+  join is a later slice.
+
 - A skipped arm records under the name it would have used, so a skipped arm and
   a deleted one are no longer indistinguishable (#994).
 
