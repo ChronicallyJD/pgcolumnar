@@ -2407,6 +2407,12 @@ Pytest twin of `test/native_join_runtime_filter.sh`. The two files are independe
 each builds its own fixtures and expected values. They share only the public
 EXPLAIN names and the SQL answers.
 
+### `test_join_runtime_filter_defaults_on`
+
+SHOW is `on` with no SET. A serial inner Hash Join then shows the coordinator
+without enabling the GUC in the session. The skip numbers live in the clustered
+test below.
+
 ### `test_serial_join_runtime_filter`
 
 Clustered integer keys. The coordinator wraps core Hash Join, the build tap

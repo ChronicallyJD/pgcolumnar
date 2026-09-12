@@ -24,6 +24,11 @@ if [[ "$(pc "SELECT current_setting(\$g\$pgcolumnar.enable_join_runtime_filter\$
   rf_on="SET pgcolumnar.enable_join_runtime_filter=on;"
   rf_off="SET pgcolumnar.enable_join_runtime_filter=off;"
 fi
+check "join runtime filter defaults on" \
+	"$(pc "SHOW pgcolumnar.enable_join_runtime_filter" | tail -1)" "on"
+default_plan="$(pc "SET max_parallel_workers_per_gather=0;SET enable_nestloop=off;SET enable_mergejoin=off;EXPLAIN(ANALYZE,TIMING off,SUMMARY off)$SQL")"
+check "default plan has runtime coordinator" \
+	"$(grep -c 'Columnar Runtime Filter Coordinator' <<<"$default_plan")" 1
 base="$(pc "${rf_off}SET max_parallel_workers_per_gather=0;SET enable_nestloop=off;SET enable_mergejoin=off;EXPLAIN(ANALYZE,TIMING off,SUMMARY off)$SQL")"
 on="$(pc "${rf_on}SET max_parallel_workers_per_gather=0;SET enable_nestloop=off;SET enable_mergejoin=off;EXPLAIN(ANALYZE,TIMING off,SUMMARY off)$SQL")"
 val(){ sed -n "s/.*$1: \([0-9]*\).*/\1/p" <<<"$2" | head -1; }

@@ -577,6 +577,14 @@ true until the next version shipped.
   which already re-record for themselves, so a future fix moved into the table-AM
   callback reddens here instead of double-recording.
 
+### Changed
+
+- Serial join runtime filter is on by default, now that clustering guidance exists (#752).
+
+  Group skip still needs the fact table clustered on the join key. A scattered
+  fact table still cannot drop groups. Bloom rejection still applies. SET the GUC
+  off to compare.
+
 ### Fixed
 
 - The star-schema join how-to names clustering on the join key (#752).
