@@ -2110,6 +2110,41 @@ true until the next version shipped.
   The blobs stay reachable in the repository's history -- removing a file from the tree does
   not unwrite it, and rewriting `main` is not something a stray artifact justifies. What this
   stops is the tree carrying them, and the next `git add -A` re-adding them.
+- `s3://` and `gs://` now refuse URL userinfo, as `http(s)://` has since #706. They were
+  absorbing it into the bucket name and reporting a missing object (#995).
+
+      http://u:p@127.0.0.1:1/x.parquet   22023  userinfo in "..." is not supported
+      s3://u:p@mybucket/x.parquet        58P01  "..." does not exist (HTTP 404)   <- before
+      s3://u:p@mybucket/x.parquet        22023  userinfo in "..." is not supported <- after
+
+  The old message was true and useless: the object did not exist *because* `u:p@mybucket`
+  had become a bucket name. `s3://user:key@bucket/obj` is a form other tools accept, so it
+  is a mistake a user makes, and the answer sent them looking for a missing object.
+
+  **Measured on main with an endpoint configured**, which is the only way to reach the
+  authority parse at all:
+
+      path style     HEAD /u%3Ap%40pgc-bucket/vh.parquet, Host untouched -> HTTP 404
+      virtual host   the bucket becomes the leftmost Host label -> could not resolve
+                     "u:p@pgc-bucket.s3.local"
+      write          export_parquet raised NO ERROR and PUT to
+                     /u%3Ap%40pgc-bucket/ui.parquet -- a bucket nobody named
+
+  **Not an SSRF, and that was checked rather than assumed.** Nothing splits the authority
+  at `@`, so the userinfo never becomes basic auth and never moves the host. The write row
+  is why this is refused rather than documented: acceptance there sends bytes to a bucket
+  the caller did not ask for.
+
+  The guard sits **before the endpoint is resolved**. Placed after it, the refusal would be
+  unreachable whenever no endpoint is configured, because the s3 branch demands one first
+  -- and the arms could then say nothing without an object-store fixture.
+
+  Eight arms in `test/objstore_userinfo.sh`, five of them refusals and **three of them
+  controls**, because the first probe of this gap proved nothing: with no credentials every
+  s3 URL returned `28000`, the clean one included, so a userinfo refusal was
+  indistinguishable from an unreachable object store. The controls hold that a clean URL
+  still reaches the endpoint demand, that a malformed URL still gets the bucket/key
+  refusal, and that an `@` in the KEY is left alone.
 
 - The matrix runner's accounting breakdown says which LINE it means, because the old
   wording produced a wrong planning number twice in one night.
