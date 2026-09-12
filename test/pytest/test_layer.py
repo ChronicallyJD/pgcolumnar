@@ -310,6 +310,94 @@ def test_a_bare_skip_refusal_keeps_its_reason_under_xdist(pytester, expect, mode
 
 
 @pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_a_collection_refusal_is_not_also_reported_as_a_silent_loss(pytester, expect, mode):
+    """#991. The refusal and the reconciliation contradicted each other.
+
+    A collection-time refusal printed its sentence and then, directly beneath it:
+
+        VACUITY: 1 collected test(s) never reported an outcome, so the run lost
+                 them silently: ...
+
+    The run did not lose it silently. It refused it LOUDLY, one line above. So a
+    reader who typed one bare skip got the correct diagnosis plus a second finding
+    telling them a test vanished without saying so, and the natural response is to
+    go looking for a lost test that was never lost.
+
+    `collected - reported` is the right set difference and the wrong MEANING: a
+    silent loss is when nobody said anything, and here the layer itself is what
+    stopped the run.
+
+    Measured before the fix -- and note the serial row is the one that survived
+    #963, because clearing `items[:]` in the worker already emptied the controller's
+    `collected` set under `-n`:
+
+        main   serial   refusal + the silent-loss line
+        main   xdist    no refusal at all (that was #963)
+        #963   serial   refusal + the silent-loss line   <- what this closes
+        #963   xdist    refusal, no line
+    """
+    pytester.makepyfile(
+        """
+        import pytest
+        @pytest.mark.skip
+        def test_one_offending_arm():
+            assert True
+        """
+    )
+    extra = ("-n", "2") if mode == "xdist" else ()
+    result = pytester.runpytest("-p", "pgc_vacuity", *extra)
+    blob = result.stdout.str() + result.stderr.str()
+    _collection_refusal_row(
+        result, expect, rc=4, reason_glob="*bare skip*",
+        name=f"refusal not a loss {mode}",
+    )
+    expect.num(blob.count("lost them silently"), 0,
+               f"{mode}: the refusal is not also reported as a silent loss")
+    expect.num(blob.count("VACUITY:"), 0,
+               f"{mode}: and with nothing else outstanding there is no VACUITY line at all")
+
+
+def test_a_genuine_silent_loss_is_still_reported(pytester, expect):
+    """THE CONTROL, and the arm above is worth nothing without it.
+
+    Dropping a problem from a reconciliation is one edit away from dropping the
+    guard. So: an item collected and never reported, with NO refusal anywhere, must
+    still be named -- which is the case the guard was written for, a test that
+    vanishes without anybody saying so.
+
+    The conftest removes an item AFTER the layer's own hook has recorded it, and
+    without deselecting it, which is exactly the shape of a crashed xdist worker.
+    `pytest_deselected` is the hook that tells a deliberate subset from a loss, and
+    nothing calls it here.
+    """
+    pytester.makeconftest(
+        """
+        import pytest
+
+        @pytest.hookimpl(trylast=True)
+        def pytest_collection_modifyitems(config, items):
+            del items[-1]
+        """
+    )
+    pytester.makepyfile(
+        """
+        def test_the_survivor(expect):
+            expect.num(1, 1, "this one runs")
+
+        def test_vanishes_without_a_word(expect):
+            expect.num(1, 1, "collected, then removed without deselection")
+        """
+    )
+    result = pytester.runpytest("-p", "pgc_vacuity")
+    blob = result.stdout.str() + result.stderr.str()
+    expect.num(blob.count("lost them silently"), 1,
+               "a genuine silent loss is still reported")
+    expect.num(blob.count("test_vanishes_without_a_word"), 1,
+               "and it is NAMED, because the next one will not be this one")
+    expect.num(result.ret, 1, "and the run is red for it")
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
 def test_a_broad_except_refusal_keeps_its_reason_under_xdist(pytester, expect, mode):
     """#963. Same table, second collection-time row. The defect is the hook,
     not the skip marker, so a second offence has to keep the sentence too.

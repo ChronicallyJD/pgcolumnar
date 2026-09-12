@@ -1426,9 +1426,21 @@ class _RunShape:
         # sees a slice, and the controller receives every worker's reports.
         if hasattr(session.config, "workerinput"):
             return
+        # A LOUD REFUSAL IS NOT A SILENT LOSS (#991). On a collection-time refusal
+        # every collected item is accounted for BY the refusal: nothing ran, the layer
+        # said so, and the sentence is printed immediately above this one. Reporting
+        # "the run lost them silently" there gave a reader two findings where there is
+        # one, and sent them looking for a lost test that was never lost -- while the
+        # guard whose whole subject is a SILENT loss fired on the single event that is
+        # the opposite of silent.
+        #
+        # Only this problem is dropped. The setup-skip problem below still prints: a
+        # fixture removing every test that depends on it is not something the refusal
+        # covers, and the two are independent findings.
+        refused = getattr(session.config, "_pgc_vacuity_refused", None)
         problems = []
         missing = sorted(self.collected - self.reported)
-        if missing:
+        if missing and not refused:
             problems.append(
                 f"{len(missing)} collected test(s) never reported an outcome, so the "
                 f"run lost them silently: " + ", ".join(missing[:5])
@@ -1489,6 +1501,11 @@ def _collection_usage_error(session, config, items, msg):
     pytest_testnodedown, which is the process wrap_session already knows
     how to print.
     """
+    # RECORDED BEFORE EITHER BRANCH, so the reconciliation in _RunShape cannot call
+    # this a silent loss (#991). Every refusal in the layer comes through here, which
+    # is the only reason one assignment covers all five call sites.
+    config._pgc_vacuity_refused = msg
+
     if hasattr(config, "workerinput"):
         wo = getattr(config, "workeroutput", None)
         if wo is None:
