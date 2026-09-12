@@ -2111,6 +2111,38 @@ true until the next version shipped.
   not unwrite it, and rewriting `main` is not something a stray artifact justifies. What this
   stops is the tree carrying them, and the next `git add -A` re-adding them.
 
+- The matrix runner's accounting breakdown says which LINE it means, because the old
+  wording produced a wrong planning number twice in one night.
+
+  It printed:
+
+      N via lib.sh's accounting; by their own mechanism: audit bench_guards concurrency ...
+
+  and "by their own mechanism" was read -- by two different readers, hours apart -- as *emits
+  no RESULT records*, which would make those twelve suites impossible to seed into the
+  mutation ledger. A bound on how far `suites_not_covered` can fall was derived from that
+  reading.
+
+  **It is false. Measured by running all twelve and counting:**
+
+      audit 31   smoke 9   phase2 42   phase3 32   phase4 38   phase5 36
+      phase6 43  concurrency 7   unique_conc 31   update_conc 25
+      bench_guards 0   docs_style 0
+
+  **Ten of the twelve emit records.** The set is the suites whose log lacks lib.sh's
+  `accounting:` line and carries their own `checks run:` instead -- a statement about the
+  accounting LINE and nothing else. Only `bench_guards` and `docs_style` emit no records, for
+  the reason `pgc_log_shows_any_accounting`'s comment already gives: those two never source
+  `lib.sh` at all. Defining a private `check` is orthogonal -- `audit` does it and records 31.
+
+  So the bound is **two suites, not twelve**, with about 294 records sitting in the other ten.
+
+  The label now names the line and disclaims the records in the same breath. The selftest arm
+  that pins it follows the reword; widening that arm to pin the disclaimer separately needs
+  either a new ledger row or a rename that would orphan an existing one, and `main` has no
+  tool to remove an orphan until #983 lands -- so the sequencing is written into the arm's
+  comment rather than quietly skipped.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
