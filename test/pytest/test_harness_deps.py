@@ -605,8 +605,15 @@ def _main(argv):
     return 0
 
 
-def _run_without_psycopg(args, expect):
+def _run_without_psycopg(args, expect, pg_config=None):
     """Run pytest with `import psycopg` forced to fail, and return the result.
+
+    THE SUBPROCESS GETS THE SAME pg_config THIS RUN WAS GIVEN (#1016). Without it the
+    child falls back to conftest's DEFAULT_PG_CONFIG, `/usr/local/pg18a/bin/pg_config`,
+    which exists on the audit container and on no GitHub runner. The cluster fixture then
+    fails on the missing pg_config BEFORE anything imports psycopg, so the output never
+    names the shim and the arm below reports the shim absent when the shim was fine.
+    Measured: passes against a source-built prefix, fails against a packaged one.
 
     A SHIM RATHER THAN AN UNINSTALL. Uninstalling psycopg would test the machine
     rather than the harness, cannot run concurrently with anything else, and
@@ -621,8 +628,9 @@ def _run_without_psycopg(args, expect):
     )
     env = dict(os.environ)
     env["PYTHONPATH"] = shim + os.pathsep + str(HERE)
+    extra = ["--pg-config", pg_config] if pg_config else []
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *extra, *args],
         cwd=str(HERE), env=env, capture_output=True, text=True,
     )
     # PREMISE: the shim must actually bite, or this arm proves nothing at all.
@@ -651,7 +659,7 @@ def test_the_guard_half_of_the_corpus_runs_without_a_database_driver(expect):
           % (len(NO_CLUSTER), out.strip().splitlines()[-1]))
 
 
-def test_a_cluster_test_still_needs_the_driver(expect):
+def test_a_cluster_test_still_needs_the_driver(expect, pytestconfig):
     """THE CONTROL, and without it the arm above is satisfied by a corpus that
     connects to nothing at all.
 
@@ -659,7 +667,11 @@ def test_a_cluster_test_still_needs_the_driver(expect):
     IMPORT lazy. A test that actually wants a connection must still fail when the
     driver is gone, and it must fail for that reason rather than by being skipped.
     """
-    proc = _run_without_psycopg(["test_connection.py"], expect)
+    # The pg_config THIS run was given, not conftest's default: see
+    # _run_without_psycopg. Without it the child dies on a missing prefix before it can
+    # reach the import, and this arm then reports the shim absent.
+    proc = _run_without_psycopg(["test_connection.py"], expect,
+                                pg_config=pytestconfig.getoption("--pg-config"))
     expect.at_least(proc.returncode, 1,
                     "a cluster test cannot pass without the driver")
     expect.at_least(
