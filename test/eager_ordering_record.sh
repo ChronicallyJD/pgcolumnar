@@ -142,7 +142,7 @@ check "premise: the insert appended past the recorded run" \
 	"$([ "$(q "SELECT appended_groups FROM pgcolumnar.sort_status('tailgate');")" -gt 0 ] && echo yes || echo no)" "yes"
 check "control: recluster with an appended tail does not skip" \
 	"$([ "$(q "SELECT pgcolumnar.recluster('tailgate', 'k', 'j');")" -gt 0 ] && echo yes || echo no)" "yes"
-check "control: and it moved the layout" \
+check "control: and it moved the tailgate layout" \
 	"$([ "$(layout tailgate)" != "$TAIL_BEFORE" ] && echo moved || echo unchanged)" "moved"
 
 # And the mirror: a lexicographic run is not a Z-order run, so recluster must
@@ -152,7 +152,7 @@ psql_run "SELECT pgcolumnar.vacuum_sorted('lexgate', 'k');"
 LEXGATE_BEFORE="$(layout lexgate)"
 check "control: recluster does not skip a LEXICOGRAPHIC run of the same lead column" \
 	"$(q "SELECT pgcolumnar.recluster('lexgate', 'k');")" "5"
-check "control: and it moved the layout" \
+check "control: and it moved the lexgate layout" \
 	"$([ "$(layout lexgate)" != "$LEXGATE_BEFORE" ] && echo moved || echo unchanged)" "moved"
 
 # ------------------------------------------------- an unsorted rewrite records nothing

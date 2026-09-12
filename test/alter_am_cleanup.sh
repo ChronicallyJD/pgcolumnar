@@ -116,7 +116,7 @@ check "premise: and installed in this suite's own database" \
 
 check "a plain table is created in a database without the extension" \
 	"$(aac_dbrun aac_nocx 'CREATE TABLE nx (i int primary key, t text);')" "rc=0"
-check "and dropped there" \
+check "and dropped there, without the extension" \
 	"$(aac_dbrun aac_nocx 'DROP TABLE nx;')" "rc=0"
 check "an explicit DROP of a temp table succeeds there" \
 	"$(aac_dbrun aac_nocx 'CREATE TEMP TABLE nxt (i int); DROP TABLE nxt;')" "rc=0"
@@ -136,7 +136,7 @@ check "ALTER COLUMN TYPE succeeds without the extension" \
 	"$(aac_dbrun aac_nocx 'ALTER TABLE rw ALTER COLUMN t TYPE varchar(64);')" "rc=0"
 check "CREATE MATERIALIZED VIEW succeeds without the extension" \
 	"$(aac_dbrun aac_nocx 'CREATE MATERIALIZED VIEW rwm AS SELECT * FROM rw;')" "rc=0"
-check "and REFRESH MATERIALIZED VIEW does too" \
+check "and REFRESH MATERIALIZED VIEW does too, without the extension" \
 	"$(aac_dbrun aac_nocx 'REFRESH MATERIALIZED VIEW rwm;')" "rc=0"
 check "TRUNCATE succeeds without the extension" \
 	"$(aac_dbrun aac_nocx 'TRUNCATE rw;')" "rc=0"
@@ -232,7 +232,7 @@ check "premise: and took pgcolumnar.options with it" \
 
 check "a plain table is created after DROP EXTENSION" \
 	"$(aac_dbrun aac_dropx 'CREATE TABLE dxh (i int primary key, t text);')" "rc=0"
-check "and dropped there" \
+check "and dropped there, after DROP EXTENSION" \
 	"$(aac_dbrun aac_dropx 'DROP TABLE dxh;')" "rc=0"
 check "an explicit DROP of a temp table succeeds after DROP EXTENSION" \
 	"$(aac_dbrun aac_dropx 'CREATE TEMP TABLE dxt (i int); DROP TABLE dxt;')" "rc=0"
@@ -248,7 +248,7 @@ check "ALTER COLUMN TYPE succeeds after DROP EXTENSION" \
 	"$(aac_dbrun aac_dropx 'ALTER TABLE dxr ALTER COLUMN t TYPE varchar(64);')" "rc=0"
 check "CREATE MATERIALIZED VIEW succeeds after DROP EXTENSION" \
 	"$(aac_dbrun aac_dropx 'CREATE MATERIALIZED VIEW dxm AS SELECT * FROM dxr;')" "rc=0"
-check "and REFRESH MATERIALIZED VIEW does too" \
+check "and REFRESH MATERIALIZED VIEW does too, after DROP EXTENSION" \
 	"$(aac_dbrun aac_dropx 'REFRESH MATERIALIZED VIEW dxm;')" "rc=0"
 check "TRUNCATE succeeds after DROP EXTENSION" \
 	"$(aac_dbrun aac_dropx 'TRUNCATE dxr;')" "rc=0"

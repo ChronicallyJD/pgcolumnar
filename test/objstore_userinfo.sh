@@ -50,7 +50,7 @@ URL="http://u:p@127.0.0.1:1/x.parquet"
 # --- premise: the read path refuses userinfo with the parse guard ------------
 check "read_parquet refuses userinfo (22023, the parse guard)" \
 	"$(sqlstate_of "SELECT * FROM pgcolumnar.read_parquet('$URL') AS t(v int)")" "22023"
-check "and its message names userinfo" \
+check "and the read_parquet message names userinfo" \
 	"$(msg_of "SELECT * FROM pgcolumnar.read_parquet('$URL') AS t(v int)")" "1"
 
 # --- the gap: the write path must refuse with the SAME guard -----------------
@@ -58,7 +58,7 @@ check "and its message names userinfo" \
 # then fails the allow-list at connect -- fail closed, wrong reason.
 check "export_parquet refuses userinfo (22023, not an allow-list 42501)" \
 	"$(sqlstate_of "SELECT pgcolumnar.export_parquet('ex', '$URL')")" "22023"
-check "and its message names userinfo" \
+check "and the export_parquet message names userinfo" \
 	"$(msg_of "SELECT pgcolumnar.export_parquet('ex', '$URL')")" "1"
 check "export_arrow refuses userinfo through the same handle (22023)" \
 	"$(sqlstate_of "SELECT pgcolumnar.export_arrow('ex', 'http://u@127.0.0.1:1/x.arrow')")" "22023"

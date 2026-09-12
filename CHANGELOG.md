@@ -1932,6 +1932,52 @@ true until the next version shipped.
   covers, so its check names have no rows. That is also why the twenty-four collisions
   matter for #432 rather than for the census today -- twenty-one of them are in suites
   that become covered only when the 240 are seeded.
+- The last five suites' continuation checks name the case they continue, closing the
+  rename half of #982 (ten records, five files).
+
+  Ten checks across five suites shared five ledger keys with another check. Measured by
+  running every one of the five on clean `main` and on this branch, on the same box:
+
+      suite                     control (clean main)        this branch
+      sorted_pathkeys           113 records 110 keys  3 lost   113  113  0
+      vector_agg_tlist_shape     68 records  65 keys  3 lost    68   68  0
+      alter_am_cleanup           45 records  43 keys  2 lost    45   45  0
+      eager_ordering_record      31 records  30 keys  1 lost    31   31  0
+      objstore_userinfo           7 records   6 keys  1 lost     7    7  0
+
+  Every record count is unchanged, so this renames and nothing else. All five suites:
+  `rc=0`, `FAIL=0`, on both trees.
+
+  **This is not a new convention. It is each file's own convention, applied where it
+  lapsed.** Every one of the five already names the case at a neighbouring site --
+  `and DESC still answers correctly`, `and NULLS FIRST still answers correctly`,
+  `and FILTER still answers correctly`, `and DISTINCT still answers correctly` -- and then
+  falls back to a bare `and it still answers correctly` for the next four. The fix is to
+  finish the pattern the author started:
+
+      REFUSE: a non-prefix of the key is not an order the rows are in
+        and it still answers correctly   ->  and a non-prefix still answers correctly
+      REFUSE: a column that is not in the key at all
+        and it still answers correctly   ->  and a non-key column still answers correctly
+      REFUSE: FILTER inside an expression over aggregates
+        and it still answers correctly   ->  and FILTER inside an expression still answers correctly
+
+  Two sites took the discriminator from the value expression instead, because their
+  headline names no table: `control: and it moved the layout` becomes
+  `... moved the tailgate layout` and `... moved the lexgate layout`, matching the
+  `layout tailgate` and `layout lexgate` the checks actually read.
+
+  No ledger change: none of the five is one of the two suites `test/check_ledger.tsv`
+  covers, and both ledger files are byte-identical to `main`.
+
+  One coupling, found by review rather than by either PR's own checks: #998 added a skip
+  loop to `sorted_pathkeys.sh` that lists its arms by name, and one of those names is the
+  arm this change renames. The two merge cleanly, so nothing would have presented a
+  conflict -- #998's own guard would simply have gone red in `main`. The loop is updated
+  here, and its guard reports no mismatch. Counting the old name is how you MISS this: an
+  unanchored `grep -F` finds 3 occurrences because both renames EXTEND the name rather
+  than replace it, so each renamed line still matches its own old form. Anchoring on the
+  closing quote gives 1, which is the one that matters.
 
 ## [1.0-alpha3] - 2026-09-02
 
