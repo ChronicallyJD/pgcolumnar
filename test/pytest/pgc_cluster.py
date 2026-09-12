@@ -249,6 +249,31 @@ class Cluster:
                         "",
                         f"port={self.port}",
                         "listen_addresses='127.0.0.1'",
+                        # THE SOCKET DIRECTORY, pinned to this cluster's own datadir.
+                        #
+                        # A PACKAGED POSTGRES DEFAULTS IT SOMEWHERE THIS USER CANNOT WRITE,
+                        # and that is why the CI job could not start a cluster at all.
+                        # Measured, same box, same major:
+                        #
+                        #   /usr/lib/postgresql/18  (PGDG, --runstatedir=/run)
+                        #       #unix_socket_directories = '/var/run/postgresql'
+                        #   /usr/local/pg18a        (source build, no such flag)
+                        #       #unix_socket_directories = '/tmp'
+                        #
+                        # and /var/run/postgresql is drwxrwsr-x postgres postgres. So the
+                        # postmaster cannot create its lock file and FATALs, which reaches
+                        # the caller as nothing more than `pg_ctl: could not start server`.
+                        #
+                        # lib.sh does not pin this and does not need to: the suites job runs
+                        # under sudo and lib.sh drops to `runuser -u postgres`, which CAN
+                        # write that directory. This harness must be non-root throughout --
+                        # initdb refuses root -- and is not postgres either, so the default
+                        # is wrong for it on any packaged build.
+                        #
+                        # The datadir rather than /tmp: it already exists, it is already
+                        # this cluster's, it goes away with it, and two xdist workers cannot
+                        # collide in it.
+                        f"unix_socket_directories='{self.datadir}'",
                         "shared_preload_libraries='pgcolumnar'",
                         # Deterministic output so a hash oracle means the same thing
                         # on every machine. lib.sh sets the same three.
