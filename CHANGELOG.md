@@ -18,6 +18,44 @@ true until the next version shipped.
 
 ### Added
 
+- The mutation ledger covers a third suite: `differential`, 204 checks (#752).
+
+      suites_not_covered          250 -> 249
+      checks_never_observed_red   951 -> 1155
+      covered                     harness_selftest, native_join_runtime_filter, differential
+
+  BOTH NUMBERS ARE DERIVED FROM THE FILES, never computed from the old ones, and this
+  change is its own argument for that rule. Written against an earlier base the same
+  seed produced `913 -> 1117`; #983 then landed forty rows and pruned two, and the
+  census became 1155. Carrying 1117 forward would have been arithmetic that was true
+  when it was written and false when it shipped. The census is `grep -c` over the
+  ledger, re-run after the rebase; the ceiling is the registered list minus the
+  ledger's own suites.
+
+  WHY THIS SUITE, measured rather than chosen by taste. It is the heap-versus-columnar
+  differential correctness suite, so a check that cannot fail there is a wrong answer
+  nobody sees. 16 of the last 300 commits touch it, so the gate will fire. It runs in
+  19 seconds, and no open change touches it.
+
+  THE RISK THAT DECIDED IT WAS STABILITY ACROSS RUNS, because a suite whose checks move
+  between runs churns the ledger and fires the gate on nothing. Two consecutive runs on
+  PG17: 204 records, 204 distinct names, zero duplicate keys, and the two sets identical
+  in NAME AND IN VERDICT -- the second half matters because a flipped verdict churns the
+  `last observed red` column while the keys stay still.
+
+  Proof that seeding changed behaviour, re-run against this base:
+
+      after seeding, a log with one unseen differential check    rc=1, REFUSED
+      before seeding, the same log against main's ledger         rc=0, not refused
+      after seeding, the real log                                rc=0, no false red
+
+  The middle row is the point: the gate refuses an unseen check only in a suite it
+  covers, so before this those 204 checks were invisible to it. The third stops the
+  first from being bought with a gate that refuses everything.
+
+  The tax is the gate working: a change adding a check to `differential` now needs the
+  ledger regenerated in the same commit, which is a reviewable diff.
+
 - `test/selftest/470` now has the pytest half it shipped without (#994).
 
   #998 added the shell part and no pytest twin, against the owner's rule that a test
