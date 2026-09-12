@@ -2375,6 +2375,28 @@ contradiction — and because every other gate fixture in both harnesses states 
 something else. What holds the committed budget to naming both numbers is the arm
 above.
 
+### `test_a_record_that_does_not_name_its_major_is_not_evidence`
+
+A log can only be trusted about the major it says it came from (#1010). The record
+carried suite, part, name, verdict and reason, so the major was whatever the caller
+asserted -- the `--date not-a-date` failure one field over, and worse, because a major
+decides WHICH CHECKS CAN EXIST. `analyze_differential.sh:61` emits one record on PG15-17
+and a suite's worth on PG18+; `fk_referencing.sh:287` emits different check NAMES in its
+two branches.
+
+The six-field record must stop reconciling, or the field is optional and a log without
+it keeps being merged on the caller's word. Four invalid majors are refused
+(`eighteen`, `18.2`, `pg18`, empty) with a well-formed control, and `unknown` is
+accepted -- `harness_selftest` never references `PGC_MAJOR`, so 907 committed rows have
+no major to name even in principle.
+
+### `test_the_census_reports_the_major_it_read`
+
+Read and discarded is indistinguishable from not read at all. `census` is how a human
+checks a log before merging it, so a major the tool validates and then drops cannot be
+audited. Asserted on the FIELD rather than a substring: `18` appears inside a check name
+or a reason just as happily.
+
 ## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
 
 **Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5

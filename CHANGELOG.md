@@ -45,9 +45,21 @@ true until the next version shipped.
   case rather than a courtesy: `harness_selftest` never references `PGC_MAJOR`, so every
   record it emits says `unknown` truthfully -- 907 of the 1155 committed ledger rows.
 
-  The ledger itself is unchanged: it still keys on `(suite, part, name)` and discards
-  the major. Keying on it is #1010's second step, and it needs a migration this change
-  does not.
+  The ledger itself is unchanged in SHAPE: it still keys on `(suite, part, name)` and
+  discards the major. Keying on it is #1010's second step, and it needs a migration this
+  change does not.
+
+      checks_never_observed_red   1155 -> 1164
+      suites_not_covered          249 (unchanged; no suite was seeded)
+
+  The nine rows are part 400's new arms: four emitter arms driving `pgc_record` with
+  `PGC_MAJOR` set to two different values and unset, one that the reason still follows
+  the major, and five reconciler arms -- four invalid majors and the `unknown` control
+  that keeps them from passing because the reconciler started refusing everything.
+  RE-DERIVED from the committed file by the derivation the budget file states, not
+  computed from 1155:
+
+      awk -F'\t' '$4=="never"' test/check_ledger.tsv | wc -l
 
 - The mutation ledger covers a third suite: `differential`, 204 checks (#752).
 
