@@ -483,6 +483,51 @@ true until the next version shipped.
 
 ### Fixed
 
+- A skipped arm records under the name it would have used, so a skipped arm and
+  a deleted one are no longer indistinguishable (#994).
+
+  Four `check_skip` calls stood in for 19 named arms under a name none of those
+  arms has. When the condition failed, those 19 produced no record at all: a
+  reader could not tell which arms did not run, and the ledger could not tell a
+  skipped arm from a deleted one, because a skipped arm's row has no matching
+  record exactly as a removed check's would.
+
+  The convention was already in the tree, 30 lines below one of the offenders:
+  skip under each arm's own name, in a loop.
+
+  The issue counted 17. It is 19. Two arms in `sorted_pathkeys.sh` go through
+  `ansp`, which records under its first argument, and a sweep that looked for
+  `check` did not see them.
+
+  One arm's name interpolated the very variable whose emptiness causes its own
+  skip, so the skip would have recorded a key no real run emits. That name is now
+  stable and the collation it names moves into the display, which is not the key.
+
+  Six sites, not four, and 19 arms. Two arms go through `ansp`, which records
+  under its first argument. Two sites hold their arms in the `then` branch with
+  the skip in the `else`, which a classifier looking only forward reads as having
+  no arms at all.
+
+  `340` also skipped five arms behind a branch whose comment said they had
+  already been skipped above. Above had skipped the three premises, not these
+  five, so on a box with no non-root user five arms produced no record.
+
+  A new selftest part asserts every skip loop names exactly the arms its sibling
+  branch would emit. The loop duplicates those names, so a rename desynchronises
+  them silently and the skip records under a name nothing emits, which is the
+  failure this change exists to remove. That is not hypothetical: writing this,
+  a name from another open PR's rename went into the loop, and the comparison is
+  what caught it.
+
+  The part reports what it did not compare. One loop's sibling arm is generated
+  by a loop of its own, so a literal comparison would be wrong in both
+  directions. That loop is the one this change repairs, and it is not covered.
+  A total of zero mismatches would otherwise read as a corpus in agreement.
+
+  This is the precondition for arming the orphan guard in #983. Until a skipped
+  arm records under its own name, absence cannot mean removal.
+
+
 - A conftest can no longer switch a vacuity rule off by rebinding a name the
   layer reads (#924).
 

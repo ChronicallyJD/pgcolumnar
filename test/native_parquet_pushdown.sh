@@ -211,7 +211,14 @@ if f.metadata.num_row_groups != 4:
     sys.exit("expected 4 row groups")
 PYDEC
 	if [ $? -ne 0 ]; then
-		check_skip "the integer-DECIMAL pushdown case" "SKIP  could not build the integer-DECIMAL pushdown file" "could not build the fixture file"
+		# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994).
+		for _pd_n in "INT64-backed DECIMAL: predicate skips 3 of 4 groups" \
+				"INT64-backed DECIMAL: skipping did not drop rows" \
+				"INT64-backed DECIMAL: unfiltered scan skips nothing"; do
+			check_skip "$_pd_n" \
+				"SKIP  $_pd_n (could not build the integer-DECIMAL pushdown file)" \
+				"could not build the fixture file"
+		done
 	else
 		psql_run "CREATE FOREIGN TABLE ftdec (d numeric) SERVER pq
 		          OPTIONS (path '$PGC_WORKDIR/dec_push.parquet');"
@@ -225,7 +232,16 @@ PYDEC
 			"$(skipped_for_t ftdec 'd >= 0')" "0"
 	fi
 else
-	check_skip "the integer-DECIMAL pushdown case" "SKIP  pyarrow not available; integer-DECIMAL pushdown case skipped" "pyarrow not available"
+	# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994). The OUTER gate: without
+	# pyarrow none of the three arms runs, and a single skip named for none of them
+	# left all three with no record.
+	for _pd_o in "INT64-backed DECIMAL: predicate skips 3 of 4 groups" \
+			"INT64-backed DECIMAL: skipping did not drop rows" \
+			"INT64-backed DECIMAL: unfiltered scan skips nothing"; do
+		check_skip "$_pd_o" \
+			"SKIP  $_pd_o (pyarrow not available)" \
+			"pyarrow not available"
+	done
 fi
 
 pgc_summary

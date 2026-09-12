@@ -208,7 +208,19 @@ if phys != {"i32": "INT32", "i64": "INT64"}:
     sys.exit("unexpected physical types: %s" % phys)
 PYINT
 	if [ $? -ne 0 ]; then
-		check_skip "the integer-backed decimal case" "SKIP  this pyarrow does not store decimals as integers as expected" "this pyarrow does not store decimals as integers"
+		# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994): a single skip under a
+		# name none of the six arms has leaves all six with no record, so a skipped
+		# arm and a deleted one are indistinguishable to a reader and to the ledger.
+		for _fl_n in "INT32-backed DECIMAL reads" \
+				"INT64-backed DECIMAL reads" \
+				"INT32-backed DECIMAL keeps its null" \
+				"parquet_schema advises numeric for an INT32 DECIMAL" \
+				"parquet_schema advises numeric for an INT64 DECIMAL" \
+				"an INT64 DECIMAL still binds to bigint as the unscaled integer"; do
+			check_skip "$_fl_n" \
+				"SKIP  $_fl_n (this pyarrow does not store decimals as integers as expected)" \
+				"this pyarrow does not store decimals as integers"
+		done
 	else
 		check "INT32-backed DECIMAL reads" \
 			"$(q "SELECT string_agg(d::text, ',' ORDER BY d) FROM pgcolumnar.read_parquet('$W/dec_i32.parquet') AS t(d numeric);")" \
@@ -231,7 +243,24 @@ PYINT
 			"-3500000,0,1250000"
 	fi
 else
-	check_skip "the foreign-producer FLBA cases" "SKIP  pyarrow not available; foreign-producer FLBA cases skipped" "pyarrow not available"
+	# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994). This is the OUTER gate:
+	# without pyarrow none of the ten arms in the `then` branch runs, and a single
+	# skip named for none of them left all ten with no record. Only one branch ever
+	# fires, so naming the six that the inner gate also names duplicates nothing.
+	for _fl_o in "pyarrow uuid reads as uuid" \
+			"pyarrow decimal128 values are exact" \
+			"crafted out-of-range scale is rejected, not decoded" \
+			"backend survived the crafted scale" \
+			"INT32-backed DECIMAL reads" \
+			"INT64-backed DECIMAL reads" \
+			"INT32-backed DECIMAL keeps its null" \
+			"parquet_schema advises numeric for an INT32 DECIMAL" \
+			"parquet_schema advises numeric for an INT64 DECIMAL" \
+			"an INT64 DECIMAL still binds to bigint as the unscaled integer"; do
+		check_skip "$_fl_o" \
+			"SKIP  $_fl_o (pyarrow not available)" \
+			"pyarrow not available"
+	done
 fi
 
 pgc_summary
