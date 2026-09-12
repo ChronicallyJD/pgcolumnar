@@ -244,9 +244,13 @@ harness_selftest	300-a-test-script-must-be-runnable	premise: the documents name 
 harness_selftest	300-a-test-script-must-be-runnable	premise: the sourced parts are inside the population, not pruned	never	-
 harness_selftest	300-a-test-script-must-be-runnable	premise: the sweep reads a population of scripts, not an empty find	never	-
 harness_selftest	310-a-compiled-artifact-must-not-be	and a compiled artifact written beside its source	never	-
+harness_selftest	310-a-compiled-artifact-must-not-be	and the tracked BUNDLE list names none of them	never	-
 harness_selftest	310-a-compiled-artifact-must-not-be	and the tracked list names none of them	never	-
+harness_selftest	310-a-compiled-artifact-must-not-be	and the tree ignores a git bundle, so the next add cannot re-add it	never	-
 harness_selftest	310-a-compiled-artifact-must-not-be	and the tree ignores the directory Python writes them to	never	-
+harness_selftest	310-a-compiled-artifact-must-not-be	control: a source file named like a bundle is not ignored	never	-
 harness_selftest	310-a-compiled-artifact-must-not-be	no compiled Python artifact is tracked	never	-
+harness_selftest	310-a-compiled-artifact-must-not-be	no git bundle is tracked	never	-
 harness_selftest	310-a-compiled-artifact-must-not-be	premise: and git ls-files sees the harness it is being asked about	never	-
 harness_selftest	310-a-compiled-artifact-must-not-be	premise: and that a tracked source file is not	never	-
 harness_selftest	310-a-compiled-artifact-must-not-be	premise: check-ignore agrees a build object is already ignored	never	-
