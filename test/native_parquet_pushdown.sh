@@ -211,7 +211,14 @@ if f.metadata.num_row_groups != 4:
     sys.exit("expected 4 row groups")
 PYDEC
 	if [ $? -ne 0 ]; then
-		check_skip "the integer-DECIMAL pushdown case" "SKIP  could not build the integer-DECIMAL pushdown file" "could not build the fixture file"
+		# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994).
+		for _pd_n in "INT64-backed DECIMAL: predicate skips 3 of 4 groups" \
+				"INT64-backed DECIMAL: skipping did not drop rows" \
+				"INT64-backed DECIMAL: unfiltered scan skips nothing"; do
+			check_skip "$_pd_n" \
+				"SKIP  $_pd_n (could not build the integer-DECIMAL pushdown file)" \
+				"could not build the fixture file"
+		done
 	else
 		psql_run "CREATE FOREIGN TABLE ftdec (d numeric) SERVER pq
 		          OPTIONS (path '$PGC_WORKDIR/dec_push.parquet');"

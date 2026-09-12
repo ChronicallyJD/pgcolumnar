@@ -674,7 +674,18 @@ _fp_as() {	# _fp_as EXPR -> stdout, or `harness-unreadable`
 }
 
 if [ -z "$_fp_user" ]; then
-	check_skip "the unreadable-source refusal" "SKIP  no non-root user to read as; root ignores chmod 000" "no non-root user to read as"
+	# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994). A single skip named
+	# "the unreadable-source refusal" -- a name no arm below has -- leaves the three
+	# names with no record at all, so a reader cannot tell WHICH arms did not run and
+	# the ledger cannot tell a skipped arm from a deleted one. That is the same shape
+	# the loop 30 lines below already avoids.
+	for _fp_n in "premise: the unprivileged reader can source the staged harness" \
+			"premise: the tree fingerprints to something when it is readable" \
+			"premise: the unprivileged read agrees while everything is readable"; do
+		check_skip "$_fp_n" \
+			"SKIP  $_fp_n (no non-root user to read as; root ignores chmod 000)" \
+			"no non-root user to read as"
+	done
 else
 	# Premise nought: the reader can source the copy at all. Stated separately
 	# from the fingerprint premise so a reachability failure and a fingerprint

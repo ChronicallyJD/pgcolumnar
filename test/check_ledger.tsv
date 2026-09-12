@@ -859,6 +859,9 @@ harness_selftest	460-the-controller-must-record-the-binary	premise: the mutation
 harness_selftest	460-the-controller-must-record-the-binary	premise: this part was given an executable pg_config to read the prefix from	never	-
 harness_selftest	460-the-controller-must-record-the-binary	so a child suite under PGC_SKIP_BUILD reaches verified, not source-only (#961)	never	-
 harness_selftest	460-the-controller-must-record-the-binary	the controller's stamp carries BOTH fields (#961)	never	-
+harness_selftest	470-a-skipped-arm-records-under-its-own-name	every skip loop names exactly the arms its sibling branch would emit (#994)	never	-
+harness_selftest	470-a-skipped-arm-records-under-its-own-name	premise: at least four loops had arms to be compared against	never	-
+harness_selftest	470-a-skipped-arm-records-under-its-own-name	premise: the sweep found skip loops to compare	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table answer equals filter-off	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table join order matches filter-off	never	-
 native_join_runtime_filter	native_join_runtime_filter	3-table plan has coordinator	never	-
