@@ -286,7 +286,7 @@ if [ -z "$ALTCOLL" ] || \
 			"premise: and the column's collation really did change" \
 			"REFUSE: the order the rows are in is no longer the order the column asks for" \
 			"and ORDER BY k LIMIT returns the new collation's first rows, matching heap" \
-			"and the whole ordered result matches heap"; do
+			"and the whole ordered result matches heap under the new collation"; do
 		check_skip "$_sp_n" \
 			"SKIP  $_sp_n (this server has no collation that disagrees with C on ASCII)" \
 			"this server has no suitable collation"

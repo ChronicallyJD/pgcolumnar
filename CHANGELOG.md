@@ -1970,6 +1970,15 @@ true until the next version shipped.
   No ledger change: none of the five is one of the two suites `test/check_ledger.tsv`
   covers, and both ledger files are byte-identical to `main`.
 
+  One coupling, found by review rather than by either PR's own checks: #998 added a skip
+  loop to `sorted_pathkeys.sh` that lists its arms by name, and one of those names is the
+  arm this change renames. The two merge cleanly, so nothing would have presented a
+  conflict -- #998's own guard would simply have gone red in `main`. The loop is updated
+  here, and its guard reports no mismatch. Counting the old name is how you MISS this: an
+  unanchored `grep -F` finds 3 occurrences because both renames EXTEND the name rather
+  than replace it, so each renamed line still matches its own old form. Anchoring on the
+  closing quote gives 1, which is the one that matters.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
