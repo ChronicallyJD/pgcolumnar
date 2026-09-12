@@ -261,6 +261,54 @@ def test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history(tmp_p
                "premise: and the refusal removed NOTHING")
 
 
+def test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal(tmp_path, expect):
+    """The first version of `--prune` deleted a suite.
+
+    One SKIP record put the part in `parts`, so every other row of that suite became an
+    orphan, and `--prune` removed them while reporting `not checked=0` and rc=0 -- the
+    most confident output the tool can produce. `not checked` protects a part the run does
+    not contain; a part CONTAINED BUT SKIPPED WHOLESALE fell in the gap between the two.
+
+    The rule is deliberately broader than that case: a SKIP anywhere in the part means
+    some arm did not run, so the run cannot tell a deleted check from one skipped under a
+    name that does not match it. One skipped timing check blocks pruning that whole part,
+    which is the direction a deleting command should err in.
+
+    The CONTROL is the half that matters: the same two rows must still be pruned when the
+    part's record is a PASS, or this is a tool that refuses to prune anything.
+    """
+    ledger = _w(tmp_path, "l.tsv", "")
+    _run("merge", "--ledger", ledger, "--date", "2026-09-01",
+         _w(tmp_path, "full.log",
+            "RESULT\tdemo\tpart1\tarm one\tPASS\t\n"
+            "RESULT\tdemo\tpart1\tarm two\tPASS\t\n"
+            "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 3\n"))
+    expect.num(len(_rows(ledger)), 3, "premise: the ledger holds all three rows")
+    skipped = _w(tmp_path, "skipped.log",
+                 "RESULT\tdemo\tpart1\tthe whole thing\tSKIP\tno fixture on this box\n"
+                 "checks run: 1\n")
+
+    out, rc = _run("orphan-scan", "--ledger", ledger, skipped)
+    expect.num(out.count("unprunable: 2 row(s)"), 1,
+               "a row in a part that skipped is unprunable, not an orphan")
+    expect.num(out.count("orphans=0 (0 carrying history), unprunable=2"), 1,
+               "and the summary keeps the two apart")
+    expect.num(rc, 1, "it is still a finding, so the scan does not return success")
+
+    _run("orphan-scan", "--prune", "--ledger", ledger, skipped)
+    expect.num(len(_rows(ledger)), 3, "--prune removes nothing from a part that skipped")
+    expect.num(_run("orphan-scan", "--prune", "--ledger", ledger, skipped)[0]
+               .count("the run did not exercise those checks"), 1,
+               "and it says so rather than declining silently")
+
+    passed = _w(tmp_path, "pass.log",
+                "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 1\n")
+    out, _ = _run("orphan-scan", "--prune", "--ledger", ledger, passed)
+    expect.num(out.count("removed 2 row(s)"), 1,
+               "control: the same rows ARE pruned when that part's record is a PASS")
+    expect.num(len(_rows(ledger)), 1, "control: and the ledger really is shorter")
+
+
 def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect):
     """The suite restriction is the MEANING of `suites_not_covered`, not a softening.
 

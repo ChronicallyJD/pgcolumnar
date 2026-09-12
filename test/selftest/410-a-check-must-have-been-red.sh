@@ -311,15 +311,99 @@ check "the refusal says why, rather than only that it refused" \
 	"$(_led_run orphan-scan --prune --ledger "$_lw/hist.tsv" "$_lw/o_after.log" \
 		| grep -c 'the catalogue is what this ledger is for')" "1"
 
-# WHY THIS REPORTS AND DOES NOT GATE, measured rather than asserted. Part 340
-# records ONE skip under a DIFFERENT name ("the unreadable-source refusal") when
-# the box has no non-root user, instead of skipping its two named arms. So on such
-# a box two committed rows have no record and are not removed checks -- a gate
-# refusing on absence would redden a correct run. This arm pins the precondition
-# for arming it: the branch must record under the names it skips.
-check "the conditional branch that makes absence ambiguous is still the OTHER shape" \
-	"$(grep -c 'check_skip "the unreadable-source refusal"' \
-		"$PGC_TESTDIR/selftest/340-the-binary-must-be-built-from.sh")" "1"
+# ---- a part the run SKIPPED is not a part the run can speak about ------------
+#
+# The first version of this deleted a suite. One SKIP record put the part in
+# `parts`, so every other row of that suite became an orphan, and `--prune` removed
+# them while reporting `not checked=0` and rc=0 -- the most confident output the
+# tool can produce. `not checked` protects a part the run does not contain at all;
+# a part CONTAINED BUT SKIPPED WHOLESALE fell in the gap between the two.
+#
+# Reported by @pgcolumnar-9b reviewing this change, on a three-row fixture for
+# `analyze_differential`, whose run on PG17 is a single SKIP. Nine suites skip
+# wholesale on PG17 and `suites_not_covered` is 250, so seeding any one of them
+# would have armed it.
+#
+# THE RULE IS BROADER THAN THAT CASE DELIBERATELY: a SKIP anywhere in the part
+# means some arm did not run, so the run cannot tell "this row's check was deleted"
+# from "this row's check was skipped under a name that does not match it" -- #994's
+# defect at suite granularity. One skipped timing check therefore blocks pruning
+# that whole part, and that is the direction a deleting command should err in.
+
+: > "$_lw/skp.tsv"
+printf 'RESULT\tdemo\tpart1\tarm one\tPASS\t\nRESULT\tdemo\tpart1\tarm two\tPASS\t\nRESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 3\n' > "$_lw/sk_full.log"
+printf 'RESULT\tdemo\tpart1\tthe whole thing\tSKIP\tno fixture on this box\nchecks run: 1\n' > "$_lw/sk_skipped.log"
+_led_run merge --ledger "$_lw/skp.tsv" --date 2026-09-01 "$_lw/sk_full.log" >/dev/null
+check "premise: the ledger holds all three of that part's rows" \
+	"$(wc -l < "$_lw/skp.tsv" | tr -d ' ')" "3"
+check "premise: and the skipped run emits exactly one of them, as a SKIP" \
+	"$(awk -F'\t' '$5=="SKIP"' "$_lw/sk_skipped.log" | wc -l | tr -d ' ')" "1"
+
+check "a row in a part that SKIPPED is reported as unprunable, not as an orphan" \
+	"$(_led_run orphan-scan --ledger "$_lw/skp.tsv" "$_lw/sk_skipped.log" \
+		| grep -c 'unprunable: 2 row(s)')" "1"
+check "and the summary keeps the two apart, so a zero orphan count is not a clean bill" \
+	"$(_led_run orphan-scan --ledger "$_lw/skp.tsv" "$_lw/sk_skipped.log" \
+		| grep -c 'orphans=0 (0 carrying history), unprunable=2')" "1"
+check "it is still a finding, so the scan does not return success" \
+	"$(_led_rc orphan-scan --ledger "$_lw/skp.tsv" "$_lw/sk_skipped.log")" "1"
+
+_led_run orphan-scan --prune --ledger "$_lw/skp.tsv" "$_lw/sk_skipped.log" >/dev/null
+check "--prune removes NOTHING from a part that skipped" \
+	"$(wc -l < "$_lw/skp.tsv" | tr -d ' ')" "3"
+check "and it says so rather than declining silently" \
+	"$(_led_run orphan-scan --prune --ledger "$_lw/skp.tsv" "$_lw/sk_skipped.log" \
+		| grep -c 'the run did not exercise those checks')" "1"
+
+# CONTROL. Without this the arms above are satisfied by a tool that refuses to prune
+# anything at all, which is the failure mode of every over-broad guard.
+printf 'RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 1\n' > "$_lw/sk_pass.log"
+check "control: the same two rows ARE pruned when that part's record is a PASS" \
+	"$(_led_run orphan-scan --prune --ledger "$_lw/skp.tsv" "$_lw/sk_pass.log" \
+		| grep -c 'removed 2 row(s)')" "1"
+check "control: and the ledger really is shorter afterwards" \
+	"$(wc -l < "$_lw/skp.tsv" | tr -d ' ')" "1"
+
+# Every row must land in exactly one of the four categories, or the classification
+# itself lost one -- which is the failure this whole tool exists to report.
+check "the four categories account for every ledger row" \
+	"$(_led_run orphan-scan --ledger "$_lw/orph.tsv" "$_lw/o_after.log" \
+		| grep -c 'classification lost rows')" "0"
+
+# WHY THIS REPORTS AND DOES NOT GATE -- pinned to the PRECONDITION, not to one
+# instance of it.
+#
+# This arm used to grep `340` for `check_skip "the unreadable-source refusal"`: one
+# skip standing in for three named arms, so on a box with no non-root user three
+# committed rows had no record and were not removed checks. #998 removed that line,
+# which SATISFIED the premise rather than breaking it -- and the arm as written would
+# then have failed. Worse, it would have failed in `main`: the two PRs compose with a
+# conflict only in the budget file, so nothing would have presented a marker to read.
+# Found by @pgcolumnar-9b, by composing the merge rather than reasoning about it.
+#
+# THE PRECONDITION IS NOT "340 HAS THAT LINE". It is that somewhere in the corpus a
+# skip still cannot be matched to the arms it stands in for -- while that holds, an
+# absent record does not reliably mean a removed check, and a gate refusing on absence
+# would redden a correct run. #998's sweep is the authority on that number, so this
+# reads it instead of re-deriving it: a second implementation of one count is how two
+# numbers come to disagree, which is the defect this file exists to catch.
+#
+# AND IT RETIRES ITSELF. The day `interpolated` and `armless` both reach zero this arm
+# fails, and the fix for that failure is to arm the gate -- which is the direction the
+# whole issue wants to go, stated as a check rather than as a comment somebody has to
+# remember to re-read.
+_orph_tool="$PGC_TESTDIR/../.github/scripts/skip-loop-arms.py"
+check "premise: the skip-loop sweep is present, so its counts can be read" \
+	"$([ -r "$_orph_tool" ] && echo yes || echo no)" "yes"
+_orph_sweep="$(python3 "$_orph_tool" "$PGC_TESTDIR" 2>&1)" || _orph_sweep="TOOL FAILED"
+check "premise: and it reported all four of its categories, so a zero is a measurement" \
+	"$(printf '%s\n' "$_orph_sweep" | grep -cE '^(loops|compared|interpolated|armless) [0-9]+$')" "4"
+_orph_i="$(printf '%s\n' "$_orph_sweep" | sed -n 's/^interpolated \([0-9]*\)$/\1/p')"
+_orph_a="$(printf '%s\n' "$_orph_sweep" | sed -n 's/^armless \([0-9]*\)$/\1/p')"
+check "the orphan scan stays a REPORT while any skip loop cannot be compared to its arms" \
+	"$({ [ "${_orph_i:-0}" -gt 0 ] || [ "${_orph_a:-0}" -gt 0 ]; } && echo "not yet armable" || echo "armable: arm the gate")" \
+	"not yet armable"
+unset _orph_tool _orph_sweep _orph_i _orph_a
 check "premise: and the two arms it stands in for are still named in the ledger" \
 	"$(grep -cP '^harness_selftest\t340-the-binary-must-be-built-from\tpremise: the unprivileged' \
 		"$_ledger")" "2"

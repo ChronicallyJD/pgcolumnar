@@ -2249,6 +2249,22 @@ not an orphan, because the run cannot speak about it — counting those as prese
 let a one-suite log certify the whole ledger. So the scan states how many rows it could
 not speak about, and this test pins that number as well as the orphan it found.
 
+### `test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal`
+
+The first version of `--prune` **deleted a suite**. One SKIP record put the part in the
+run's `parts`, so every other row of that suite became an orphan, and the prune removed them
+while reporting `not checked=0` and `rc=0` — the most confident output the tool can produce.
+`not checked` protects a part the run does not contain; a part *contained but skipped
+wholesale* fell in the gap between the two.
+
+The rule is deliberately broader than that case: a SKIP **anywhere** in the part means some
+arm did not run, so the run cannot tell a deleted check from one skipped under a name that
+does not match it. One skipped timing check blocks pruning that whole part, which is the
+direction a deleting command should err in.
+
+The control is the half that matters — the same two rows must still be pruned when the
+part's record is a `PASS`, or this is simply a tool that refuses to prune anything.
+
 ### `test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history`
 
 The catalogue of what has been seen red is what the ledger exists to be, and no run can

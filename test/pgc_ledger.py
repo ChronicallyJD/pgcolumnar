@@ -395,6 +395,27 @@ def cmd_orphan_scan(args):
     prevent, so `--prune` refuses the WHOLE prune when any orphan carries history
     rather than removing the safe ones and leaving a partial job to be finished by
     whoever reads the output.
+
+    AND A PART HOLDING ANY SKIP IS UNPRUNABLE, which is the first version's worst
+    bug rather than a refinement of it. `not checked` protects a part the run does
+    not contain at all. A part the run CONTAINS BUT SKIPPED WHOLESALE fell between
+    the two: one SKIP record put the part in `parts`, every other row of that suite
+    became an orphan, and `--prune` deleted the suite while reporting
+    `not checked=0` and rc=0 -- the most confident output the tool can produce.
+    Measured on a three-row fixture for `analyze_differential`, whose run is one
+    SKIP on PG17; reported by @pgcolumnar-9b reviewing this change.
+
+    THE RULE IS BROADER THAN THAT CASE ON PURPOSE. A SKIP anywhere in the part
+    means some arm did not run, so the run cannot distinguish "this row's check was
+    deleted" from "this row's check was skipped under a name that does not match
+    it" -- which is #994's defect, at suite granularity instead of branch
+    granularity. That is the same sentence this docstring already uses about part
+    340, so writing the hole one level up was not an oversight I get to call
+    subtle.
+
+    It is deliberately conservative: one skipped timing check blocks pruning that
+    whole part. Prune is a rare, deliberate act; a refusal costs a sentence and a
+    deletion costs history no run can recreate.
     """
     runs = _by_run(args.logs)
     if len(runs) > 1:
@@ -402,12 +423,17 @@ def cmd_orphan_scan(args):
             f"orphan-scan compares ONE run against the ledger, but got {len(runs)} logs: "
             "the union of a before-log and an after-log hides the disappearance")
     rows = read_ledger(args.ledger)
-    now = set(runs[0][1])
+    verdicts = runs[0][1]
+    now = set(verdicts)
 
     parts = {(s, p) for s, p, _ in now}
+    # A part holding ANY SKIP cannot speak about absence: see the docstring.
+    skipped_parts = {(s, p) for (s, p, _), v in verdicts.items() if "SKIP" in v}
     checkable = {k for k in rows if (k[0], k[1]) in parts}
     unchecked = sorted(set(rows) - checkable)
-    orphans = sorted(checkable - now)
+    absent = sorted(checkable - now)
+    orphans = [k for k in absent if (k[0], k[1]) not in skipped_parts]
+    unprunable = [k for k in absent if (k[0], k[1]) in skipped_parts]
 
     with_history = [k for k in orphans
                     if rows[k][0] != NEVER or rows[k][1]]
@@ -430,12 +456,34 @@ def cmd_orphan_scan(args):
               + ", ".join(f"{a}/{b}" for a, b in silent[:5])
               + (" ..." if len(silent) > 5 else ""))
 
+    # NAMED, not just counted: a number with no names is a number nobody can act on.
+    if unprunable:
+        parts_named = sorted({(k[0], k[1]) for k in unprunable})
+        print(f"    unprunable: {len(unprunable)} row(s) in {len(parts_named)} part(s) that "
+              f"SKIPPED at least one check, so absence there is not removal: "
+              + ", ".join(f"{a}/{b}" for a, b in parts_named[:5])
+              + (" ..." if len(parts_named) > 5 else ""))
+        for k in unprunable[:5]:
+            print(f"      {k[0]}\t{k[1]}\t{k[2]}")
+
     print(f"  orphan scan: parts in the run={len(parts)}, rows in those parts={len(checkable)}, "
           f"orphans={len(orphans)} ({len(with_history)} carrying history), "
-          f"not checked={len(unchecked)}")
+          f"unprunable={len(unprunable)}, not checked={len(unchecked)}")
+    # The four categories must account for every row, or a row went missing in the
+    # classification itself -- which is the failure this tool exists to report.
+    matched = len(set(rows) & now)
+    if matched + len(orphans) + len(unprunable) + len(unchecked) != len(rows):
+        raise LedgerError(
+            f"classification lost rows: matched {matched} + orphans {len(orphans)} + "
+            f"unprunable {len(unprunable)} + not checked {len(unchecked)} != {len(rows)} "
+            f"ledger rows -- every row must land in exactly one of the four")
 
     if not args.prune:
-        return 1 if orphans else 0
+        return 1 if (orphans or unprunable) else 0
+
+    if unprunable:
+        print(f"    not pruning {len(unprunable)} row(s) in a part that skipped: the run did "
+              "not exercise those checks, so their absence is not removal")
 
     if with_history:
         print(f"    refusing to prune: {len(with_history)} orphan row(s) carry history, and "

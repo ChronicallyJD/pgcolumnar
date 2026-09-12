@@ -2048,6 +2048,27 @@ true until the next version shipped.
   as present. Otherwise a single-suite log would certify the whole ledger, which is the
   same defect one level up.
 
+  **`--prune` refuses a part that skipped, which was this change's own worst bug.**
+  `not checked` protects a part the run does not contain. A part *contained but skipped
+  wholesale* fell in the gap: one SKIP record put the part in the run's `parts`, every other
+  row of that suite became an orphan, and `--prune` deleted the suite while reporting
+  `not checked=0` and `rc=0` -- the most confident output the tool can produce. Measured on
+  a three-row fixture for `analyze_differential`, whose PG17 run is a single SKIP; found by
+  @pgcolumnar-9b in review. Nine suites skip wholesale on PG17 and `suites_not_covered` is
+  250, so seeding any one of them would have armed it.
+
+  The rule is broader than that case deliberately: a SKIP **anywhere** in the part means
+  some arm did not run, so the run cannot tell "this row's check was deleted" from "this
+  row's check was skipped under a name that does not match it" -- #994's defect at suite
+  granularity rather than branch granularity. One skipped timing check therefore blocks
+  pruning that whole part, and that is the direction a deleting command should err in. The
+  control holds the other half: the same rows are still pruned when the part's record is a
+  PASS, so this is not a tool that refuses to prune anything.
+
+  The four categories -- matched, orphan, unprunable, not checked -- are asserted to account
+  for every ledger row, because a classification that silently loses one is the failure this
+  tool exists to report.
+
   **It reports and is NOT wired into the gate, for a measured reason.** Scanned against a
   real run, `340-the-binary-must-be-built-from.sh` records ONE skip under a name neither
   of its two arms has (`the unreadable-source refusal`) whenever the box has no non-root
