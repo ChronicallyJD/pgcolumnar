@@ -150,11 +150,11 @@ ans   "and NULLS FIRST still answers correctly" 'SELECT k, id FROM %T ORDER BY k
 
 check "REFUSE: a non-prefix of the key is not an order the rows are in" \
 	"$(sorts 'SELECT j FROM c ORDER BY j')" "yes"
-ans   "and it still answers correctly" 'SELECT j, id FROM %T ORDER BY j, id LIMIT 300'
+ans   "and a non-prefix still answers correctly" 'SELECT j, id FROM %T ORDER BY j, id LIMIT 300'
 
 check "REFUSE: a column that is not in the key at all" \
 	"$(sorts 'SELECT id FROM c ORDER BY id')" "yes"
-ans   "and it still answers correctly" 'SELECT id FROM %T ORDER BY id LIMIT 300'
+ans   "and a non-key column still answers correctly" 'SELECT id FROM %T ORDER BY id LIMIT 300'
 
 check "REFUSE: the key columns in the wrong order" \
 	"$(sorts 'SELECT k, j FROM c ORDER BY j, k')" "yes"
@@ -189,7 +189,7 @@ check "REFUSE: a run with an appended tail is not an ordered relation" \
 # not the first ten rows.
 ansp  "and ORDER BY k LIMIT still returns the true first rows" tailh tailc \
 	'SELECT k, id FROM %T ORDER BY k NULLS LAST, id LIMIT 10'
-ansp  "and the whole ordered result matches heap" tailh tailc \
+ansp  "and the whole ordered result matches heap with the tail appended" tailh tailc \
 	'SELECT k, j, id FROM %T ORDER BY k NULLS LAST, j, id'
 
 # --- a Z-order run: an order, but not a sort on any one column --------------
@@ -211,7 +211,7 @@ check "premise: and it is NOT in k order" \
 	"$([ "$(inv zc k)" -gt 0 ] && echo yes || echo no)" "yes"
 check "REFUSE: a Z-order run is not a sort on its lead column" \
 	"$(sorts 'SELECT k FROM zc ORDER BY k')" "yes"
-ansp  "and it still answers correctly" zh zc \
+ansp  "and the Z-order run still answers correctly" zh zc \
 	'SELECT k, j, id FROM %T ORDER BY k, j, id LIMIT 300'
 
 # --- an unsorted relation ---------------------------------------------------
@@ -275,11 +275,26 @@ ansp  "and it answers in C order, matching heap" colh colc \
 ALTCOLL="$(q "SELECT collname FROM pg_collation WHERE collname IN ('en_US.utf8','en_US.UTF-8','en_US','und-x-icu') ORDER BY 1 LIMIT 1;")"
 if [ -z "$ALTCOLL" ] || \
    [ "$(q "SELECT (min(k) COLLATE \"C\") = (SELECT min(k COLLATE \"$ALTCOLL\") FROM colh) FROM colh;" 2>/dev/null)" != "f" ]; then
-	check_skip "the collation-change demonstration" "SKIP  the collation-change demonstration: this server has no collation that" "this server has no suitable collation"
+	# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994). Seven arms sat behind one
+	# skip named for none of them, so a reader could not tell which seven did not
+	# run. Two of them go through `ansp`, which records under its first argument --
+	# they are arms like any other and were missed by a sweep that looked only for
+	# `check`.
+	for _sp_n in "premise: C and the alternate collation really disagree on this data" \
+			"premise: the collation ALTER rewrote nothing (same storage id)" \
+			"premise: so the run is still recorded as lexicographic" \
+			"premise: and the column's collation really did change" \
+			"REFUSE: the order the rows are in is no longer the order the column asks for" \
+			"and ORDER BY k LIMIT returns the new collation's first rows, matching heap" \
+			"and the whole ordered result matches heap under the new collation"; do
+		check_skip "$_sp_n" \
+			"SKIP  $_sp_n (this server has no collation that disagrees with C on ASCII)" \
+			"this server has no suitable collation"
+	done
 	echo "      disagrees with C on ASCII, so the arm could not fail and is not run."
 	echo "      The refusal it demonstrates is asserted above on COLLATE \"C\"."
 else
-	check "premise: C and $ALTCOLL really disagree on this data" \
+	check "premise: C and the alternate collation really disagree on this data" \
 		"$([ "$(q "SELECT k FROM colh ORDER BY k COLLATE \"C\" LIMIT 1;")" \
 		 != "$(q "SELECT k FROM colh ORDER BY k COLLATE \"$ALTCOLL\" LIMIT 1;")" ] && echo yes || echo no)" "yes"
 
@@ -300,7 +315,7 @@ else
 	# the answer is aa10|aa1002|AA1003. A wrong answer from a plan with no Sort.
 	ansp  "and ORDER BY k LIMIT returns the new collation's first rows, matching heap" colh colc \
 		'SELECT k, id FROM %T ORDER BY k, id LIMIT 3'
-	ansp  "and the whole ordered result matches heap" colh colc \
+	ansp  "and the whole ordered result matches heap under the new collation" colh colc \
 		'SELECT k, id FROM %T ORDER BY k, id'
 fi
 

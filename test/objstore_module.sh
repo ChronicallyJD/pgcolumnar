@@ -102,10 +102,14 @@ check_num "positive control: it IS defined in the module, so nm really looked" \
 
 # A remote path must report a remote error, from the reader, without a connection.
 for url in "s3://bucket/key.parquet" "gs://bucket/key.parquet" "https://host/key.parquet"; do
+	# The scheme, by parameter expansion rather than a `cut` subshell, because BOTH
+	# names need it now: the headline already carried it and the continuation did not,
+	# which is why three iterations produced one ledger key (#982).
+	scheme="${url%%:*}"
 	out=$(psql_run "SELECT * FROM pgcolumnar.read_parquet('$url') AS (a int)" 2>&1)
-	check "a $(cut -d: -f1 <<<"$url") URL reports an object-storage error, not a missing file" \
+	check "a $scheme URL reports an object-storage error, not a missing file" \
 		"$([ "$(grep -c 'object storage is not implemented\|is not supported\|requires the object-store module\|requires AWS_\|could not resolve\|could not connect\|objstore_allowed_endpoints' <<<"$out")" -ge 1 ] && echo yes || echo no)" "yes"
-	check_num "and does NOT report it as a missing file" \
+	check_num "and the $scheme URL is NOT reported as a missing file" \
 		"$(grep -c 'No such file or directory' <<<"$out")" "0"
 done
 
@@ -119,10 +123,15 @@ done
 # storage error, and the invariant this arm still guards is that it is NEVER a
 # local filesystem miss. `*`, `?` and `[` are all legal in an S3 key.
 for pat in "s3://bucket/a*.parquet" "s3://bucket/a?.parquet" "s3://bucket/a[0-9].parquet"; do
+	# The metacharacter under test, which is what distinguishes the three iterations.
+	# Here BOTH names collided: unlike the loop above, the headline did not carry it
+	# either, so three iterations produced one key for each of two checks (#982).
+	meta="${pat#s3://bucket/a}"
+	meta="${meta%.parquet}"
 	out=$(psql_run "SELECT * FROM pgcolumnar.read_parquet('$pat') AS (a int)" 2>&1)
-	check "a remote glob is handled remotely (an object-storage error, not a local one)" \
+	check "a remote glob ($meta) is handled remotely (an object-storage error, not a local one)" \
 		"$([ "$(grep -c 'requires AWS_\|object storage\|objstore_allowed_endpoints\|requires the object-store module\|could not resolve\|could not connect\|is not in pgcolumnar' <<<"$out")" -ge 1 ] && echo yes || echo no)" "yes"
-	check_num "and it is NOT reported as a local filesystem miss" \
+	check_num "and the $meta glob is NOT reported as a local filesystem miss" \
 		"$(grep -c 'no files match pattern\|matched no regular files\|No such file or directory' <<<"$out")" "0"
 done
 

@@ -10,3 +10,8 @@ regression.out
 .pgc_source_stamp.*
 __pycache__/
 *.pyc
+
+# Git bundles. A transfer artifact, not a build one: they are how a change gets from
+# a container to a clone, they are named after whatever branch was in flight, and
+# nothing ever reads them again. Nine of them rode into c697c8cd under `git add -A`.
+*.bundle

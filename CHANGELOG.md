@@ -18,6 +18,87 @@ true until the next version shipped.
 
 ### Added
 
+- The mutation ledger covers a third suite: `differential`, 204 checks (#752).
+
+      suites_not_covered          250 -> 249
+      checks_never_observed_red   951 -> 1155
+      covered                     harness_selftest, native_join_runtime_filter, differential
+
+  BOTH NUMBERS ARE DERIVED FROM THE FILES, never computed from the old ones, and this
+  change is its own argument for that rule. Written against an earlier base the same
+  seed produced `913 -> 1117`; #983 then landed forty rows and pruned two, and the
+  census became 1155. Carrying 1117 forward would have been arithmetic that was true
+  when it was written and false when it shipped. The census is `grep -c` over the
+  ledger, re-run after the rebase; the ceiling is the registered list minus the
+  ledger's own suites.
+
+  WHY THIS SUITE, measured rather than chosen by taste. It is the heap-versus-columnar
+  differential correctness suite, so a check that cannot fail there is a wrong answer
+  nobody sees. 16 of the last 300 commits touch it, so the gate will fire. It runs in
+  19 seconds, and no open change touches it.
+
+  THE RISK THAT DECIDED IT WAS STABILITY ACROSS RUNS, because a suite whose checks move
+  between runs churns the ledger and fires the gate on nothing. Two consecutive runs on
+  PG17: 204 records, 204 distinct names, zero duplicate keys, and the two sets identical
+  in NAME AND IN VERDICT -- the second half matters because a flipped verdict churns the
+  `last observed red` column while the keys stay still.
+
+  Proof that seeding changed behaviour, re-run against this base:
+
+      after seeding, a log with one unseen differential check    rc=1, REFUSED
+      before seeding, the same log against main's ledger         rc=0, not refused
+      after seeding, the real log                                rc=0, no false red
+
+  The middle row is the point: the gate refuses an unseen check only in a suite it
+  covers, so before this those 204 checks were invisible to it. The third stops the
+  first from being bought with a gate that refuses everything.
+
+  The tax is the gate working: a change adding a check to `differential` now needs the
+  ledger regenerated in the same commit, which is a reviewable diff.
+
+- `test/selftest/470` now has the pytest half it shipped without (#994).
+
+  #998 added the shell part and no pytest twin, against the owner's rule that a test
+  living in one harness is not finished. `test_skip_loop_arms.py` is that half, and it
+  is not a port: the shell part runs the sweep over the real corpus and asserts no
+  mismatch survives, which measures the TREE; this one drives the same tool over
+  planted trees whose right answer is known, which measures the INSTRUMENT.
+
+  The distinction is the reason for writing it rather than a justification after the
+  fact. A classifier that filed every site as `armless` would report zero mismatches,
+  and the shell part's population premises would still pass on whatever loops remained.
+  Six tests, seventeen checks: the clean site is compared rather than quietly skipped,
+  a renamed sibling is caught, an armless branch and an interpolated one are each
+  counted as themselves, and `compared + armless + interpolated == loops` so nothing
+  falls out of the report.
+
+  Three removal proofs, each mutation asserted to apply before the run. Stopping the
+  mismatch report reddens the rename arms; comparing the interpolated site literally
+  reddens the other two, because removing the tool's refusal to compare manufactures a
+  FALSE mismatch on a correct site.
+
+  The third decided the control's shape. Its first version compared two trees, one clean
+  and one drifted, and a classifier that reports a mismatch naming the WRONG LINE passes
+  that: `0/1` either way, measured on the mutant. So the control plants both loops in one
+  file and pins the drifted loop's own line, which is the only form that can tell "it
+  found my bug" from "it found something". Raised in review by @OffgridwithJD.
+
+  A fourth proof closed a blindness the first three shared. Returning 2 from the tool's
+  `main()` while still printing correct counters left all six tests green: every one of
+  them reads stdout and none noticed the tool had become unusable. The shell half caught
+  it through its `TOOL FAILED` fallback, and there it was a PREMISE that failed while the
+  headline arm stayed green. So the exit code is now asserted once in the shared helper,
+  and under the same mutation all six fail. Reported by @OffgridwithJD, whose own first
+  probe of it was invalid and said so: `sys.exit(2)` appended after the `__main__` guard
+  applied cleanly and moved nothing. Asserting a mutation APPLIED is not asserting the
+  behaviour MOVED.
+
+  And the partition arm, `compared + armless + interpolated == loops`, is the strongest
+  line in the file and the cheapest to satisfy wrongly: a classifier filing everything as
+  `armless` satisfies it perfectly. It is load-bearing only because the per-bucket arms
+  sit beside it, and that is now written where a reader will find it rather than left to
+  be worked out.
+
 - The pytest harness reports its own check totals, and the record stream is
   reconciled against what arrived (#937, third phase).
 
@@ -482,6 +563,51 @@ true until the next version shipped.
   callback reddens here instead of double-recording.
 
 ### Fixed
+
+- A skipped arm records under the name it would have used, so a skipped arm and
+  a deleted one are no longer indistinguishable (#994).
+
+  Four `check_skip` calls stood in for 19 named arms under a name none of those
+  arms has. When the condition failed, those 19 produced no record at all: a
+  reader could not tell which arms did not run, and the ledger could not tell a
+  skipped arm from a deleted one, because a skipped arm's row has no matching
+  record exactly as a removed check's would.
+
+  The convention was already in the tree, 30 lines below one of the offenders:
+  skip under each arm's own name, in a loop.
+
+  The issue counted 17. It is 19. Two arms in `sorted_pathkeys.sh` go through
+  `ansp`, which records under its first argument, and a sweep that looked for
+  `check` did not see them.
+
+  One arm's name interpolated the very variable whose emptiness causes its own
+  skip, so the skip would have recorded a key no real run emits. That name is now
+  stable and the collation it names moves into the display, which is not the key.
+
+  Six sites, not four, and 19 arms. Two arms go through `ansp`, which records
+  under its first argument. Two sites hold their arms in the `then` branch with
+  the skip in the `else`, which a classifier looking only forward reads as having
+  no arms at all.
+
+  `340` also skipped five arms behind a branch whose comment said they had
+  already been skipped above. Above had skipped the three premises, not these
+  five, so on a box with no non-root user five arms produced no record.
+
+  A new selftest part asserts every skip loop names exactly the arms its sibling
+  branch would emit. The loop duplicates those names, so a rename desynchronises
+  them silently and the skip records under a name nothing emits, which is the
+  failure this change exists to remove. That is not hypothetical: writing this,
+  a name from another open PR's rename went into the loop, and the comparison is
+  what caught it.
+
+  The part reports what it did not compare. One loop's sibling arm is generated
+  by a loop of its own, so a literal comparison would be wrong in both
+  directions. That loop is the one this change repairs, and it is not covered.
+  A total of zero mismatches would otherwise read as a corpus in agreement.
+
+  This is the precondition for arming the orphan guard in #983. Until a skipped
+  arm records under its own name, absence cannot mean removal.
+
 
 - A conftest can no longer switch a vacuity rule off by rebinding a name the
   layer reads (#924).
@@ -1816,6 +1942,290 @@ true until the next version shipped.
   the extracted block holds one and the premise passes. The static caller sweep catches
   it -- injected, both the premise and the arm report `got [4] want [3]`.
 
+- The hilbert premises name the table they digest, so five checks stop sharing three
+  ledger keys (#982, third of eight).
+
+  `hilbert_cluster` held the second-largest loss: a premise repeated before four separate
+  arms, and two pairs of `(d)` checks repeated across two fixtures. Measured against a
+  control run on clean `main`:
+
+      clean main    181 records   176 distinct keys   3 colliding   5 lost
+      this branch   181 records   181 distinct keys   0 colliding   0 lost
+
+  The record count is unchanged, so this renames and nothing else.
+
+  **A third form of the rule, and the files keep supplying them.** #984 said a continuation
+  carries the discriminator its headline interpolates; #989 added that where the headline
+  names none either, it gains one. Here *nothing* interpolates anything -- all eight sites
+  are hand-written -- so the discriminator comes from the check's own **value expression**:
+
+      premise: the plan being digested here is the columnar custom scan too
+        "$(pgc_is_columnar_scan 'SELECT * FROM s3hi')"     -> ... digested for s3hi ...
+        "$(pgc_is_columnar_scan 'SELECT * FROM s5hi')"     -> ... digested for s5hi ...
+        "$(pgc_is_columnar_scan 'SELECT * FROM s6t')"      -> ... digested for s6t ...
+        "$(pgc_is_columnar_scan 'SELECT * FROM av_hi')"    -> ... digested for av_hi ...
+
+  That keeps the name and the assertion in agreement, which is worth more than brevity: a
+  reader can check one against the other without leaving the line. The word doing the
+  colliding was `here`, which named the site to someone reading top to bottom and named
+  nothing at all to a key.
+
+  The two `(d)` pairs take the table their own `count(*)` and `physlayout` name --
+  `moved s4d1's layout`, `no row was lost from s4d2` -- for the same reason.
+
+  No ledger change: `hilbert_cluster` is not one of the two suites the ledger covers.
+- The object-storage loops name the case each iteration tests, so six checks stop
+  sharing three ledger keys (#982, second of eight).
+
+  `objstore_module` lost the most records of any suite to key collapsing: two loops of
+  three iterations each, where the check names did not carry the thing the iteration
+  varies. Measured against a control run on clean `main`:
+
+      clean main    30 records   24 distinct keys   3 colliding   6 lost
+      this branch   30 records   30 distinct keys   0 colliding   0 lost
+
+  The record count is unchanged, so this adds and removes no checks.
+
+  **The two loops show both sub-shapes of the same defect.** In the first, the headline
+  already interpolated the scheme and only the continuation was short:
+
+      check     "a s3 URL reports an object-storage error, not a missing file"
+      check_num "and does NOT report it as a missing file"      <- identical three times
+
+  In the second, *neither* name carried the metacharacter, so three iterations produced
+  one key for each of **two** checks -- the headline collided as well.
+
+  Both are fixed by the rule #984 proposed: the continuation carries the same
+  discriminator its headline names, and where the headline does not name one either, it
+  gains it. The discriminators come from the loop variable by parameter expansion
+  (`${url%%:*}` and stripping the fixed prefix and suffix off the pattern), so they are
+  already in scope:
+
+      a remote glob (*) is handled remotely (an object-storage error, not a local one)
+      and the * glob is NOT reported as a local filesystem miss
+      and the https URL is NOT reported as a missing file
+
+  The first loop's headline now reads its scheme from a variable rather than a `cut`
+  subshell, because both names need it. The resulting check name is byte-identical, so
+  no ledger row moves on account of it.
+
+  No ledger change at all: `objstore_module` is not one of the two suites the ledger
+  covers, so its check names have no rows. That is also why the twenty-four collisions
+  matter for #432 rather than for the census today -- twenty-one of them are in suites
+  that become covered only when the 240 are seeded.
+- The last five suites' continuation checks name the case they continue, closing the
+  rename half of #982 (ten records, five files).
+
+  Ten checks across five suites shared five ledger keys with another check. Measured by
+  running every one of the five on clean `main` and on this branch, on the same box:
+
+      suite                     control (clean main)        this branch
+      sorted_pathkeys           113 records 110 keys  3 lost   113  113  0
+      vector_agg_tlist_shape     68 records  65 keys  3 lost    68   68  0
+      alter_am_cleanup           45 records  43 keys  2 lost    45   45  0
+      eager_ordering_record      31 records  30 keys  1 lost    31   31  0
+      objstore_userinfo           7 records   6 keys  1 lost     7    7  0
+
+  Every record count is unchanged, so this renames and nothing else. All five suites:
+  `rc=0`, `FAIL=0`, on both trees.
+
+  **This is not a new convention. It is each file's own convention, applied where it
+  lapsed.** Every one of the five already names the case at a neighbouring site --
+  `and DESC still answers correctly`, `and NULLS FIRST still answers correctly`,
+  `and FILTER still answers correctly`, `and DISTINCT still answers correctly` -- and then
+  falls back to a bare `and it still answers correctly` for the next four. The fix is to
+  finish the pattern the author started:
+
+      REFUSE: a non-prefix of the key is not an order the rows are in
+        and it still answers correctly   ->  and a non-prefix still answers correctly
+      REFUSE: a column that is not in the key at all
+        and it still answers correctly   ->  and a non-key column still answers correctly
+      REFUSE: FILTER inside an expression over aggregates
+        and it still answers correctly   ->  and FILTER inside an expression still answers correctly
+
+  Two sites took the discriminator from the value expression instead, because their
+  headline names no table: `control: and it moved the layout` becomes
+  `... moved the tailgate layout` and `... moved the lexgate layout`, matching the
+  `layout tailgate` and `layout lexgate` the checks actually read.
+
+  No ledger change: none of the five is one of the two suites `test/check_ledger.tsv`
+  covers, and both ledger files are byte-identical to `main`.
+
+  One coupling, found by review rather than by either PR's own checks: #998 added a skip
+  loop to `sorted_pathkeys.sh` that lists its arms by name, and one of those names is the
+  arm this change renames. The two merge cleanly, so nothing would have presented a
+  conflict -- #998's own guard would simply have gone red in `main`. The loop is updated
+  here, and its guard reports no mismatch. Counting the old name is how you MISS this: an
+  unanchored `grep -F` finds 3 occurrences because both renames EXTEND the name rather
+  than replace it, so each renamed line still matches its own old form. Anchoring on the
+  closing quote gives 1, which is the one that matters.
+- `pgc_ledger.py orphan-scan` reports a ledger row that no record in its own part
+  matches, and `--prune` removes it only when no history would be lost (#983).
+
+  The comparison already existed and already printed the answer. `rename-scan` pairs an
+  appearance with a disappearance, so an UNPAIRED disappearance -- a check deleted, or
+  renamed in a run where nothing appeared -- printed `vanished=2` and returned 0. Two rows
+  in the committed ledger named checks that no longer existed; the census counted both, and
+  every run for days said so in a line nobody acted on. **A guard that compels one list and
+  ignores the second manufactures the confidence that the thing is handled.**
+
+  Driven on the real ledger, which is the only instance that matters:
+
+      orphan: harness_selftest 330-... premise: all three runner functions were extracted
+      orphan: harness_selftest 330-... premise: and all three are callable
+      not checked: 44 row(s) in 1 part(s) this run does not contain
+      orphan scan: parts in the run=43, rows in those parts=861, orphans=2
+                   (0 carrying history), not checked=44
+      orphan prune: removed 2 row(s), the ledger now holds 925
+
+  **A row carrying history is never pruned**, and one such row refuses the WHOLE prune.
+  No run can recreate the catalogue of what has been seen red, and removing the safe rows
+  while naming the unsafe ones would leave a partial job for whoever reads the output.
+
+  **Rows in parts the run does not contain are counted out loud as `not checked`**, never
+  as present. Otherwise a single-suite log would certify the whole ledger, which is the
+  same defect one level up.
+
+  **`--prune` refuses a part that skipped, which was this change's own worst bug.**
+  `not checked` protects a part the run does not contain. A part *contained but skipped
+  wholesale* fell in the gap: one SKIP record put the part in the run's `parts`, every other
+  row of that suite became an orphan, and `--prune` deleted the suite while reporting
+  `not checked=0` and `rc=0` -- the most confident output the tool can produce. Measured on
+  a three-row fixture for `analyze_differential`, whose PG17 run is a single SKIP; found by
+  @pgcolumnar-9b in review. Nine suites skip wholesale on PG17 and `suites_not_covered` is
+  250, so seeding any one of them would have armed it.
+
+  The rule is broader than that case deliberately: a SKIP **anywhere** in the part means
+  some arm did not run, so the run cannot tell "this row's check was deleted" from "this
+  row's check was skipped under a name that does not match it" -- #994's defect at suite
+  granularity rather than branch granularity. One skipped timing check therefore blocks
+  pruning that whole part, and that is the direction a deleting command should err in. The
+  control holds the other half: the same rows are still pruned when the part's record is a
+  PASS, so this is not a tool that refuses to prune anything.
+
+  The four categories -- matched, orphan, unprunable, not checked -- are asserted to account
+  for every ledger row, because a classification that silently loses one is the failure this
+  tool exists to report.
+
+  **It reports and is NOT wired into the gate, for a measured reason.** Scanned against a
+  real run, `340-the-binary-must-be-built-from.sh` records ONE skip under a name neither
+  of its two arms has (`the unreadable-source refusal`) whenever the box has no non-root
+  user to read as. On such a box two live ledger rows have no matching record, so an absent
+  record does not yet mean a removed check and a gate refusing on absence would redden a
+  correct run. Arming it needs those branches to record a SKIP under the names they stand
+  in for -- the conversion #965 made for the eleven timeout paths -- and an arm now pins
+  that shape so the day it changes, the arm says so.
+
+- Nine git bundles are out of the tree, `*.bundle` is ignored, and
+  `310-a-compiled-artifact-must-not-be.sh` now covers transfer artifacts as well as
+  compiled ones.
+
+  **I put them there.** 76,194 bytes across nine files went into `c697c8cd` -- a merged
+  commit whose subject is a check name in `sorted_pathkeys.sh`. I create bundles in my clone
+  to move a branch into the audit container, and I staged with `git add -A`. That is the
+  same mechanism the existing comment in part 310 calls out for a stray `.pyc`: *a tracked
+  build artifact joins whichever commit is next.*
+
+  **Nothing caught it.** Five suites and the whole selftest ran green either side, because
+  no suite has an opinion about files it does not read. What found it was a later rebase
+  printing the filenames in a list I happened to read.
+
+  Part 310's scope note said Python only, and deferred the wider question:
+
+  > Whether every derived file in the tree deserves one rule is a larger judgement and is
+  > deliberately not decided here.
+
+  This decides it for one more class, and only that class. **A bundle is a transfer
+  artifact**, which is why it belongs beside the `.pyc` rather than beside the Parquet
+  fixtures: it is derived from commits already in the history, it is named after whatever
+  branch was in flight, nothing in the tree opens one, and the next person to make one will
+  choose a different name -- so it can never become a fixture anything depends on.
+
+  Same two-part rule, same `no-repo` discipline as the Python arms, and a control: a source
+  file merely *named* like a bundle (`test/bundle_notes.sh`) must not be ignored, or the
+  suffix rule is broader than it claims.
+
+  The blobs stay reachable in the repository's history -- removing a file from the tree does
+  not unwrite it, and rewriting `main` is not something a stray artifact justifies. What this
+  stops is the tree carrying them, and the next `git add -A` re-adding them.
+- `s3://` and `gs://` now refuse URL userinfo, as `http(s)://` has since #706. They were
+  absorbing it into the bucket name and reporting a missing object (#995).
+
+      http://u:p@127.0.0.1:1/x.parquet   22023  userinfo in "..." is not supported
+      s3://u:p@mybucket/x.parquet        58P01  "..." does not exist (HTTP 404)   <- before
+      s3://u:p@mybucket/x.parquet        22023  userinfo in "..." is not supported <- after
+
+  The old message was true and useless: the object did not exist *because* `u:p@mybucket`
+  had become a bucket name. `s3://user:key@bucket/obj` is a form other tools accept, so it
+  is a mistake a user makes, and the answer sent them looking for a missing object.
+
+  **Measured on main with an endpoint configured**, which is the only way to reach the
+  authority parse at all:
+
+      path style     HEAD /u%3Ap%40pgc-bucket/vh.parquet, Host untouched -> HTTP 404
+      virtual host   the bucket becomes the leftmost Host label -> could not resolve
+                     "u:p@pgc-bucket.s3.local"
+      write          export_parquet raised NO ERROR and PUT to
+                     /u%3Ap%40pgc-bucket/ui.parquet -- a bucket nobody named
+
+  **Not an SSRF, and that was checked rather than assumed.** Nothing splits the authority
+  at `@`, so the userinfo never becomes basic auth and never moves the host. The write row
+  is why this is refused rather than documented: acceptance there sends bytes to a bucket
+  the caller did not ask for.
+
+  The guard sits **before the endpoint is resolved**. Placed after it, the refusal would be
+  unreachable whenever no endpoint is configured, because the s3 branch demands one first
+  -- and the arms could then say nothing without an object-store fixture.
+
+  **Twelve arms** added to `test/objstore_userinfo.sh` -- five refusals and **seven
+  controls**, taking the file from 7 checks to 19 -- because
+  the first probe of this gap proved nothing: with no credentials every s3 URL returned
+  `28000`, the clean one included, so a userinfo refusal was indistinguishable from an
+  unreachable object store.
+
+  The controls hold that a clean URL still reaches the endpoint demand **and that the
+  message names `AWS_ENDPOINT_URL`**, that a malformed URL still gets the bucket/key
+  refusal, and that an `@` in the KEY is left alone.
+
+  That positive matcher matters more than it looks: `28000` is raised by **three** different
+  demands in `os_resolve_s3` -- a missing endpoint, a missing credential, and the
+  authorization refusal -- so a control that sees `28000` and no `userinfo` has pinned
+  nothing about which one fired. The `gs://` control makes the point concretely: its `28000`
+  is the **credential** demand, because `gs` defaults its endpoint to the interop host and
+  never reaches the endpoint demand at all. Same code, different cause, and only a matcher
+  that names the variable can tell them apart.
+
+- The matrix runner's accounting breakdown says which LINE it means, because the old
+  wording produced a wrong planning number twice in one night.
+
+  It printed:
+
+      N via lib.sh's accounting; by their own mechanism: audit bench_guards concurrency ...
+
+  and "by their own mechanism" was read -- by two different readers, hours apart -- as *emits
+  no RESULT records*, which would make those twelve suites impossible to seed into the
+  mutation ledger. A bound on how far `suites_not_covered` can fall was derived from that
+  reading.
+
+  **It is false. Measured by running all twelve and counting:**
+
+      audit 31   smoke 9   phase2 42   phase3 32   phase4 38   phase5 36
+      phase6 43  concurrency 7   unique_conc 31   update_conc 25
+      bench_guards 0   docs_style 0
+
+  **Ten of the twelve emit records.** The set is the suites whose log lacks lib.sh's
+  `accounting:` line and carries their own `checks run:` instead -- a statement about the
+  accounting LINE and nothing else. Only `bench_guards` and `docs_style` emit no records, for
+  the reason `pgc_log_shows_any_accounting`'s comment already gives: those two never source
+  `lib.sh` at all. Defining a private `check` is orthogonal -- `audit` does it and records 31.
+
+  So the bound is **two suites, not twelve**, with about 294 records sitting in the other ten.
+
+  The label now names the line and disclaims the records in the same breath. The selftest arm
+  that pins it follows the reword; widening that arm to pin the disclaimer separately needs
+  either a new ledger row or a rename that would orphan an existing one, and `main` has no
+  tool to remove an orphan until #983 lands -- so the sequencing is written into the arm's
+  comment rather than quietly skipped.
 - A collection-time vacuity refusal keeps its reason under pytest-xdist (#963).
 
   `pytest_collection_modifyitems` raises `UsageError`. Serial, that is rc 4 and

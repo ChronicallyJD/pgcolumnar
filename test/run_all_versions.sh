@@ -1474,7 +1474,16 @@ pgc_tally_suite() {	# pgc_tally_suite NAME VERDICT LOGFILE
 	echo "  suites that ran: $suites_ran of ${#SUITES[@]} (skipped: $suites_skipped, incomplete: $suites_incomplete)"
 	echo "  of those, $_acc_any accounted for their checks and $((suites_ran - _acc_any)) did not"
 	if [ -n "${_acc_own// /}" ]; then
-		echo "    $_acc_ran via lib.sh's accounting; by their own mechanism:${_acc_own% }"
+		# SAY WHICH LINE, because "by their own mechanism" was read twice in one night
+		# as "emits no RESULT records" and produced a wrong planning number from it.
+		# This set is the suites whose log lacks lib.sh's `accounting:` line and has
+		# their own `checks run:` instead. That is a statement about the ACCOUNTING
+		# LINE and nothing else: measured over all twelve of them, ten emit RESULT
+		# records perfectly well (audit 31, phase4 38, unique_conc 31, ...) and only
+		# bench_guards and docs_style emit none -- which is the pair the comment on
+		# pgc_log_shows_any_accounting already names, for the real reason: those two
+		# never source lib.sh at all.
+		echo "    $_acc_ran printed lib.sh's accounting line; these printed their own \`checks run:\` instead (a different accounting LINE, not a missing RESULT record):${_acc_own% }"
 	fi
 	if [ "$suites_skipped" != 0 ]; then
 		echo "  skipped:${skipped_names}"
