@@ -47,20 +47,39 @@ true until the next version shipped.
   #432's parity the tool can certify, and it is a false red rather than a false green.
 - `stats_privilege.sh` has a pytest twin, and it asserts the SQLSTATE (#432).
 
-  The bash suite decides the refusal with `grep -c 'permission denied for table'`.
-  `CLAUDE.md` names the rule: 42501 comes only from `aclcheck_error`, and a grep for
-  "permission denied" is also satisfied by other refusals -- `permission denied for
-  schema` among them, which is the exact confusion measured while porting
-  `native_ownership`. The port asserts 42501 AND that the message names the table.
+  The bash suite decides the refusal with a grep on the message. `CLAUDE.md` names
+  the rule: 42501 comes only from `aclcheck_error`, while a grep for "permission
+  denied" is also satisfied by other refusals.
+
+  WHICH ARMS ARE LOOSE, MEASURED RATHER THAN ASSERTED, because two rounds of review
+  narrowed this twice. The defect arm at `:82` uses `permission denied for table`,
+  which the schema message does NOT match -- so that arm is not confusable, and an
+  earlier version of this entry claiming otherwise was wrong. The two BARE greps are
+  at `:68` and `:70`, and both are premises:
+
+      :68  premise: the no-privilege role cannot read it by ordinary SQL
+      :70  premise: the catalog tables are NOT readable by these roles
+
+  So the risk is a premise satisfied for the wrong reason, which weakens what the
+  suite rests on, rather than a defect slipping through. The port asserts 42501 on
+  the premises and on the refusal, and that the refusal names the table.
 
   Real logins rather than `SET ROLE`, because session-opening is a property this
   suite tests and `SET ROLE` would assert it away.
 
-  SCOPE, MEASURED. Across the corpus, 50 suites already assert a refusal by SQLSTATE
-  and 3 assert both. Only FOUR assert by text with no SQLSTATE anywhere:
-  `native_ownership`, `stats_privilege`, `projection_privilege` and
-  `rls_direct_storage`. Two are now ported; the class closes at four, not at the
-  whole corpus.
+  SCOPE, MEASURED AND THEN CORRECTED. Across the corpus, 50 suites already assert a
+  refusal by SQLSTATE and 3 assert both. FIVE assert by text with no SQLSTATE
+  anywhere: `native_ownership`, `stats_privilege`, `projection_privilege`,
+  `rls_direct_storage` and `import_export_privilege`. Two are now ported; the class
+  closes at five, not at the whole corpus.
+
+  My first sweep said four. It missed `import_export_privilege.sh:76` because the
+  flag class `grep -[qic]*i?` does not cover the `E` in `grep -qiE`, so the line
+  never matched and a fifth member stayed invisible while the output looked complete.
+  Found by @OffgridwithJD. Four sweeps in one day across two sessions have now failed
+  this way, each keyed on how something was NAMED or SPELLED rather than on content:
+  key on content, and when a sweep returns a tidy number, grep for one known-present
+  member and check the sweep found it.
 
   A HELPER TURNED A DRIVER DETAIL INTO A PRODUCT CLAIM. psycopg3 returns the FIRST
   statement's result for a multi-statement execute, so `SET search_path ...; SELECT`
