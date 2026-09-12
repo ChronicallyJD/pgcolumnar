@@ -1137,6 +1137,13 @@ pgcolumnar_join_fold_try(PlannerInfo *root, RelOptInfo *joinrel,
 	hashPath = pgcolumnar_join_fold_hashpath(joinrel);
 	if (hashPath == NULL)
 		return false;
+	/*
+	 * A Join Filter besides the hash clause is not a membership test. The
+	 * fold would ignore it and over-count. Three-way joins are already
+	 * refused above: more than two relids.
+	 */
+	if (list_length(hashPath->jpath.joinrestrictinfo) != 1)
+		return false;
 	outerPath = hashPath->jpath.outerjoinpath;
 	innerPath = hashPath->jpath.innerjoinpath;
 	if (!pgcolumnar_join_fold_base_scan(outerPath))

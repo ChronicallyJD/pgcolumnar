@@ -2764,3 +2764,14 @@ agg node. The answer still matches a heap twin of the same join.
 A LEFT join is not a fact-table filter. The target list names a dimension
 column so the planner cannot drop the join. EXPLAIN has no vectorized agg
 node. The answer matches a heap twin, including unmatched fact rows.
+
+### `test_extra_join_filter_refuses_the_fold`
+
+A Join Filter besides the hash clause is not a membership test. EXPLAIN has
+no vectorized agg node. The sum matches GUC-off and a heap twin of the same
+join.
+
+### `test_inequality_join_filter_refuses_the_fold`
+
+A non-equi join clause is the same kind of extra Join Filter. EXPLAIN has no
+vectorized agg node. The sum matches a heap twin.

@@ -89,4 +89,49 @@ check "LEFT join answer equals heap" \
 	"$(pc "SET $GUC=on; $SQLL" | tail -1)" \
 	"$(q "SELECT count(*), coalesce(sum(dim_l.k)::text,'z') FROM heap_l LEFT JOIN dim_l ON heap_l.k = dim_l.k")"
 
+# A Join Filter besides the hash clause is not a membership test. The fold that
+# only drains dim keys would ignore f.v > d.t and over-count.
+q "$(cat <<'SQL'
+CREATE TABLE dim_xf(k int PRIMARY KEY, t int);
+INSERT INTO dim_xf SELECT g, 20 FROM generate_series(1,40) g;
+CREATE TABLE fact_xf(k int, v int) USING pgcolumnar;
+INSERT INTO fact_xf SELECT 1 + (g % 40), g % 40 FROM generate_series(1,2000) g;
+CREATE TABLE heap_xf (k int, v int) USING heap;
+INSERT INTO heap_xf SELECT * FROM fact_xf;
+ANALYZE dim_xf;
+ANALYZE fact_xf;
+SQL
+)" >/dev/null
+
+SQLXF="SELECT coalesce(sum(fact_xf.v)::text,'z') FROM fact_xf JOIN dim_xf ON fact_xf.k = dim_xf.k AND fact_xf.v > dim_xf.t"
+plan_xf="$(pc "SET $GUC=on; EXPLAIN (COSTS OFF) $SQLXF")"
+check "extra join filter refuses the join fold" \
+	"$(grep -c 'Columnar Vectorized Aggregates' <<<"$plan_xf")" 0
+check "extra join filter answer equals GUC off" \
+	"$(pc "SET $GUC=on; $SQLXF" | tail -1)" \
+	"$(pc "SET $GUC=off; $SQLXF" | tail -1)"
+check "extra join filter answer equals heap" \
+	"$(pc "SET $GUC=on; $SQLXF" | tail -1)" \
+	"$(q "SELECT coalesce(sum(heap_xf.v)::text,'z') FROM heap_xf JOIN dim_xf ON heap_xf.k = dim_xf.k AND heap_xf.v > dim_xf.t")"
+
+q "$(cat <<'SQL'
+CREATE TABLE dim_xn(k int PRIMARY KEY, t int);
+INSERT INTO dim_xn SELECT g, 7 FROM generate_series(1,12) g;
+CREATE TABLE fact_xn(k int, v int) USING pgcolumnar;
+INSERT INTO fact_xn SELECT 1 + (g % 12), g % 9 FROM generate_series(1,360) g;
+CREATE TABLE heap_xn (k int, v int) USING heap;
+INSERT INTO heap_xn SELECT * FROM fact_xn;
+ANALYZE dim_xn;
+ANALYZE fact_xn;
+SQL
+)" >/dev/null
+
+SQLXN="SELECT coalesce(sum(fact_xn.v)::text,'z') FROM fact_xn JOIN dim_xn ON fact_xn.k = dim_xn.k AND fact_xn.v <> dim_xn.t"
+plan_xn="$(pc "SET $GUC=on; EXPLAIN (COSTS OFF) $SQLXN")"
+check "inequality join filter refuses the join fold" \
+	"$(grep -c 'Columnar Vectorized Aggregates' <<<"$plan_xn")" 0
+check "inequality join filter answer equals heap" \
+	"$(pc "SET $GUC=on; $SQLXN" | tail -1)" \
+	"$(q "SELECT coalesce(sum(heap_xn.v)::text,'z') FROM heap_xn JOIN dim_xn ON heap_xn.k = dim_xn.k AND heap_xn.v <> dim_xn.t")"
+
 pgc_summary
