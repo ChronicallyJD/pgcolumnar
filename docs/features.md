@@ -76,6 +76,9 @@ settings see the [configuration reference](configuration.md); for constraints se
   The GUC `pgcolumnar.enable_join_runtime_filter` is on by default.
   Group skip needs the fact table clustered on the join key.
   It does not wrap LEFT, SEMI, ANTI, CROSS, parallel, or projection scans.
+- Ungrouped vectorized aggregate over a unique-key inner Hash Join.
+  A unique dimension is a filter of the fact table, so the fold can keep running.
+  Duplicate-key dimensions and LEFT joins stay on the core Agg plan.
 - Parallel scan across a table's row groups.
 - Read stream prefetch of block reads on PostgreSQL 17 and later
   (`pgcolumnar.enable_read_stream`).

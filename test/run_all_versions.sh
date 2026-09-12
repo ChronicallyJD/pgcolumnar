@@ -164,6 +164,7 @@ SUITES=(
 	native_index_projection
 	native_ios
 	native_join_runtime_filter
+	native_join_vector_agg
 	native_late_materialization
 	native_lazy_slot
 	native_metadata_flush

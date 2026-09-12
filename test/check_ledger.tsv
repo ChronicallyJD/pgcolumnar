@@ -1164,3 +1164,16 @@ native_join_runtime_filter	native_join_runtime_filter	scattered bloom rejects mo
 native_join_runtime_filter	native_join_runtime_filter	scattered interval cannot drop groups	never	-
 native_join_runtime_filter	native_join_runtime_filter	scattered plan has coordinator	never	-
 native_join_runtime_filter	native_join_runtime_filter	scattered still reads every group	never	-
+native_join_vector_agg	native_join_vector_agg	LEFT join answer equals heap	never	-
+native_join_vector_agg	native_join_vector_agg	LEFT join refuses the join fold	never	-
+native_join_vector_agg	native_join_vector_agg	duplicate dim keys answer equals heap	never	-
+native_join_vector_agg	native_join_vector_agg	duplicate dim keys refuse the join fold	never	-
+native_join_vector_agg	native_join_vector_agg	extra join filter answer equals GUC off	2026-09-12	-
+native_join_vector_agg	native_join_vector_agg	extra join filter answer equals heap	2026-09-12	-
+native_join_vector_agg	native_join_vector_agg	extra join filter refuses the join fold	2026-09-12	-
+native_join_vector_agg	native_join_vector_agg	inequality join filter answer equals heap	2026-09-12	-
+native_join_vector_agg	native_join_vector_agg	inequality join filter refuses the join fold	2026-09-12	-
+native_join_vector_agg	native_join_vector_agg	unique join fold answer equals GUC off	never	-
+native_join_vector_agg	native_join_vector_agg	unique join fold answer equals heap	never	-
+native_join_vector_agg	native_join_vector_agg	unique join uses core Agg when GUC off	never	-
+native_join_vector_agg	native_join_vector_agg	unique join uses vectorized agg when GUC on	2026-09-12	drop JOINREL fold

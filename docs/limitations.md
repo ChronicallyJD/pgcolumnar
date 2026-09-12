@@ -642,8 +642,9 @@ refuse it.
 
 ## Vectorized aggregate coverage
 
-The vectorized aggregate path covers one shape only. That shape is
-`SELECT agg(col) FROM t [WHERE ...]`, on one relation and with no grouping.
+The vectorized aggregate path covers one ungrouped shape. That shape is
+`SELECT agg(col) FROM t [WHERE ...]`, on one relation or a unique-key inner
+Hash Join, with no grouping.
 
 The target list may contain expressions over those aggregates. `count(*)::text`,
 `avg(a)+avg(b)`, `round(avg(a), 2)` and `max(a)-min(a)` all take the path. What
@@ -664,8 +665,15 @@ Each other query uses the scalar plan and stays correct. These include `sum` or
 - aggregates with `DISTINCT`
 - `GROUP BY` (unless the opt-in grouped path below is enabled) and `HAVING`
 - filters that are not simple
-- joins
+- joins other than a unique-key inner Hash Join
 - a reference to a whole row or to a system column
+
+A unique-key inner Hash Join is a filter of the fact table.
+The ungrouped fold can run on that shape when
+`pgcolumnar.enable_ungrouped_vector_agg` is on.
+A dimension with duplicate keys stays on the core Agg plan.
+A LEFT join stays on the core Agg plan.
+Grouped aggregation over a join is not this path.
 
 A separate opt-in path vectorizes `GROUP BY`. It is off by default. Set
 `pgcolumnar.enable_group_vectorization` to `on` to enable it. It covers

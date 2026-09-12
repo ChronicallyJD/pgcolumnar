@@ -60,6 +60,16 @@ true until the next version shipped.
   computed from 1155:
 
       awk -F'\t' '$4=="never"' test/check_ledger.tsv | wc -l
+- Ungrouped vectorized aggregate over a unique-key inner Hash Join (#752).
+
+  The fold used to require a single base relation, so a star-schema join dropped it.
+  A unique dimension is a filter of the fact table, so the fold can keep running.
+  Duplicate-key dimensions, LEFT joins, extra Join Filters, and grouped aggregation over a join still use core Agg.
+  A Join Filter besides the hash clause is not a membership test, so the fold refuses it.
+  `pgcolumnar.enable_ungrouped_vector_agg` stays off by default.
+
+      checks_never_observed_red   1155 -> 1162
+      covered                     native_join_vector_agg, 13 checks, last-red 2026-09-12
 
 - The mutation ledger covers a third suite: `differential`, 204 checks (#752).
 

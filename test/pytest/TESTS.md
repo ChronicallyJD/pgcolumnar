@@ -74,6 +74,7 @@ behaviour, the source of that number is named.
 - [26. test_check_records.py: every counted assertion is a record](#26-test_check_recordspy-every-counted-assertion-is-a-record)
 - [27. test_skip_loop_arms.py: a skipped arm records under its own name](#27-test_skip_loop_armspy-a-skipped-arm-records-under-its-own-name)
 - [28. test_docs_join_clustering.py: the runtime filter's layout precondition](#28-test_docs_join_clusteringpy-the-runtime-filters-layout-precondition)
+- [29. test_join_vector_agg.py: ungrouped fold over a unique-key join](#29-test_join_vector_aggpy-ungrouped-fold-over-a-unique-key-join)
 
 ## 1. How to read a test in here
 
@@ -2762,3 +2763,37 @@ The shell twin is two checks in `test/docs_style.sh`. Documentation may
 identify the two files as counterparts. That is the only cross-reference.
 
 Public seams: `docs/how-to.md` and `docs/best-practices.md`.
+## 29. test_join_vector_agg.py: ungrouped fold over a unique-key join
+
+Pytest twin of `test/native_join_vector_agg.sh`. The two files are independent:
+each builds its own fixtures and expected values. They share only the public
+EXPLAIN name `Columnar Vectorized Aggregates` and the SQL answers.
+
+### `test_unique_join_keeps_the_ungrouped_fold`
+
+A unique-key inner join is a filter of the fact table. With the ungrouped GUC
+on, EXPLAIN shows `Columnar Vectorized Aggregates`. The GUC-off plan is core
+Agg. The answer matches GUC-off and a heap twin. The dimension holds a subset
+of the fact keys, so a fold that skipped membership would disagree with heap.
+
+### `test_duplicate_dim_keys_refuse_the_join_fold`
+
+Duplicate dimension keys would multiply fact rows. EXPLAIN has no vectorized
+agg node. The answer still matches a heap twin of the same join.
+
+### `test_left_join_refuses_the_join_fold`
+
+A LEFT join is not a fact-table filter. The target list names a dimension
+column so the planner cannot drop the join. EXPLAIN has no vectorized agg
+node. The answer matches a heap twin, including unmatched fact rows.
+
+### `test_extra_join_filter_refuses_the_fold`
+
+A Join Filter besides the hash clause is not a membership test. EXPLAIN has
+no vectorized agg node. The sum matches GUC-off and a heap twin of the same
+join.
+
+### `test_inequality_join_filter_refuses_the_fold`
+
+A non-equi join clause is the same kind of extra Join Filter. EXPLAIN has no
+vectorized agg node. The sum matches a heap twin.
