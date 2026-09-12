@@ -2596,12 +2596,27 @@ people switch off.
 | mutation | goes red |
 | --- | --- |
 | report a mismatch but name the **wrong line** | `..._mismatch_names_the_loop_that_drifted...` |
+| return 2 from `main()`, counters still correct | **all six** |
 
 That third one is why the control is shaped as it is. Its first version compared two
 trees — clean reports nothing, drifted reports something — and **a classifier naming the
 wrong line passes that**: `0/1` either way. Measured, on the mutant above. So the test
 plants both loops in one file and pins `two.sh:12`, which is the only form that can tell
 "it found my bug" from "it found something".
+
+### The exit code is asserted in the helper, not in one test
+
+Every test here reads the tool's stdout, and **none of them would notice the tool
+becoming unusable**. Measured: returning `2` from `main()` while still printing correct
+counters left all six green at 18 checks. The shell half catches that through
+`|| _sk_out="TOOL FAILED"` — so the pair was stronger than this half alone, and on that
+side it was a *premise* that failed while the headline arm stayed green.
+
+So `_sweep` asserts `returncode == 0` once, covering all six. Under the same mutation
+all six now fail. Reported by @OffgridwithJD, whose first probe of it was invalid and
+said so: an `sys.exit(2)` appended after the `__main__` guard applied cleanly and changed
+nothing, `rc` still 0. **Asserting that a mutation applied is not asserting that the
+behaviour moved** — both halves, or the proof is of the edit rather than of the code.
 
 ### The partition is not the guard
 

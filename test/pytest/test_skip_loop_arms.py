@@ -73,13 +73,28 @@ fi
 '''
 
 
-def _sweep(root, name, body):
-    """Plant a one-suite tree at `root` and return (counters, mismatches)."""
+def _sweep(root, expect, **files):
+    """Plant a tree of `name=body` suites at `root`, return (counters, mismatches).
+
+    THE EXIT CODE IS ASSERTED HERE rather than in one test, because every test in
+    this file reads the tool's stdout and none of them would notice the tool
+    becoming unusable. Measured: returning 2 from `main()` while still printing
+    correct counters left all six tests green at 18 checks. The shell half catches
+    that through `|| _sk_out="TOOL FAILED"`, so the pair was stronger than this half
+    alone -- and on that side it was a PREMISE that failed while the headline arm
+    stayed green, which is the argument for putting it in the helper.
+
+    Reported by @OffgridwithJD, whose first probe of it was invalid and said so: an
+    `sys.exit(2)` appended after the `__main__` guard applied cleanly and changed
+    nothing. Asserting a mutation APPLIED is not asserting the behaviour MOVED.
+    """
     root.mkdir(parents=True, exist_ok=True)
     (root / "selftest").mkdir(exist_ok=True)
-    (root / name).write_text(body)
+    for name, body in files.items():
+        (root / f"{name}.sh").write_text(body)
     r = subprocess.run(["python3", str(TOOL), str(root)],
                        capture_output=True, text=True)
+    expect.num(r.returncode, 0, "the sweep tool reports success, not merely output")
     counts, bad = {}, []
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("MISMATCH "):
@@ -92,7 +107,7 @@ def _sweep(root, name, body):
 
 
 def test_a_loop_naming_its_siblings_arms_is_compared_and_agrees(tmp_path, expect):
-    counts, bad = _sweep(tmp_path / "t", "agree.sh", AGREE)
+    counts, bad = _sweep(tmp_path / "t", expect, agree=AGREE)
     expect.num(counts.get("loops", 0), 1, "the planted loop is found")
     expect.num(counts.get("compared", 0), 1, "and it is COMPARED, not filed as unreadable")
     expect.num(len(bad), 0, "and it agrees with its sibling")
@@ -104,7 +119,7 @@ def test_a_loop_naming_its_siblings_arms_is_compared_and_agrees(tmp_path, expect
 
 def test_a_rename_in_the_sibling_branch_is_caught(tmp_path, expect):
     """The whole point. Without this the loop is a comment that looks like a guard."""
-    counts, bad = _sweep(tmp_path / "t", "drift.sh", DRIFTED)
+    counts, bad = _sweep(tmp_path / "t", expect, drift=DRIFTED)
     expect.num(counts.get("compared", 0), 1, "the drifted site is still compared")
     expect.num(len(bad), 1, "and the rename is reported as a mismatch")
     expect.text(bad[0].split(":")[0], "drift.sh", "named by the file it is in")
@@ -123,7 +138,7 @@ def test_the_mismatch_names_the_loop_that_drifted_and_not_the_clean_one(tmp_path
     I broke".
     """
     body = AGREE.replace("_n", "_a") + "\n" + DRIFTED.replace("_n", "_b")
-    counts, bad = _sweep(tmp_path / "t", "two.sh", body)
+    counts, bad = _sweep(tmp_path / "t", expect, two=body)
 
     # The premise, or the pin below is pinning one of one rather than one of two.
     expect.num(counts.get("compared", 0), 2, "premise: BOTH loops were compared")
@@ -137,7 +152,7 @@ def test_the_mismatch_names_the_loop_that_drifted_and_not_the_clean_one(tmp_path
 def test_an_armless_branch_is_counted_as_armless_and_not_compared(tmp_path, expect):
     """Counted out loud, because a site nobody compared and a site that agreed
     are indistinguishable in a total of mismatches."""
-    counts, bad = _sweep(tmp_path / "t", "armless.sh", ARMLESS)
+    counts, bad = _sweep(tmp_path / "t", expect, armless=ARMLESS)
     expect.num(counts.get("loops", 0), 1, "the loop is found")
     expect.num(counts.get("armless", 0), 1, "and reported as armless")
     expect.num(counts.get("compared", 0), 0, "and NOT counted among the compared")
@@ -151,7 +166,7 @@ def test_an_interpolated_sibling_is_reported_rather_than_compared_wrongly(tmp_pa
     would report a FALSE mismatch on a correct site. The tool must decline to compare
     it and say so -- a guard that manufactures a red is the guard people switch off.
     """
-    counts, bad = _sweep(tmp_path / "t", "interp.sh", INTERPOLATED)
+    counts, bad = _sweep(tmp_path / "t", expect, interp=INTERPOLATED)
     expect.num(counts.get("interpolated", 0), 1, "the site is reported as interpolated")
     expect.num(len(bad), 0, "and NOT reported as a mismatch, which would be false")
     expect.num(counts.get("compared", 0), 0, "and not silently counted as compared")
@@ -170,14 +185,8 @@ def test_every_loop_is_classified_into_exactly_one_category(tmp_path, expect):
     @OffgridwithJD, who pointed out it is the strongest line in the file and the
     cheapest to satisfy wrongly.
     """
-    root = tmp_path / "all"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "selftest").mkdir(exist_ok=True)
-    for fn, body in (("a.sh", AGREE), ("b.sh", ARMLESS), ("c.sh", INTERPOLATED)):
-        (root / fn).write_text(body)
-    r = subprocess.run(["python3", str(TOOL), str(root)], capture_output=True, text=True)
-    c = {k: int(v) for k, _, v in (l.partition(" ") for l in r.stdout.splitlines())
-         if v.isdigit()}
+    c, _ = _sweep(tmp_path / "all", expect,
+                  a=AGREE, b=ARMLESS, c=INTERPOLATED)
     expect.num(c.get("loops", 0), 3, "all three planted loops are found")
     expect.text(f"{c.get('compared',0)}+{c.get('armless',0)}+{c.get('interpolated',0)}"
                 f"={c.get('compared',0)+c.get('armless',0)+c.get('interpolated',0)}",

@@ -45,6 +45,16 @@ true until the next version shipped.
   file and pins the drifted loop's own line, which is the only form that can tell "it
   found my bug" from "it found something". Raised in review by @OffgridwithJD.
 
+  A fourth proof closed a blindness the first three shared. Returning 2 from the tool's
+  `main()` while still printing correct counters left all six tests green: every one of
+  them reads stdout and none noticed the tool had become unusable. The shell half caught
+  it through its `TOOL FAILED` fallback, and there it was a PREMISE that failed while the
+  headline arm stayed green. So the exit code is now asserted once in the shared helper,
+  and under the same mutation all six fail. Reported by @OffgridwithJD, whose own first
+  probe of it was invalid and said so: `sys.exit(2)` appended after the `__main__` guard
+  applied cleanly and moved nothing. Asserting a mutation APPLIED is not asserting the
+  behaviour MOVED.
+
   And the partition arm, `compared + armless + interpolated == loops`, is the strongest
   line in the file and the cheapest to satisfy wrongly: a classifier filing everything as
   `armless` satisfies it perfectly. It is load-bearing only because the per-bucket arms
