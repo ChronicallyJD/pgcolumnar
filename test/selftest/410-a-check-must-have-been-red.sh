@@ -934,7 +934,7 @@ _dist="$_lw/dist"; rm -rf "$_dist"; mkdir -p "$_dist"
   printf 'suites_not_covered 7\n' > b.txt && git add b.txt && git commit -qm base
   git branch -q oldbase
   for i in 1 2 3; do echo "x$i" > f; git add f; git commit -qm "c$i"; done ) >/dev/null 2>&1
-printf 's\tp\ta\tnever\t-\n' > "$_dist/led"
+printf 's\tp\ta\t18\tnever\t-\n' > "$_dist/led"
 printf 'RESULT\ts\tp\ta\tPASS\t18\t\nchecks run: 1\n' > "$_dist/log"
 printf 's\n' > "$_dist/reg"
 
@@ -1006,7 +1006,7 @@ _rr="$_lw/refres"; rm -rf "$_rr"; mkdir -p "$_rr"
   git rm -q b.txt && git commit -qm "a commit without the budget"
   git branch -q nobudget
   git checkout -q hasbudget ) >/dev/null 2>&1
-printf 's\tp\ta\tnever\t-\n' > "$_rr/led"
+printf 's\tp\ta\t18\tnever\t-\n' > "$_rr/led"
 printf 'RESULT\ts\tp\ta\tPASS\t18\t\nchecks run: 1\n' > "$_rr/log"
 printf 's\n' > "$_rr/reg"
 

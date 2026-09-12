@@ -22,6 +22,25 @@ true until the next version shipped.
 
       suite<TAB>part<TAB>name<TAB>majors<TAB>last-red<TAB>mutations
 
+      rows            1179 -> 1197   (carried 1177, new 20, dropped 2)
+      checks_never_observed_red   1171 -> 1189
+      ever red           8 ->    8   (all carried, with their dates and one mutation)
+      major sets      1197 x "15;16;17;18;19"
+      covered         differential, harness_selftest, native_join_runtime_filter,
+                      native_join_vector_agg
+      suites_not_covered          249 (unchanged)
+
+  Every row claims all five majors, because all four covered suites are major-invariant:
+  934, 204, 46 and 13 records, identical on 15/16/17/18/19 in a five-major matrix. So the
+  census moves only by the twenty arms this change adds, and the diff is one field per
+  line.
+
+  The 20 new rows are part 410's arms about the majors field; the 2 dropped are the rows
+  whose checks this change RENAMED (`every committed row has five fields` became `six`).
+  The migration refuses to drop a row carrying history, for the reason `orphan-scan`
+  refuses it -- the catalogue of what has been seen red is the thing no run can recreate --
+  so a drop is only available for a row with nothing to lose, and the name has to be typed.
+
   A check's existence depends on the major, so a ledger that cannot say where a check
   exists cannot tell a deleted check from one that never ran here.
   `test/analyze_differential.sh:61` emits ONE record on PG15-17 and a suite's worth on
