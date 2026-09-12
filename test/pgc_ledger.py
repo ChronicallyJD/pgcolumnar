@@ -724,7 +724,7 @@ def cmd_gate(args):
     # The suite restriction is not a softening, it is the meaning of
     # suites_not_covered: the gate cannot refuse a new check in a suite it has
     # never seen, because it has no idea which of that suite's checks are new.
-    # Without it the gate refuses every check of all 250 uncovered suites and
+    # Without it the gate refuses every check of every uncovered suite and
     # reddens the whole matrix on the first run -- which is a gate somebody turns
     # off, the failure mode this issue family exists to prevent.
     #

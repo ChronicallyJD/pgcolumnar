@@ -2276,7 +2276,7 @@ run never mentioned survives, which is the control that the scope holds under a 
 ### `test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers`
 
 The suite restriction is the *meaning* of `suites_not_covered`, not a softening: without
-it the gate refuses every check of all 250 uncovered suites and reddens the whole matrix
+it the gate refuses every check of every uncovered suite and reddens the whole matrix
 on its first run. It tightens on its own as suites are seeded, and the deadlock that
 shipped is pinned as its own arm — regenerating the ledger lets a new check through.
 

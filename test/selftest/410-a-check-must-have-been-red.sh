@@ -589,7 +589,7 @@ check "but the gate says so, so the skip is visible rather than silent" \
 # ---- the gate cannot refuse a check in a suite it has never seen -------------
 #
 # The suite restriction is the MEANING of suites_not_covered, not a softening of
-# the refusal. Without it the gate refuses every check of all 250 uncovered
+# the refusal. Without it the gate refuses every check of every uncovered
 # suites and reddens the whole matrix on its first run -- a gate somebody turns
 # off within the week, which is the failure this issue family exists to prevent.
 #

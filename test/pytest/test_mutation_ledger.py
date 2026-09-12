@@ -312,7 +312,7 @@ def test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal(tmp_pa
 def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect):
     """The suite restriction is the MEANING of `suites_not_covered`, not a softening.
 
-    Without it the gate refuses every check of all 250 uncovered suites and reddens the
+    Without it the gate refuses every check of every uncovered suite and reddens the
     whole matrix on its first run -- a gate somebody turns off within the week, which is
     the failure this issue family exists to prevent. It tightens on its own as suites
     are seeded.
