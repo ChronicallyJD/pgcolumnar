@@ -36,8 +36,8 @@ _lw="$PGC_WORKDIR/ledger"; mkdir -p "$_lw"
 _led_run() { python3 "$_led" "$@" 2>&1; }
 _led_rc()  { python3 "$_led" "$@" >/dev/null 2>&1; echo $?; }
 
-printf 'RESULT\tdemo\tpart1\tfirst check\tPASS\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n' > "$_lw/green.log"
-printf 'RESULT\tdemo\tpart1\tfirst check\tFAIL\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n' > "$_lw/red.log"
+printf 'RESULT\tdemo\tpart1\tfirst check\tPASS\t18\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t18\t\nchecks run: 2\n' > "$_lw/green.log"
+printf 'RESULT\tdemo\tpart1\tfirst check\tFAIL\t18\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t18\t\nchecks run: 2\n' > "$_lw/red.log"
 printf 'demo\n' > "$_lw/registered"
 printf 'suites_not_covered 0\n' > "$_lw/budget.txt"
 
@@ -58,7 +58,7 @@ check "and a record missing its verdict" \
 	"$(_led_rc gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" --registered "$_lw/registered" "$_lw/short.log")" "2"
 check "each says what was wrong with the input" \
 	"$(_led_run gate --ledger "$_lw/l.tsv" --budget "$_lw/budget.txt" --registered "$_lw/registered" "$_lw/short.log" \
-		| grep -c 'a record has 5 fields')" "1"
+		| grep -c 'a record has 6 fields')" "1"
 
 # ---- the count is not the schema, on INGESTION as well as in the runner ------
 #
@@ -68,9 +68,9 @@ check "each says what was wrong with the input" \
 # that does not parse. The runner reconciles the suite it just ran; this
 # reconciles a log handed to the ledger, possibly from another machine.
 # Reported by @linuxhikerpm on #918.
-printf 'RESULT\tdemo\tpart1\ta name\tBOGUS\t\nchecks run: 1\n' > "$_lw/bogus.log"
-printf 'RESULT\tdemo\tpart1\t\tPASS\t\nchecks run: 1\n'        > "$_lw/noname.log"
-printf 'RESULT\tdemo\tpart1\ta name\tPASS\t\nchecks run: 2\n'  > "$_lw/miscount.log"
+printf 'RESULT\tdemo\tpart1\ta name\tBOGUS\t18\t\nchecks run: 1\n' > "$_lw/bogus.log"
+printf 'RESULT\tdemo\tpart1\t\tPASS\t18\t\nchecks run: 1\n'        > "$_lw/noname.log"
+printf 'RESULT\tdemo\tpart1\ta name\tPASS\t18\t\nchecks run: 2\n'  > "$_lw/miscount.log"
 
 check "a verdict pgc_record cannot emit is an integrity failure" \
 	"$(_led_rc merge --ledger "$_lw/v.tsv" --date 2026-09-10 "$_lw/bogus.log")" "2"
@@ -111,7 +111,7 @@ check "a date that is not a date is refused rather than stored" \
 # A run that mutates one thing can redden several: the target, plus whatever
 # depended on it. Attributing --mutation to every failure records collateral
 # damage as evidence that the mutation kills that check.
-printf 'RESULT\tdemo\tpart1\tthe target\tFAIL\t\nRESULT\tdemo\tpart1\tcollateral\tFAIL\t\nchecks run: 2\n' \
+printf 'RESULT\tdemo\tpart1\tthe target\tFAIL\t18\t\nRESULT\tdemo\tpart1\tcollateral\tFAIL\t18\t\nchecks run: 2\n' \
 	> "$_lw/twofail.log"
 check "--mutation across two failing checks in one run is refused" \
 	"$(_led_rc merge --ledger "$_lw/m2.tsv" --date 2026-09-10 --mutation M "$_lw/twofail.log")" "2"
@@ -179,7 +179,7 @@ check "one --mutation cannot be attributed across several runs at once" \
 : > "$_lw/dup.tsv"
 check "the same check in two logs is two runs, not a duplicate" \
 	"$(_led_run merge --ledger "$_lw/dup.tsv" --date 2026-09-10 "$_lw/green.log" "$_lw/green.log" | grep -c 'duplicate')" "0"
-printf 'RESULT\tdemo\tpart1\tsame\tPASS\t\nRESULT\tdemo\tpart1\tsame\tFAIL\t\nchecks run: 2\n' > "$_lw/twice.log"
+printf 'RESULT\tdemo\tpart1\tsame\tPASS\t18\t\nRESULT\tdemo\tpart1\tsame\tFAIL\t18\t\nchecks run: 2\n' > "$_lw/twice.log"
 : > "$_lw/dup2.tsv"
 check "the same name twice in ONE log is a duplicate, and is named" \
 	"$(_led_run merge --reds-are-real --ledger "$_lw/dup2.tsv" --date 2026-09-10 "$_lw/twice.log" \
@@ -193,8 +193,8 @@ check "the same name twice in ONE log is a duplicate, and is named" \
 # gone -- a scan that silently finds nothing is worse than one that refuses.
 
 : > "$_lw/ren.tsv"
-printf 'RESULT\tdemo\tpart1\tthe old name\tFAIL\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n' > "$_lw/before.log"
-printf 'RESULT\tdemo\tpart1\tthe new name\tPASS\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 2\n' > "$_lw/after.log"
+printf 'RESULT\tdemo\tpart1\tthe old name\tFAIL\t18\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t18\t\nchecks run: 2\n' > "$_lw/before.log"
+printf 'RESULT\tdemo\tpart1\tthe new name\tPASS\t18\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t18\t\nchecks run: 2\n' > "$_lw/after.log"
 _led_run merge --reds-are-real --ledger "$_lw/ren.tsv" --date 2026-09-01 "$_lw/before.log" >/dev/null
 check "premise: the check has history before the rename" \
 	"$(awk -F'\t' '$3=="the old name"{print $4}' "$_lw/ren.tsv")" "2026-09-01"
@@ -211,8 +211,8 @@ check "a before-log and an after-log together are refused, not silently empty" \
 # Movement in ANOTHER part must not consume this part's pairing. That is what a
 # global positional zip gets wrong, and it fails silently.
 : > "$_lw/ren2.tsv"
-printf 'RESULT\tdemo\tpartA\told A\tPASS\t\nRESULT\tdemo\tpartB\tstable B\tPASS\t\nchecks run: 2\n' > "$_lw/b2.log"
-printf 'RESULT\tdemo\tpartA\tnew A\tPASS\t\nRESULT\tdemo\tpartB\tstable B\tPASS\t\nRESULT\tdemo\tpartB\tadded B\tPASS\t\nchecks run: 3\n' > "$_lw/a2.log"
+printf 'RESULT\tdemo\tpartA\told A\tPASS\t18\t\nRESULT\tdemo\tpartB\tstable B\tPASS\t18\t\nchecks run: 2\n' > "$_lw/b2.log"
+printf 'RESULT\tdemo\tpartA\tnew A\tPASS\t18\t\nRESULT\tdemo\tpartB\tstable B\tPASS\t18\t\nRESULT\tdemo\tpartB\tadded B\tPASS\t18\t\nchecks run: 3\n' > "$_lw/a2.log"
 _led_run merge --ledger "$_lw/ren2.tsv" --date 2026-09-10 "$_lw/b2.log" >/dev/null
 check "a rename in one part survives an addition in another" \
 	"$(_led_run rename-scan --ledger "$_lw/ren2.tsv" "$_lw/a2.log" \
@@ -221,10 +221,10 @@ check "and the addition in the other part is not called a rename" \
 	"$(_led_run rename-scan --ledger "$_lw/ren2.tsv" "$_lw/a2.log" | grep -c 'added B')" "0"
 
 # A check merely added, or merely removed, is not a rename.
-printf 'RESULT\tdemo\tpart1\tthe old name\tPASS\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t\nRESULT\tdemo\tpart1\tbrand new\tPASS\t\nchecks run: 3\n' > "$_lw/added.log"
+printf 'RESULT\tdemo\tpart1\tthe old name\tPASS\t18\t\nRESULT\tdemo\tpart1\ta stable check\tPASS\t18\t\nRESULT\tdemo\tpart1\tbrand new\tPASS\t18\t\nchecks run: 3\n' > "$_lw/added.log"
 check "a check merely added is not reported as a rename" \
 	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/added.log" | grep -c 'possible rename')" "0"
-printf 'RESULT\tdemo\tpart1\ta stable check\tPASS\t\nchecks run: 1\n' > "$_lw/removed.log"
+printf 'RESULT\tdemo\tpart1\ta stable check\tPASS\t18\t\nchecks run: 1\n' > "$_lw/removed.log"
 check "nor is one merely removed" \
 	"$(_led_run rename-scan --ledger "$_lw/ren.tsv" "$_lw/removed.log" | grep -c 'possible rename')" "0"
 
@@ -242,8 +242,8 @@ check "nor is one merely removed" \
 # ledger was checked -- the shape of the whole issue family.
 
 : > "$_lw/orph.tsv"
-printf 'RESULT\tdemo\tpart1\tstill here\tPASS\t\nRESULT\tdemo\tpart1\tgone tomorrow\tPASS\t\nRESULT\tdemo\tpartZ\telsewhere\tPASS\t\nchecks run: 3\n' > "$_lw/o_before.log"
-printf 'RESULT\tdemo\tpart1\tstill here\tPASS\t\nchecks run: 1\n' > "$_lw/o_after.log"
+printf 'RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\nRESULT\tdemo\tpart1\tgone tomorrow\tPASS\t18\t\nRESULT\tdemo\tpartZ\telsewhere\tPASS\t18\t\nchecks run: 3\n' > "$_lw/o_before.log"
+printf 'RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\nchecks run: 1\n' > "$_lw/o_after.log"
 _led_run merge --ledger "$_lw/orph.tsv" --date 2026-09-01 "$_lw/o_before.log" >/dev/null
 check "premise: the ledger holds all three rows before the scan" \
 	"$(wc -l < "$_lw/orph.tsv" | tr -d ' ')" "3"
@@ -292,7 +292,7 @@ check "and a prune with nothing left to remove is clean, not an error" \
 # An orphan that has been seen red is the one case where deleting the row loses
 # something no run can recreate.
 : > "$_lw/hist.tsv"
-printf 'RESULT\tdemo\tpart1\tstill here\tPASS\t\nRESULT\tdemo\tpart1\tgone tomorrow\tFAIL\t\nchecks run: 2\n' > "$_lw/h_before.log"
+printf 'RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\nRESULT\tdemo\tpart1\tgone tomorrow\tFAIL\t18\t\nchecks run: 2\n' > "$_lw/h_before.log"
 _led_run merge --reds-are-real --mutation "drop the guard" --ledger "$_lw/hist.tsv" \
 	--date 2026-09-01 "$_lw/h_before.log" >/dev/null
 check "premise: the orphan now carries a date and a mutation" \
@@ -331,8 +331,8 @@ check "the refusal says why, rather than only that it refused" \
 # that whole part, and that is the direction a deleting command should err in.
 
 : > "$_lw/skp.tsv"
-printf 'RESULT\tdemo\tpart1\tarm one\tPASS\t\nRESULT\tdemo\tpart1\tarm two\tPASS\t\nRESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 3\n' > "$_lw/sk_full.log"
-printf 'RESULT\tdemo\tpart1\tthe whole thing\tSKIP\tno fixture on this box\nchecks run: 1\n' > "$_lw/sk_skipped.log"
+printf 'RESULT\tdemo\tpart1\tarm one\tPASS\t18\t\nRESULT\tdemo\tpart1\tarm two\tPASS\t18\t\nRESULT\tdemo\tpart1\tthe whole thing\tPASS\t18\t\nchecks run: 3\n' > "$_lw/sk_full.log"
+printf 'RESULT\tdemo\tpart1\tthe whole thing\tSKIP\t18\tno fixture on this box\nchecks run: 1\n' > "$_lw/sk_skipped.log"
 _led_run merge --ledger "$_lw/skp.tsv" --date 2026-09-01 "$_lw/sk_full.log" >/dev/null
 check "premise: the ledger holds all three of that part's rows" \
 	"$(wc -l < "$_lw/skp.tsv" | tr -d ' ')" "3"
@@ -357,7 +357,7 @@ check "and it says so rather than declining silently" \
 
 # CONTROL. Without this the arms above are satisfied by a tool that refuses to prune
 # anything at all, which is the failure mode of every over-broad guard.
-printf 'RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 1\n' > "$_lw/sk_pass.log"
+printf 'RESULT\tdemo\tpart1\tthe whole thing\tPASS\t18\t\nchecks run: 1\n' > "$_lw/sk_pass.log"
 check "control: the same two rows ARE pruned when that part's record is a PASS" \
 	"$(_led_run orphan-scan --prune --ledger "$_lw/skp.tsv" "$_lw/sk_pass.log" \
 		| grep -c 'removed 2 row(s)')" "1"
@@ -440,7 +440,7 @@ _led_run merge --ledger "$_lw/g.tsv" --date 2026-09-10 "$_lw/green.log" >/dev/nu
 printf 'suites_not_covered 0\n' > "$_lw/gb.txt"
 check "a run whose checks are all ledgered passes the gate" \
 	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb.txt" --registered "$_lw/registered" "$_lw/green.log")" "0"
-printf 'RESULT\tdemo\tpart1\tfirst check\tPASS\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t\nRESULT\tdemo\tpart1\tbrand new\tPASS\t\nchecks run: 3\n' > "$_lw/new.log"
+printf 'RESULT\tdemo\tpart1\tfirst check\tPASS\t18\t\nRESULT\tdemo\tpart1\tsecond check\tPASS\t18\t\nRESULT\tdemo\tpart1\tbrand new\tPASS\t18\t\nchecks run: 3\n' > "$_lw/new.log"
 check "a check the ledger has never seen is refused" \
 	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb.txt" --registered "$_lw/registered" "$_lw/new.log")" "1"
 check "and it is named, so the author knows which one" \
@@ -596,7 +596,7 @@ check "but the gate says so, so the skip is visible rather than silent" \
 # It tightens on its own as suites are seeded, and the ceiling forces that
 # direction.
 
-printf 'RESULT\tother\tpartX\tsomething\tPASS\t\nchecks run: 1\n' > "$_lw/othersuite.log"
+printf 'RESULT\tother\tpartX\tsomething\tPASS\t18\t\nchecks run: 1\n' > "$_lw/othersuite.log"
 printf 'demo\nother\n' > "$_lw/reg_both"
 printf 'suites_not_covered 1\n' > "$_lw/gb1.txt"
 check "a check in an UNCOVERED suite is not refused" \
@@ -608,7 +608,7 @@ check "but that suite is counted as not covered, which is the debt" \
 # And once the suite IS covered, a new check in it is refused again -- the
 # restriction tightens rather than exempting the suite forever.
 _led_run merge --ledger "$_lw/g.tsv" --date 2026-09-10 "$_lw/othersuite.log" >/dev/null
-printf 'RESULT\tother\tpartX\tsomething\tPASS\t\nRESULT\tother\tpartX\tnewly added\tPASS\t\nchecks run: 2\n' > "$_lw/other2.log"
+printf 'RESULT\tother\tpartX\tsomething\tPASS\t18\t\nRESULT\tother\tpartX\tnewly added\tPASS\t18\t\nchecks run: 2\n' > "$_lw/other2.log"
 printf 'suites_not_covered 0\n' > "$_lw/gb2.txt"
 check "once the suite is covered, a new check in it IS refused" \
 	"$(_led_rc gate --ledger "$_lw/g.tsv" --budget "$_lw/gb2.txt" --registered "$_lw/reg_both" "$_lw/other2.log")" "1"
@@ -638,7 +638,7 @@ _mono_budget="$PGC_TESTDIR/check_ledger_budget.txt"
 _mono_reg="$_lw/mono_reg"
 cut -f1 "$_ledger" | sort -u > "$_mono_reg"
 _mono_log="$_lw/mono.log"
-awk -F'\t' 'NR<=2 {printf "RESULT\t%s\t%s\t%s\tPASS\t\n", $1, $2, $3}' "$_ledger" > "$_mono_log"
+awk -F'\t' 'NR<=2 {printf "RESULT\t%s\t%s\t%s\tPASS\t18\t\n", $1, $2, $3}' "$_ledger" > "$_mono_log"
 # A log states its own count. read_records reconciles the two, so a fixture
 # without this line is not a log the ledger will accept -- which is the point.
 printf 'checks run: %s\n' "$(grep -c '^RESULT' "$_mono_log")" >> "$_mono_log"
@@ -803,7 +803,7 @@ _dist="$_lw/dist"; rm -rf "$_dist"; mkdir -p "$_dist"
   git branch -q oldbase
   for i in 1 2 3; do echo "x$i" > f; git add f; git commit -qm "c$i"; done ) >/dev/null 2>&1
 printf 's\tp\ta\tnever\t-\n' > "$_dist/led"
-printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 1\n' > "$_dist/log"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nchecks run: 1\n' > "$_dist/log"
 printf 's\n' > "$_dist/reg"
 
 check "premise: the scratch prior really is three commits behind" \
@@ -875,7 +875,7 @@ _rr="$_lw/refres"; rm -rf "$_rr"; mkdir -p "$_rr"
   git branch -q nobudget
   git checkout -q hasbudget ) >/dev/null 2>&1
 printf 's\tp\ta\tnever\t-\n' > "$_rr/led"
-printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 1\n' > "$_rr/log"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nchecks run: 1\n' > "$_rr/log"
 printf 's\n' > "$_rr/reg"
 
 check "premise: the hasbudget branch carries the budget" \
@@ -919,8 +919,8 @@ check "a ref that exists with the budget still compares" \
 # has to say which it is rather than the tool guessing.
 
 _r946="$PGC_WORKDIR/r946"; mkdir -p "$_r946"
-printf 'RESULT\tdemo\tp\tthe check\tFAIL\t\nRESULT\tdemo\tp\tother\tPASS\t\nchecks run: 2\n' > "$_r946/red.log"
-printf 'RESULT\tdemo\tp\tthe check\tPASS\t\nRESULT\tdemo\tp\tother\tPASS\t\nchecks run: 2\n' > "$_r946/green.log"
+printf 'RESULT\tdemo\tp\tthe check\tFAIL\t18\t\nRESULT\tdemo\tp\tother\tPASS\t18\t\nchecks run: 2\n' > "$_r946/red.log"
+printf 'RESULT\tdemo\tp\tthe check\tPASS\t18\t\nRESULT\tdemo\tp\tother\tPASS\t18\t\nchecks run: 2\n' > "$_r946/green.log"
 
 : > "$_r946/a.tsv"
 check "a log carrying a FAIL is refused when no reason is given" \

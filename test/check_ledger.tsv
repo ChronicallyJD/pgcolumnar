@@ -793,8 +793,11 @@ harness_selftest	400-a-check-result-must-be-machine	a verdict pgc_record cannot 
 harness_selftest	400-a-check-result-must-be-machine	an empty check name does not reconcile	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check emits exactly one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	an unrunnable check still prints its old line	never	-
+harness_selftest	400-a-check-result-must-be-machine	and a different major reaches the same field, so it is read not hardcoded	never	-
+harness_selftest	400-a-check-result-must-be-machine	and a harness that set no major says unknown rather than an empty field	never	-
 harness_selftest	400-a-check-result-must-be-machine	and it is counted	never	-
 harness_selftest	400-a-check-result-must-be-machine	and it is counted, so checks run: reports it	never	-
+harness_selftest	400-a-check-result-must-be-machine	and its major field carries the server major it ran under	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its name field is the check's name, spaces intact	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says FAIL	never	-
 harness_selftest	400-a-check-result-must-be-machine	and its verdict field says PASS	never	-
@@ -814,6 +817,7 @@ harness_selftest	400-a-check-result-must-be-machine	and the REASON_CODE travels 
 harness_selftest	400-a-check-result-must-be-machine	and the ratio check is counted as a pass, not a skip	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the ratio check's human line is unchanged	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the ratio check's verdict is SKIP	never	-
+harness_selftest	400-a-check-result-must-be-machine	and the reason still follows the major, so nothing shifted onto it	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the timing check is counted as a pass, not a skip	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the timing check's human line is unchanged	never	-
 harness_selftest	400-a-check-result-must-be-machine	and the timing check's verdict is SKIP	never	-
@@ -827,6 +831,7 @@ harness_selftest	400-a-check-result-must-be-machine	check_ratio with a zero side
 harness_selftest	400-a-check-result-must-be-machine	check_text on an empty side emits one record	never	-
 harness_selftest	400-a-check-result-must-be-machine	check_text's empty-side line is unchanged	never	-
 harness_selftest	400-a-check-result-must-be-machine	control: a well-formed record still reconciles	never	-
+harness_selftest	400-a-check-result-must-be-machine	control: unknown IS a major the reconciler accepts, or the four above prove nothing	never	-
 harness_selftest	400-a-check-result-must-be-machine	fewer records than counted checks is not described as a subshell	never	-
 harness_selftest	400-a-check-result-must-be-machine	lib.sh bumps PGC_CHECKS in exactly one place	never	-
 harness_selftest	400-a-check-result-must-be-machine	more records than counted checks names the cause, not just the arithmetic	never	-
@@ -845,6 +850,10 @@ harness_selftest	400-a-check-result-must-be-machine	premise: the probe ran every
 harness_selftest	400-a-check-result-must-be-machine	premise: the sweep classified a corpus of check-calling files	never	-
 harness_selftest	400-a-check-result-must-be-machine	premise: while a file that calls no check is not its business	never	-
 harness_selftest	400-a-check-result-must-be-machine	the accounting line reconciles four outcomes against the count	never	-
+harness_selftest	400-a-check-result-must-be-machine	the major [18.2] is not a major, so that record does not reconcile	never	-
+harness_selftest	400-a-check-result-must-be-machine	the major [] is not a major, so that record does not reconcile	never	-
+harness_selftest	400-a-check-result-must-be-machine	the major [eighteen] is not a major, so that record does not reconcile	never	-
+harness_selftest	400-a-check-result-must-be-machine	the major [pg18] is not a major, so that record does not reconcile	never	-
 harness_selftest	400-a-check-result-must-be-machine	the reconciliation accepts the verdict FAIL, which pgc_record emits	never	-
 harness_selftest	400-a-check-result-must-be-machine	the reconciliation accepts the verdict PASS, which pgc_record emits	never	-
 harness_selftest	400-a-check-result-must-be-machine	the reconciliation accepts the verdict SKIP, which pgc_record emits	never	-
