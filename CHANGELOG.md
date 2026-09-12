@@ -2241,6 +2241,20 @@ true until the next version shipped.
   either a new ledger row or a rename that would orphan an existing one, and `main` has no
   tool to remove an orphan until #983 lands -- so the sequencing is written into the arm's
   comment rather than quietly skipped.
+- A collection-time vacuity refusal keeps its reason under pytest-xdist (#963).
+
+  `pytest_collection_modifyitems` raises `UsageError`. Serial, that is rc 4 and
+  the sentence on stderr. Under `-n` pytest still runs `pytest_collection_finish`
+  in a `finally`, so the worker tells the controller it collected the tests and
+  then exits. xdist's `worker_workerfinished` asserts a worker that collected
+  tests must not finish with them pending: a 35-line INTERNALERROR, rc 1, and
+  the sentence is gone. Measured on the pinned runner (pytest 9.1.1,
+  pytest-xdist 3.8.0).
+
+  A worker now records the sentence on `workeroutput` and clears the items so
+  no ids cross. The controller re-raises `UsageError` from `pytest_testnodedown`,
+  which is the process serial already used. The in-test control (a body that
+  concludes nothing) is unchanged in both modes.
 
 ## [1.0-alpha3] - 2026-09-02
 

@@ -245,6 +245,35 @@ reaches the exit status, that the override is conditional, and that the two
 harnesses agree on 67. Against the pre-fix layer it reddens six arms.
 
 
+### A collection-time refusal must keep its reason under xdist
+
+#963. `pytest_collection_modifyitems` raises `pytest.UsageError`. Serial, that is
+rc 4 and the sentence on stderr. Under `-n` pytest still runs
+`pytest_collection_finish` in a `finally`, so the worker tells the controller it
+collected the tests and then exits; xdist's `worker_workerfinished` asserts a
+worker that collected tests must not finish with them pending, and the reader
+gets a 35-line INTERNALERROR, rc 1, and no sentence.
+
+The table is the test. A VacuityError raised inside a test body is the control:
+it is a normal failure and must stay rc 1 with the sentence, in both modes, so
+a fix that moved the wrong hook reddens here.
+
+| test | asserts |
+| --- | --- |
+| `test_a_bare_skip_refusal_keeps_its_reason_under_xdist` | collection skip: rc 4, sentence, no INTERNALERROR, serial and `-n 2` |
+| `test_a_broad_except_refusal_keeps_its_reason_under_xdist` | the same for a second collection-time rule, so the defect is the hook |
+| `test_an_in_test_vacuity_refusal_is_unchanged_under_xdist` | **control**: a body that concludes nothing stays rc 1 with the sentence |
+
+A worker records the sentence on `workeroutput` and clears the items so no ids
+cross. The controller re-raises `UsageError` from `pytest_testnodedown`, which
+is the process serial already used. Refusing `-n` would drop a runner this
+layer already registers an xdist hook for. Turning the refusal into a test
+failure would keep rc 1, which is the same code a failing test gives.
+
+**The shell harness needs no equivalent.** The subject is the collection hook
+in `pgc_vacuity.py`. A shell part that greps or inspects that module is the
+coupling selftest 350 and 360 deleted.
+
 ### An A/B whose arms agree measures nothing
 
 `expect.differ(a, b, name)` is the assertion `mutation-arm-unobservable` says nobody
