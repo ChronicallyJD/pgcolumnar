@@ -54,6 +54,30 @@ itself would be a file nobody reads changing under everybody.
 It is not only mutation runs. Every real CI red fills it, every flake, every
 bisect. A mutation run is the deliberate accelerator.
 
+REGENERATING ACROSS A REBASE, in this order, and the order is the point
+-----------------------------------------------------------------------
+Paid four times on one PR before it was written down. A rebase moves the LEDGER
+without moving the BUDGET: git merges both sides' rows into the tsv and keeps one
+side's number in the budget, so the committed pair contradicts itself before
+anything is run. Four arms then fail and all four trace to that one cause -- one
+asserts the pair agrees, three run the real gate, which correctly refuses a
+contradiction. Diagnosing it from those four failures costs an hour.
+
+    1. rebase onto the new base FIRST
+    2. DERIVE to reconcile       the budget from the merged tsv, before running
+    3. run the suite             on the REBASED tree, and guard the log
+    4. merge                     the guarded run
+    5. prune                     orphans, if any
+    6. DERIVE again              the final census, read back from the file
+
+Two derives, not one: step 2 makes the tree self-consistent so the suite can pass at
+all, step 6 records the result of steps 4 and 5. Both are READ BACK from the tsv --
+`old + n` is right once and wrong every time after.
+
+And re-run whatever your evidence names whose FILES moved in the rebase. A gate
+statement is a claim about a tree, and a rebase silently changes which tree; saying
+which suites you re-ran and which you did not is part of the claim.
+
 FAIL CLOSED
 -----------
 An unreadable file, an empty one, or a record with too few fields is an ERROR.
