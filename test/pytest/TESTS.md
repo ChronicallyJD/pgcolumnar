@@ -2237,10 +2237,46 @@ A global positional pairing misses a real rename whenever unrelated movement in 
 part shifts the ordering. Given a before-log and an after-log together the vanished name
 is present in the union, so the scan **refuses** rather than silently finding nothing.
 
+### `test_an_orphan_row_is_named_and_the_unscanned_rows_are_counted`
+
+`rename-scan` pairs an appearance with a disappearance, so an **unpaired** disappearance
+— a check deleted, or renamed in a run where nothing appeared — printed `vanished=N` and
+refused nothing. Two rows in the committed ledger named checks that no longer existed;
+the census counted both and every run returned 0.
+
+The assertion that matters is the **scope**. A row in a part the run does not contain is
+not an orphan, because the run cannot speak about it — counting those as present would
+let a one-suite log certify the whole ledger. So the scan states how many rows it could
+not speak about, and this test pins that number as well as the orphan it found.
+
+### `test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal`
+
+The first version of `--prune` **deleted a suite**. One SKIP record put the part in the
+run's `parts`, so every other row of that suite became an orphan, and the prune removed them
+while reporting `not checked=0` and `rc=0` — the most confident output the tool can produce.
+`not checked` protects a part the run does not contain; a part *contained but skipped
+wholesale* fell in the gap between the two.
+
+The rule is deliberately broader than that case: a SKIP **anywhere** in the part means some
+arm did not run, so the run cannot tell a deleted check from one skipped under a name that
+does not match it. One skipped timing check blocks pruning that whole part, which is the
+direction a deleting command should err in.
+
+The control is the half that matters — the same two rows must still be pruned when the
+part's record is a `PASS`, or this is simply a tool that refuses to prune anything.
+
+### `test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history`
+
+The catalogue of what has been seen red is what the ledger exists to be, and no run can
+recreate it. `--prune` therefore refuses the **whole** prune when any orphan carries
+history, rather than removing the safe ones and leaving a partial job for whoever reads
+the output. A historyless orphan is removed and named as it goes; the row in the part the
+run never mentioned survives, which is the control that the scope holds under a write.
+
 ### `test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers`
 
 The suite restriction is the *meaning* of `suites_not_covered`, not a softening: without
-it the gate refuses every check of all 250 uncovered suites and reddens the whole matrix
+it the gate refuses every check of every uncovered suite and reddens the whole matrix
 on its first run. It tightens on its own as suites are seeded, and the deadlock that
 shipped is pinned as its own arm — regenerating the ledger lets a new check through.
 

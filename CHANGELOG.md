@@ -2021,6 +2021,62 @@ true until the next version shipped.
   unanchored `grep -F` finds 3 occurrences because both renames EXTEND the name rather
   than replace it, so each renamed line still matches its own old form. Anchoring on the
   closing quote gives 1, which is the one that matters.
+- `pgc_ledger.py orphan-scan` reports a ledger row that no record in its own part
+  matches, and `--prune` removes it only when no history would be lost (#983).
+
+  The comparison already existed and already printed the answer. `rename-scan` pairs an
+  appearance with a disappearance, so an UNPAIRED disappearance -- a check deleted, or
+  renamed in a run where nothing appeared -- printed `vanished=2` and returned 0. Two rows
+  in the committed ledger named checks that no longer existed; the census counted both, and
+  every run for days said so in a line nobody acted on. **A guard that compels one list and
+  ignores the second manufactures the confidence that the thing is handled.**
+
+  Driven on the real ledger, which is the only instance that matters:
+
+      orphan: harness_selftest 330-... premise: all three runner functions were extracted
+      orphan: harness_selftest 330-... premise: and all three are callable
+      not checked: 44 row(s) in 1 part(s) this run does not contain
+      orphan scan: parts in the run=43, rows in those parts=861, orphans=2
+                   (0 carrying history), not checked=44
+      orphan prune: removed 2 row(s), the ledger now holds 925
+
+  **A row carrying history is never pruned**, and one such row refuses the WHOLE prune.
+  No run can recreate the catalogue of what has been seen red, and removing the safe rows
+  while naming the unsafe ones would leave a partial job for whoever reads the output.
+
+  **Rows in parts the run does not contain are counted out loud as `not checked`**, never
+  as present. Otherwise a single-suite log would certify the whole ledger, which is the
+  same defect one level up.
+
+  **`--prune` refuses a part that skipped, which was this change's own worst bug.**
+  `not checked` protects a part the run does not contain. A part *contained but skipped
+  wholesale* fell in the gap: one SKIP record put the part in the run's `parts`, every other
+  row of that suite became an orphan, and `--prune` deleted the suite while reporting
+  `not checked=0` and `rc=0` -- the most confident output the tool can produce. Measured on
+  a three-row fixture for `analyze_differential`, whose PG17 run is a single SKIP; found by
+  @pgcolumnar-9b in review. Nine suites skip wholesale on PG17 and `suites_not_covered` is
+  250, so seeding any one of them would have armed it.
+
+  The rule is broader than that case deliberately: a SKIP **anywhere** in the part means
+  some arm did not run, so the run cannot tell "this row's check was deleted" from "this
+  row's check was skipped under a name that does not match it" -- #994's defect at suite
+  granularity rather than branch granularity. One skipped timing check therefore blocks
+  pruning that whole part, and that is the direction a deleting command should err in. The
+  control holds the other half: the same rows are still pruned when the part's record is a
+  PASS, so this is not a tool that refuses to prune anything.
+
+  The four categories -- matched, orphan, unprunable, not checked -- are asserted to account
+  for every ledger row, because a classification that silently loses one is the failure this
+  tool exists to report.
+
+  **It reports and is NOT wired into the gate, for a measured reason.** Scanned against a
+  real run, `340-the-binary-must-be-built-from.sh` records ONE skip under a name neither
+  of its two arms has (`the unreadable-source refusal`) whenever the box has no non-root
+  user to read as. On such a box two live ledger rows have no matching record, so an absent
+  record does not yet mean a removed check and a gate refusing on absence would redden a
+  correct run. Arming it needs those branches to record a SKIP under the names they stand
+  in for -- the conversion #965 made for the eleven timeout paths -- and an arm now pins
+  that shape so the day it changes, the arm says so.
 
 - Nine git bundles are out of the tree, `*.bundle` is ignored, and
   `310-a-compiled-artifact-must-not-be.sh` now covers transfer artifacts as well as
