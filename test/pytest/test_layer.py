@@ -729,7 +729,8 @@ def test_a_conftest_cannot_switch_off_the_raises_scan(pytester, expect):
     hatched.stderr.fnmatch_lines(["*_raises_sites*"])
 
 
-def test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes(pytester, expect):
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes(pytester, expect, mode):
     """#967, the class-attribute frame. #964 snapshots module bindings.
     `Expect.num = a stub` is not a rebind of `Expect` -- the name still points
     at the same class -- so a false claim reports as a pass if the stub still
@@ -760,12 +761,20 @@ def test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes(pyteste
         "pgc_vacuity.Expect.num = "
         "lambda self, got, want, name: self._record(name)\n"
     )
+    # BOTH MODES, because this surface reaches the reporter only after the merge
+    # that composed #963 and #967. Before it, the method branch raised
+    # `pytest.UsageError` directly -- and a UsageError raised in an xdist WORKER
+    # never reaches the controller, so `-n 2` gave a bare exit code instead of the
+    # sentence. Serial alone cannot see that: it is the same green either way.
+    extra = ("-n", "2") if mode == "xdist" else ()
     try:
-        hatched = pytester.runpytest("-p", "pgc_vacuity")
+        hatched = pytester.runpytest("-p", "pgc_vacuity", *extra)
     finally:
         pgc_vacuity.Expect.num = original
-    expect.run_failed(hatched, "stubbing Expect.num so it still counts is refused")
-    hatched.stderr.fnmatch_lines(["*Expect.num*"])
+    _collection_refusal_row(
+        hatched, expect, rc=4, reason_glob="*Expect.num*",
+        name=f"stubbed Expect.num {mode}",
+    )
 
 
 def test_stubbing_the_recorder_still_fails_closed_by_count(pytester, expect):
