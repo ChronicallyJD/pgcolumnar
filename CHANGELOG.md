@@ -34,10 +34,22 @@ true until the next version shipped.
   counted as themselves, and `compared + armless + interpolated == loops` so nothing
   falls out of the report.
 
-  Two removal proofs, each mutation asserted to apply before the run. Stopping the
+  Three removal proofs, each mutation asserted to apply before the run. Stopping the
   mismatch report reddens the rename arms; comparing the interpolated site literally
-  reddens the other two, and that is the one worth keeping, because removing the
-  tool's refusal to compare manufactures a FALSE mismatch on a correct site.
+  reddens the other two, because removing the tool's refusal to compare manufactures a
+  FALSE mismatch on a correct site.
+
+  The third decided the control's shape. Its first version compared two trees, one clean
+  and one drifted, and a classifier that reports a mismatch naming the WRONG LINE passes
+  that: `0/1` either way, measured on the mutant. So the control plants both loops in one
+  file and pins the drifted loop's own line, which is the only form that can tell "it
+  found my bug" from "it found something". Raised in review by @OffgridwithJD.
+
+  And the partition arm, `compared + armless + interpolated == loops`, is the strongest
+  line in the file and the cheapest to satisfy wrongly: a classifier filing everything as
+  `armless` satisfies it perfectly. It is load-bearing only because the per-bucket arms
+  sit beside it, and that is now written where a reader will find it rather than left to
+  be worked out.
 
 - The pytest harness reports its own check totals, and the record stream is
   reconciled against what arrived (#937, third phase).

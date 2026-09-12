@@ -2574,7 +2574,7 @@ not the first one wearing a Python wrapper.
 | --- | --- |
 | `test_a_loop_naming_its_siblings_arms_is_compared_and_agrees` | the clean site is **compared**, not quietly filed as armless or interpolated |
 | `test_a_rename_in_the_sibling_branch_is_caught` | the whole point: a drifted name is a mismatch |
-| `test_the_clean_and_drifted_sites_differ_by_exactly_the_rename` | the pair must **disagree**, or neither arm above is evidence |
+| `test_the_mismatch_names_the_loop_that_drifted_and_not_the_clean_one` | it names the **line it broke**, not merely that something is wrong |
 | `test_an_armless_branch_is_counted_as_armless_and_not_compared` | a site nobody compared and a site that agreed are not the same number |
 | `test_an_interpolated_sibling_is_reported_rather_than_compared_wrongly` | it declines to compare a site where a literal comparison would be **false in both directions** |
 | `test_every_loop_is_classified_into_exactly_one_category` | `compared + armless + interpolated == loops`, so nothing fell out of the report |
@@ -2592,3 +2592,21 @@ identically whether the code is load-bearing or the edit never landed.
 The second is the one worth keeping: removing the tool's *refusal* to compare produces
 a **false** mismatch on a correct site, and a guard that manufactures a red is the guard
 people switch off.
+
+| mutation | goes red |
+| --- | --- |
+| report a mismatch but name the **wrong line** | `..._mismatch_names_the_loop_that_drifted...` |
+
+That third one is why the control is shaped as it is. Its first version compared two
+trees — clean reports nothing, drifted reports something — and **a classifier naming the
+wrong line passes that**: `0/1` either way. Measured, on the mutant above. So the test
+plants both loops in one file and pins `two.sh:12`, which is the only form that can tell
+"it found my bug" from "it found something".
+
+### The partition is not the guard
+
+`compared + armless + interpolated == loops` is the strongest line in the file and the
+cheapest to satisfy wrongly: a classifier that filed **everything** as `armless` satisfies
+it perfectly. It is load-bearing only because the per-bucket tests assert that a known
+site lands in the right bucket; the identity then says nothing else escaped. Both halves
+or neither.

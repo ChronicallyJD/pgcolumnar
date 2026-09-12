@@ -110,16 +110,28 @@ def test_a_rename_in_the_sibling_branch_is_caught(tmp_path, expect):
     expect.text(bad[0].split(":")[0], "drift.sh", "named by the file it is in")
 
 
-def test_the_clean_and_drifted_sites_differ_by_exactly_the_rename(tmp_path, expect):
-    """A pair that must DISAGREE, or neither arm above is evidence.
+def test_the_mismatch_names_the_loop_that_drifted_and_not_the_clean_one(tmp_path, expect):
+    """It must name the site it broke, not merely report that something is wrong.
 
-    Two fixtures one edit apart. If the tool returned the same verdict for both,
-    each test above would still pass alone while the tool decided nothing.
+    A two-tree comparison -- clean reports nothing, drifted reports something -- is
+    satisfied by a classifier that reports A mismatch for the WRONG reason. So this
+    plants BOTH loops in one file and pins the line: the clean loop at the top and the
+    drifted one below it, with only the second able to be a finding.
+
+    @OffgridwithJD asked for this after the first version restated the two arms above
+    it with an `and`, which is fair: "they differ" is weaker than "it named the line
+    I broke".
     """
-    _, clean = _sweep(tmp_path / "clean", "x.sh", AGREE)
-    _, drift = _sweep(tmp_path / "drift", "x.sh", DRIFTED)
-    expect.text(f"{len(clean)}/{len(drift)}", "0/1",
-                "the same site one rename apart reports differently")
+    body = AGREE.replace("_n", "_a") + "\n" + DRIFTED.replace("_n", "_b")
+    counts, bad = _sweep(tmp_path / "t", "two.sh", body)
+
+    # The premise, or the pin below is pinning one of one rather than one of two.
+    expect.num(counts.get("compared", 0), 2, "premise: BOTH loops were compared")
+
+    drift_line = next(i + 1 for i, l in enumerate(body.splitlines())
+                      if l.lstrip().startswith("for _b in"))
+    expect.row_set(bad, [f"two.sh:{drift_line}"],
+                   "the mismatch names the drifted loop's own line, and only it")
 
 
 def test_an_armless_branch_is_counted_as_armless_and_not_compared(tmp_path, expect):
@@ -150,6 +162,13 @@ def test_every_loop_is_classified_into_exactly_one_category(tmp_path, expect):
 
     Three planted sites, one of each kind, in one tree: loops must equal
     compared + armless + interpolated, or some site fell out of the report.
+
+    THIS IDENTITY IS NOT THE GUARD, AND A LATER READER SHOULD NOT THINK IT IS. A
+    classifier that filed every site as `armless` satisfies it perfectly. It is
+    load-bearing only because the per-bucket tests above assert that a KNOWN site
+    lands in the RIGHT bucket; this arm then says nothing else escaped. Raised by
+    @OffgridwithJD, who pointed out it is the strongest line in the file and the
+    cheapest to satisfy wrongly.
     """
     root = tmp_path / "all"
     root.mkdir(parents=True, exist_ok=True)
