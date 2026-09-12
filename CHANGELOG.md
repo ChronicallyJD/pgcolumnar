@@ -18,6 +18,49 @@ true until the next version shipped.
 
 ### Added
 
+- `test/selftest/470` now has the pytest half it shipped without (#994).
+
+  #998 added the shell part and no pytest twin, against the owner's rule that a test
+  living in one harness is not finished. `test_skip_loop_arms.py` is that half, and it
+  is not a port: the shell part runs the sweep over the real corpus and asserts no
+  mismatch survives, which measures the TREE; this one drives the same tool over
+  planted trees whose right answer is known, which measures the INSTRUMENT.
+
+  The distinction is the reason for writing it rather than a justification after the
+  fact. A classifier that filed every site as `armless` would report zero mismatches,
+  and the shell part's population premises would still pass on whatever loops remained.
+  Six tests, seventeen checks: the clean site is compared rather than quietly skipped,
+  a renamed sibling is caught, an armless branch and an interpolated one are each
+  counted as themselves, and `compared + armless + interpolated == loops` so nothing
+  falls out of the report.
+
+  Three removal proofs, each mutation asserted to apply before the run. Stopping the
+  mismatch report reddens the rename arms; comparing the interpolated site literally
+  reddens the other two, because removing the tool's refusal to compare manufactures a
+  FALSE mismatch on a correct site.
+
+  The third decided the control's shape. Its first version compared two trees, one clean
+  and one drifted, and a classifier that reports a mismatch naming the WRONG LINE passes
+  that: `0/1` either way, measured on the mutant. So the control plants both loops in one
+  file and pins the drifted loop's own line, which is the only form that can tell "it
+  found my bug" from "it found something". Raised in review by @OffgridwithJD.
+
+  A fourth proof closed a blindness the first three shared. Returning 2 from the tool's
+  `main()` while still printing correct counters left all six tests green: every one of
+  them reads stdout and none noticed the tool had become unusable. The shell half caught
+  it through its `TOOL FAILED` fallback, and there it was a PREMISE that failed while the
+  headline arm stayed green. So the exit code is now asserted once in the shared helper,
+  and under the same mutation all six fail. Reported by @OffgridwithJD, whose own first
+  probe of it was invalid and said so: `sys.exit(2)` appended after the `__main__` guard
+  applied cleanly and moved nothing. Asserting a mutation APPLIED is not asserting the
+  behaviour MOVED.
+
+  And the partition arm, `compared + armless + interpolated == loops`, is the strongest
+  line in the file and the cheapest to satisfy wrongly: a classifier filing everything as
+  `armless` satisfies it perfectly. It is load-bearing only because the per-bucket arms
+  sit beside it, and that is now written where a reader will find it rather than left to
+  be worked out.
+
 - The pytest harness reports its own check totals, and the record stream is
   reconciled against what arrived (#937, third phase).
 

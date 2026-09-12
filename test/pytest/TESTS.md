@@ -72,6 +72,7 @@ behaviour, the source of that number is named.
 - [24. test_loop_coverage_premise.py: a loop that never ran asserted nothing](#24-test_loop_coverage_premisepy-a-loop-that-never-ran-asserted-nothing)
 - [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
 - [26. test_check_records.py: every counted assertion is a record](#26-test_check_recordspy-every-counted-assertion-is-a-record)
+- [27. test_skip_loop_arms.py: a skipped arm records under its own name](#27-test_skip_loop_armspy-a-skipped-arm-records-under-its-own-name)
 
 ## 1. How to read a test in here
 
@@ -2534,3 +2535,93 @@ can fail. `tryfirst=True` on those hooks is load-bearing: a wrapper's post-`yiel
 code runs in the reverse of call order, so `trylast` made the injector run *before*
 the layer attached anything, the inner run passed, and the arm read exactly like a
 reconciliation that does not fire.
+
+
+## 27. test_skip_loop_arms.py: a skipped arm records under its own name
+
+#994. A site skipped a whole block under **one** name that none of its arms had. When
+the condition failed those arms produced no record at all, so a reader could not tell
+which did not run and the ledger could not tell a skipped arm from a deleted one — a
+skipped arm's row has no matching record, exactly as a removed check's would.
+
+The convention that fixes it was already in the tree: skip under each arm's own name,
+in a loop over those names. The loop then **duplicates** the names, so a rename in the
+sibling branch desynchronises the two silently, and the skip records under a name
+nothing emits — the failure the fix exists to remove, reintroduced by an edit nobody
+thought was risky.
+
+### Why this exists separately from `test/selftest/470`
+
+`470` shipped in #998 with no pytest half, against the owner's rule that a test in one
+harness is not finished. This is that half, and it is **not a port**.
+
+| | measures | can it see |
+| --- | --- | --- |
+| `test/selftest/470` | the real corpus | a loop that drifted from its arms |
+| `test_skip_loop_arms.py` | the instrument | a classifier that stopped being able to tell |
+
+A classifier that filed every site as `armless` would report zero mismatches, and
+`470`'s population premises would still pass on whatever loops remained. So this file
+drives the same tool over **planted trees whose right answer is known** and asserts the
+classification itself. Two measurements of one property: the shell says the corpus is
+clean, this says the thing that reads the corpus can tell the difference.
+
+It drives `.github/scripts/skip-loop-arms.py` by subprocess and never the shell
+harness — a python tool rather than `test/lib.sh`, so this is a second measurement and
+not the first one wearing a Python wrapper.
+
+| test | what it pins |
+| --- | --- |
+| `test_a_loop_naming_its_siblings_arms_is_compared_and_agrees` | the clean site is **compared**, not quietly filed as armless or interpolated |
+| `test_a_rename_in_the_sibling_branch_is_caught` | the whole point: a drifted name is a mismatch |
+| `test_the_mismatch_names_the_loop_that_drifted_and_not_the_clean_one` | it names the **line it broke**, not merely that something is wrong |
+| `test_an_armless_branch_is_counted_as_armless_and_not_compared` | a site nobody compared and a site that agreed are not the same number |
+| `test_an_interpolated_sibling_is_reported_rather_than_compared_wrongly` | it declines to compare a site where a literal comparison would be **false in both directions** |
+| `test_every_loop_is_classified_into_exactly_one_category` | `compared + armless + interpolated == loops`, so nothing fell out of the report |
+
+### Removal proofs
+
+Each mutation was asserted to apply before the run, because a clean pass reads
+identically whether the code is load-bearing or the edit never landed.
+
+| mutation | goes red |
+| --- | --- |
+| stop reporting mismatches | `..._rename_in_the_sibling_branch_is_caught`, `..._differ_by_exactly_the_rename` |
+| compare the interpolated site literally | `..._interpolated_sibling_is_reported...`, `..._classified_into_exactly_one_category` |
+
+The second is the one worth keeping: removing the tool's *refusal* to compare produces
+a **false** mismatch on a correct site, and a guard that manufactures a red is the guard
+people switch off.
+
+| mutation | goes red |
+| --- | --- |
+| report a mismatch but name the **wrong line** | `..._mismatch_names_the_loop_that_drifted...` |
+| return 2 from `main()`, counters still correct | **all six** |
+
+That third one is why the control is shaped as it is. Its first version compared two
+trees — clean reports nothing, drifted reports something — and **a classifier naming the
+wrong line passes that**: `0/1` either way. Measured, on the mutant above. So the test
+plants both loops in one file and pins `two.sh:12`, which is the only form that can tell
+"it found my bug" from "it found something".
+
+### The exit code is asserted in the helper, not in one test
+
+Every test here reads the tool's stdout, and **none of them would notice the tool
+becoming unusable**. Measured: returning `2` from `main()` while still printing correct
+counters left all six green at 18 checks. The shell half catches that through
+`|| _sk_out="TOOL FAILED"` — so the pair was stronger than this half alone, and on that
+side it was a *premise* that failed while the headline arm stayed green.
+
+So `_sweep` asserts `returncode == 0` once, covering all six. Under the same mutation
+all six now fail. Reported by @OffgridwithJD, whose first probe of it was invalid and
+said so: an `sys.exit(2)` appended after the `__main__` guard applied cleanly and changed
+nothing, `rc` still 0. **Asserting that a mutation applied is not asserting that the
+behaviour moved** — both halves, or the proof is of the edit rather than of the code.
+
+### The partition is not the guard
+
+`compared + armless + interpolated == loops` is the strongest line in the file and the
+cheapest to satisfy wrongly: a classifier that filed **everything** as `armless` satisfies
+it perfectly. It is load-bearing only because the per-bucket tests assert that a known
+site lands in the right bucket; the identity then says nothing else escaped. Both halves
+or neither.

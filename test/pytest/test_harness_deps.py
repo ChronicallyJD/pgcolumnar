@@ -95,6 +95,13 @@ NO_CLUSTER = [
     # agree. The fifth time this arm has decided a membership rather than been told
     # one.
     "test_check_records.py",
+    # The twin #998 did not ship. That PR added `test/selftest/470` and no pytest
+    # half, against the owner's rule that a test in one harness is not finished --
+    # and the sixth catch of this arm was the file's arrival, not its absence. It
+    # drives .github/scripts/skip-loop-arms.py by subprocess, which is a python
+    # tool rather than the shell harness, so it needs neither a cluster nor the
+    # driver.
+    "test_skip_loop_arms.py",
 ]
 
 
