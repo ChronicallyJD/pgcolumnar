@@ -6,6 +6,8 @@ loaded, which is why each test asserts on the INNER run's outcome rather than on
 its own arithmetic.
 """
 
+import pytest
+
 
 def test_layer_rejects_a_test_with_no_assertion(pytester, expect):
     """A test body that concludes nothing must fail, not pass.
@@ -268,6 +270,86 @@ def test_layer_rejects_psycopgs_no_count_sentinel(pytester, expect):
     result = pytester.runpytest("-p", "pgc_vacuity")
     expect.outcomes(result, "the -1 sentinel is refused", failed=1, passed=0)
     result.stdout.fnmatch_lines(["*no row count available*"])
+
+
+def _collection_refusal_row(result, expect, *, rc, reason_glob, name):
+    """One row of the #963 table: exit status, the sentence, no INTERNALERROR."""
+    blob = result.stdout.str() + result.stderr.str()
+    expect.num(result.ret, rc, f"{name}: exit status")
+    expect.num(blob.count("INTERNALERROR"), 0, f"{name}: INTERNALERROR lines")
+    if rc == 4:
+        # UsageError is written to stderr. The stream is the claim: any non-zero
+        # exit would satisfy run_failed, including the INTERNALERROR this issue
+        # exists to close.
+        result.stderr.fnmatch_lines([reason_glob])
+    else:
+        result.stdout.fnmatch_lines([reason_glob])
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_a_bare_skip_refusal_keeps_its_reason_under_xdist(pytester, expect, mode):
+    """#963. A collection-time UsageError must stay rc 4 with the sentence,
+    including under `-n 2`. Measured on main: serial printed the reason on
+    stderr and exited 4; `-n 2` replaced it with a 35-line INTERNALERROR and
+    exited 1.
+    """
+    pytester.makepyfile(
+        """
+        import pytest
+        @pytest.mark.skip(reason="not today")
+        def test_quietly_gone():
+            assert False
+        """
+    )
+    extra = ("-n", "2") if mode == "xdist" else ()
+    result = pytester.runpytest("-p", "pgc_vacuity", *extra)
+    _collection_refusal_row(
+        result, expect, rc=4, reason_glob="*bare skip*",
+        name=f"bare skip {mode}",
+    )
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_a_broad_except_refusal_keeps_its_reason_under_xdist(pytester, expect, mode):
+    """#963. Same table, second collection-time row. The defect is the hook,
+    not the skip marker, so a second offence has to keep the sentence too.
+    """
+    pytester.makepyfile(
+        """
+        def test_swallows(expect):
+            try:
+                raise RuntimeError("the real failure")
+            except Exception:
+                pass
+            expect.num(1, 1, "and then asserts something harmless")
+        """
+    )
+    extra = ("-n", "2") if mode == "xdist" else ()
+    result = pytester.runpytest("-p", "pgc_vacuity", *extra)
+    _collection_refusal_row(
+        result, expect, rc=4, reason_glob="*catches Exception broadly*",
+        name=f"broad except {mode}",
+    )
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_an_in_test_vacuity_refusal_is_unchanged_under_xdist(pytester, expect, mode):
+    """#963 control. A VacuityError raised inside a test body is a normal
+    failure and reports identically under serial and `-n 2`. If this arm
+    started needing rc 4, the fix would have moved the wrong hook.
+    """
+    pytester.makepyfile(
+        """
+        def test_asserts_nothing():
+            x = 1 + 1
+        """
+    )
+    extra = ("-n", "2") if mode == "xdist" else ()
+    result = pytester.runpytest("-p", "pgc_vacuity", *extra)
+    _collection_refusal_row(
+        result, expect, rc=1, reason_glob="*made no counted assertion*",
+        name=f"in-test vacuity {mode}",
+    )
 
 
 def test_layer_rejects_a_broad_except_in_a_test_file(pytester, expect):
