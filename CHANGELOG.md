@@ -18,6 +18,27 @@ true until the next version shipped.
 
 ### Added
 
+- `test/selftest/470` now has the pytest half it shipped without (#994).
+
+  #998 added the shell part and no pytest twin, against the owner's rule that a test
+  living in one harness is not finished. `test_skip_loop_arms.py` is that half, and it
+  is not a port: the shell part runs the sweep over the real corpus and asserts no
+  mismatch survives, which measures the TREE; this one drives the same tool over
+  planted trees whose right answer is known, which measures the INSTRUMENT.
+
+  The distinction is the reason for writing it rather than a justification after the
+  fact. A classifier that filed every site as `armless` would report zero mismatches,
+  and the shell part's population premises would still pass on whatever loops remained.
+  Six tests, seventeen checks: the clean site is compared rather than quietly skipped,
+  a renamed sibling is caught, an armless branch and an interpolated one are each
+  counted as themselves, and `compared + armless + interpolated == loops` so nothing
+  falls out of the report.
+
+  Two removal proofs, each mutation asserted to apply before the run. Stopping the
+  mismatch report reddens the rename arms; comparing the interpolated site literally
+  reddens the other two, and that is the one worth keeping, because removing the
+  tool's refusal to compare manufactures a FALSE mismatch on a correct site.
+
 - The pytest harness reports its own check totals, and the record stream is
   reconciled against what arrived (#937, third phase).
 
