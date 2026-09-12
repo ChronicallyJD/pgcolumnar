@@ -50,4 +50,6 @@ guard_tests 277
 #
 # The rate is the point. The ungated half grew by 67 tests in the time this took to review,
 # which is the argument for gating it rather than a detail about it.
-cluster_tests 166
+# 166 -> 177 when test_native_ownership.py landed: nine parametrized refusal arms,
+# the owner control, and the check-ordering arm.
+cluster_tests 177
