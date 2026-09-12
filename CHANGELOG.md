@@ -794,6 +794,8 @@ true until the next version shipped.
 
 ### Fixed
 
+- A BOGUS-verdict ledger record is refused by naming the verdict, not by field count (#1013).
+
 - The star-schema join how-to names clustering on the join key (#752).
 
   Group skip was already measured: 19 of 20 groups when the keys are local,
