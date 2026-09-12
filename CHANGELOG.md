@@ -1765,6 +1765,57 @@ true until the next version shipped.
   anywhere in the tree, removed by #917 with their rows left behind. Those are not created
   by this change and are filed separately rather than tidied away here.
 
+- The controller-stamp extraction anchors on the write rather than on file position
+  (#961 follow-up).
+
+  Selftest 460 took the **first** one-tab `if (` in `run_all_versions.sh`. There is
+  exactly one today, so it was unambiguous, and the premises would have caught it if
+  that stopped being true -- the extracted block would hold zero or two stamp writes.
+  It was the premises doing the work rather than the anchor.
+
+  The anchor now finds the stamp write and walks back to the `if (` enclosing it, then
+  forward to the first terminator at or after it. A subshell added elsewhere at the same
+  indent cannot move the range, because the range is defined by the line it is about.
+
+  **A subshell that NESTS around the write can still widen it, and that is a premise
+  rather than a fix.** The anchor matches `if (` at one tab, so a write inside a deeper
+  subshell leaves the opener pointing at the outer block -- which holds exactly one
+  one-tab `if (` and exactly one stamp write, so every other premise passes on a block
+  wider than the call site. Measured on a fixture with the write two tabs in: eight lines
+  out, all premises green. A premise counting `if (` at ANY indent distinguishes them --
+  one in the real block, two in the nested shape -- which is cheaper than teaching the
+  anchor to track depth and fails closed, refusing a shape it does not understand rather
+  than driving it.
+
+  Proven in both directions, because either half alone says nothing. Identical on
+  today's input -- the extracted block hashes `47b4f1a9193c` before and after -- and
+  different on the input that motivated the change:
+
+      a second one-tab subshell injected ABOVE the stamp block
+        OLD anchor   4 lines, 0 stamp writes, so it extracted the WRONG block and the
+                     `exactly one stamp write` premise reads 0: loudly wrong
+        NEW anchor   7 lines, 1 stamp write, unchanged
+
+  md5-only would prove the change does nothing that matters; injection-only would prove
+  it does something without showing what else moved.
+
+  **And it closes a boundary the new design could open rather than one the old one
+  had.** A backward walk has to decide what to do when it runs off the top of the file,
+  and one of the three possible behaviours satisfies every guard in the part: emitting
+  the write alone gives exactly one stamp write, so both premises pass on a block that
+  is not the call site. This emits nothing instead, because `open` is never assigned and
+  the guard exits before the print loop -- a property that arrived from the guard's
+  shape rather than from foresight, now written into the code as load-bearing so the
+  next reader does not default `start` to 1 as a tidy-up.
+
+  One premise added, `the extraction produced a block at all`, because an awk whose
+  condition never fires prints nothing and an empty block would otherwise read as a
+  block with no stamp write in it -- two different failures arriving at the same number.
+
+  Two stamp writes in **separate** subshells is the case the count premise cannot see:
+  the extracted block holds one and the premise passes. The static caller sweep catches
+  it -- injected, both the premise and the arm report `got [4] want [3]`.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
