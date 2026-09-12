@@ -587,7 +587,36 @@ true until the next version shipped.
   which already re-record for themselves, so a future fix moved into the table-AM
   callback reddens here instead of double-recording.
 
+### Changed
+
+- Serial join runtime filter is on by default (#752).
+
+  Three measured cases, which is the argument. The docs being ready is why the
+  guidance exists, not why the default is right:
+
+      clustered on the join key   19 of 20 chunk groups removed, 1 read
+      scattered                   0 groups removed, but Bloom rejects more
+                                  than 15,000 of 19,800 non-matches
+      build side too large        the Bloom disables itself
+
+  The third is why this is safe everywhere. A filter that is on for every user
+  needs an answer for the case where it helps nothing, and turning itself off is
+  that answer. Group skip still needs the fact table clustered on the join key,
+  and a scattered fact table still cannot drop groups. SET the GUC off to compare.
+
+  NOT MEASURED: the overhead of a filter that is on, not saturated, and rejecting
+  almost nothing, which is a join where nearly every row matches. Saturation bounds
+  the pathological end and the scattered case bounds the middle, so this is reasoned
+  rather than measured. It is the gap to close if the default is ever doubted.
+
 ### Fixed
+
+- The star-schema join how-to names clustering on the join key (#752).
+
+  Group skip was already measured: 19 of 20 groups when the keys are local,
+  0 of 20 when they cycle. The page named the GUC and not that discriminator.
+  A fact table that is not clustered on the join key still holds every key in
+  every group, so the filter cannot skip. The fold over a join is a later slice.
 
 - A skipped arm records under the name it would have used, so a skipped arm and
   a deleted one are no longer indistinguishable (#994).
@@ -2286,6 +2315,46 @@ true until the next version shipped.
   no ids cross. The controller re-raises `UsageError` from `pytest_testnodedown`,
   which is the process serial already used. The in-test control (a body that
   concludes nothing) is unchanged in both modes.
+
+- A collection-time vacuity refusal is no longer also reported as a silent loss (#991).
+
+  The layer refused a run and then contradicted itself:
+
+      ERROR: the pgColumnar vacuity layer refuses this run: a bare skip is refused ...
+      VACUITY: 1 collected test(s) never reported an outcome, so the run lost them
+               silently: tmp/test_offender.py::test_one_offending_arm
+
+  **The run did not lose it silently. It refused it loudly, one line above.** So a reader who
+  typed one bare `@pytest.mark.skip` got the correct diagnosis and then a second finding
+  telling them a test vanished without saying so -- and the natural response is to go looking
+  for a lost test that was never lost.
+
+  `collected - reported` is the right set difference and the wrong **meaning**: a silent loss
+  is when nobody said anything, and here the layer itself is what stopped the run. The guard
+  whose whole subject is a silent loss was firing on the one event that is its opposite.
+
+  **One assignment covers all five refusal sites**, because #963 gave the layer a single
+  chokepoint: `_collection_usage_error` records the refusal, and the reconciliation in
+  `_RunShape.pytest_sessionfinish` skips the missing-outcome problem when it is set. Only that
+  problem. The setup-skip problem still prints -- a fixture removing every test that depends on
+  it is not something a refusal accounts for, and the two are independent findings.
+
+  **Serial was the only path left.** #963 clears `items[:]` in the worker, so the controller's
+  `collected` set is already empty under `-n` and the contradiction cannot arise there:
+
+      main   serial   refusal + the silent-loss line
+      main   xdist    no refusal at all            (that was #963)
+      #963   serial   refusal + the silent-loss line   <- what this closes
+      #963   xdist    refusal, no line
+
+  The second arm is the control and the first is worth nothing without it: an item collected
+  and never reported, with **no** refusal anywhere, is still named and still reddens the run.
+  Dropping a problem from a reconciliation is one edit away from dropping the guard. The
+  fixture removes an item after the layer's hook recorded it and without deselecting it, which
+  is the shape of a crashed xdist worker -- `pytest_deselected` is what tells a deliberate
+  subset from a loss, and nothing calls it there.
+
+  No shell check moved, so no ledger change: `harness_selftest` is 907 checks on both trees.
 
 ## [1.0-alpha3] - 2026-09-02
 

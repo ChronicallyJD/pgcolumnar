@@ -73,7 +73,8 @@ behaviour, the source of that number is named.
 - [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
 - [26. test_check_records.py: every counted assertion is a record](#26-test_check_recordspy-every-counted-assertion-is-a-record)
 - [27. test_skip_loop_arms.py: a skipped arm records under its own name](#27-test_skip_loop_armspy-a-skipped-arm-records-under-its-own-name)
-- [28. test_join_vector_agg.py: ungrouped fold over a unique-key join](#28-test_join_vector_aggpy-ungrouped-fold-over-a-unique-key-join)
+- [28. test_docs_join_clustering.py: the runtime filter's layout precondition](#28-test_docs_join_clusteringpy-the-runtime-filters-layout-precondition)
+- [29. test_join_vector_agg.py: ungrouped fold over a unique-key join](#29-test_join_vector_aggpy-ungrouped-fold-over-a-unique-key-join)
 
 ## 1. How to read a test in here
 
@@ -264,6 +265,25 @@ a fix that moved the wrong hook reddens here.
 | `test_a_bare_skip_refusal_keeps_its_reason_under_xdist` | collection skip: rc 4, sentence, no INTERNALERROR, serial and `-n 2` |
 | `test_a_broad_except_refusal_keeps_its_reason_under_xdist` | the same for a second collection-time rule, so the defect is the hook |
 | `test_an_in_test_vacuity_refusal_is_unchanged_under_xdist` | **control**: a body that concludes nothing stays rc 1 with the sentence |
+| `test_a_collection_refusal_is_not_also_reported_as_a_silent_loss` | a refusal is not ALSO reported as `lost them silently`, serial and `-n 2` |
+| `test_a_genuine_silent_loss_is_still_reported` | **control**: an item collected and never reported, with no refusal, is still named |
+
+**A loud refusal is not a silent loss (#991).** A collection-time refusal printed its
+sentence and then, directly beneath it, `VACUITY: N collected test(s) never reported an
+outcome, so the run lost them silently`. The run did not lose them silently — it refused
+them loudly, one line above — so a reader who typed one bare skip got the right diagnosis
+plus a second finding sending them after a test that was never lost. `collected - reported`
+is the right set difference and the wrong *meaning*: a silent loss is when nobody said
+anything, and here the layer itself stopped the run.
+
+Every refusal goes through `_collection_usage_error`, so recording it there covers all five
+call sites with one assignment, and the reconciliation skips **only** that problem. The
+setup-skip problem still prints: a fixture removing every test that depends on it is not
+something a refusal accounts for. The control above is what keeps dropping a problem from
+becoming dropping the guard — it is one edit away.
+
+Serial was the only path left after #963, because clearing `items[:]` in the worker already
+emptied the controller's `collected` set under `-n`.
 
 A worker records the sentence on `workeroutput` and clears the items so no ids
 cross. The controller re-raises `UsageError` from `pytest_testnodedown`, which
@@ -2415,6 +2435,12 @@ Pytest twin of `test/native_join_runtime_filter.sh`. The two files are independe
 each builds its own fixtures and expected values. They share only the public
 EXPLAIN names and the SQL answers.
 
+### `test_join_runtime_filter_defaults_on`
+
+SHOW is `on` with no SET. A serial inner Hash Join then shows the coordinator
+without enabling the GUC in the session. The skip numbers live in the clustered
+test below.
+
 ### `test_serial_join_runtime_filter`
 
 Clustered integer keys. The coordinator wraps core Hash Join, the build tap
@@ -2700,7 +2726,22 @@ it perfectly. It is load-bearing only because the per-bucket tests assert that a
 site lands in the right bucket; the identity then says nothing else escaped. Both halves
 or neither.
 
-## 28. test_join_vector_agg.py: ungrouped fold over a unique-key join
+## 28. test_docs_join_clustering.py: the runtime filter's layout precondition
+
+#752's skip is measured. The how-to named the GUC and not the layout that
+makes group skip a no-op. These two tests read the published pages. They
+do not import the shell suite.
+
+| test | asserts |
+| --- | --- |
+| `test_how_to_names_join_key_clustering_for_the_runtime_filter` | the star-schema how-to section names clustering on the join key |
+| `test_best_practices_names_join_key_clustering_for_a_fact_table` | best-practices names that join key, not only timestamps |
+
+The shell twin is two checks in `test/docs_style.sh`. Documentation may
+identify the two files as counterparts. That is the only cross-reference.
+
+Public seams: `docs/how-to.md` and `docs/best-practices.md`.
+## 29. test_join_vector_agg.py: ungrouped fold over a unique-key join
 
 Pytest twin of `test/native_join_vector_agg.sh`. The two files are independent:
 each builds its own fixtures and expected values. They share only the public

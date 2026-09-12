@@ -1125,6 +1125,7 @@ native_join_runtime_filter	native_join_runtime_filter	collation-mismatch answer 
 native_join_runtime_filter	native_join_runtime_filter	collation-mismatch bloom rejects most non-matches	never	-
 native_join_runtime_filter	native_join_runtime_filter	collation-mismatch interval stays off	never	-
 native_join_runtime_filter	native_join_runtime_filter	collation-mismatch plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	default plan has runtime coordinator	2026-09-12	-
 native_join_runtime_filter	native_join_runtime_filter	early limit equals heap	never	-
 native_join_runtime_filter	native_join_runtime_filter	early limit has coordinator	never	-
 native_join_runtime_filter	native_join_runtime_filter	empty-build answer equals heap	never	-
@@ -1136,6 +1137,7 @@ native_join_runtime_filter	native_join_runtime_filter	int4/int8 answer equals he
 native_join_runtime_filter	native_join_runtime_filter	int4/int8 bloom rejects most non-matches	never	-
 native_join_runtime_filter	native_join_runtime_filter	int4/int8 interval stays off	never	-
 native_join_runtime_filter	native_join_runtime_filter	int4/int8 plan has coordinator	never	-
+native_join_runtime_filter	native_join_runtime_filter	join runtime filter defaults on	2026-09-12	-
 native_join_runtime_filter	native_join_runtime_filter	plan has build tap	never	-
 native_join_runtime_filter	native_join_runtime_filter	plan has runtime coordinator	never	-
 native_join_runtime_filter	native_join_runtime_filter	plan retains core Hash Join	never	-

@@ -36,7 +36,7 @@
 #include "utils/typcache.h"
 #include "utils/tuplestore.h"
 
-bool pgcolumnar_enable_join_runtime_filter = false;
+bool pgcolumnar_enable_join_runtime_filter = true;
 
 typedef struct PgColumnarRuntimeFilterState
 {

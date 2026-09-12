@@ -76,6 +76,10 @@ the predicate. That test is only as sharp as the data's order. A column whose va
 are scattered across every chunk group cannot be pruned. A column whose values are
 clustered into a few groups prunes the rest. So the most effective layout choice is
 to cluster on the column you filter by ranges. That column is most often a timestamp.
+A star-schema join skips on the join key, not on that timestamp.
+Cluster the fact table on the join key so matching keys sit in few groups.
+A fact table clustered only on a timestamp still holds every join key in every group.
+A runtime filter then cannot drop groups.
 
 - `pgcolumnar.recluster(table)` re-establishes the sort order incrementally and
   online. It runs under `ShareUpdateExclusiveLock`, so reads and writes continue. It

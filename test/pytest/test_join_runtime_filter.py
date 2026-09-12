@@ -29,6 +29,37 @@ def _v(p, n):
     return int(m.group(1)) if m else -1
 
 
+def test_join_runtime_filter_defaults_on(pgc_conn, expect):
+    """A serial inner Hash Join wraps without SET once the GUC defaults on (#752).
+
+    Public seam: SHOW and EXPLAIN. Independently of native_join_runtime_filter.sh,
+    this session does not SET the GUC. Clustered skip is already measured elsewhere.
+    """
+    with pgc_conn.cursor() as c:
+        c.execute("SHOW pgcolumnar.enable_join_runtime_filter")
+        got = c.fetchone()[0]
+    expect.text(got, "on", "join runtime filter defaults on")
+    with pgc_conn.cursor() as c:
+        c.execute(
+            """
+            CREATE TABLE dim_def(k int);
+            INSERT INTO dim_def VALUES (1);
+            CREATE TABLE fact_def(k int) USING pgcolumnar;
+            INSERT INTO fact_def VALUES (1), (2);
+            ANALYZE dim_def;
+            ANALYZE fact_def
+            """
+        )
+    sql = "SELECT count(*) FROM fact_def JOIN dim_def ON fact_def.k = dim_def.k"
+    plan = _plan(pgc_conn, sql)
+    expect.num(plan.count("Hash Join"), 1, "default plan retains core Hash Join")
+    expect.num(
+        plan.count("Columnar Runtime Filter Coordinator"),
+        1,
+        "default plan has runtime coordinator",
+    )
+
+
 def test_serial_join_runtime_filter(pgc_conn, expect):
     with pgc_conn.cursor() as c:
         c.execute(
