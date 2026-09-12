@@ -3456,7 +3456,7 @@ _PG_init(void)
 							 "Enable serial hash-join runtime filtering for direct columnar scans.",
 							 NULL,
 							 &pgcolumnar_enable_join_runtime_filter,
-							 false,
+							 true,
 							 PGC_USERSET,
 							 0,
 							 NULL, NULL, NULL);

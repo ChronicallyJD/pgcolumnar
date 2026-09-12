@@ -143,7 +143,7 @@ It also rejects rows whose keys are absent from a Bloom filter of those keys.
 EXPLAIN (ANALYZE) SELECT sum(amount) FROM fact JOIN dim ON fact.k = dim.k;
 ```
 
-**Tuning.** It is off by default (`pgcolumnar.enable_join_runtime_filter`).
+**Tuning.** It is on by default (`pgcolumnar.enable_join_runtime_filter`).
 Group skip needs the fact table clustered on the join key.
 When the keys sit in few chunk groups, the scan drops the rest.
 When every group holds every key, group skip removes none.
