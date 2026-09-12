@@ -148,10 +148,15 @@ NONE = "-"
 # 1150 of them is a number that lies by its own name -- the defect check_ledger_budget.txt
 # exists to argue against.
 #
-# A SET, sorted and ";"-separated: "15;18". `unknown` is a token in it like any other,
-# and the common one -- harness_selftest never references PGC_MAJOR, so all 907 of its
-# rows carry it. NO WILDCARD: "every major observed" would change meaning the day a major
-# is added to the matrix, inheriting a claim nothing measured.
+# A SET, sorted and ";"-separated: "15;18". `unknown` is a token in it like any other, and
+# a real case rather than a courtesy: 14 suites need no cluster, so they never call
+# pgc_setup -- which is where PGC_MAJOR is set -- and every record they emit carries it.
+# Measured on a full pg18 matrix, 544 of 6753 records: audit, concurrency,
+# decode_interrupts, hilbert_curve, objstore_stash_recovery, phase2-6, smoke, unique_conc,
+# update_conc, wal_envelope. All three suites the ledger covers today DO set it.
+#
+# NO WILDCARD: "every major observed" would change meaning the day a major is added to the
+# matrix, inheriting a claim nothing measured.
 FIELDS = 6
 MAJOR_SEP = ";"
 
@@ -180,10 +185,12 @@ RECORD_FIELDS = 7
 # pg19_vacuum_options.sh and native_dml.sh gate on server_version_num and never
 # mention it -- which is why this is a field and not a convention.
 #
-# `unknown` is lib.sh's OWN word for a field the harness did not set, used there for
-# an unset suite and part, and it is a REAL case rather than a courtesy:
-# harness_selftest never references PGC_MAJOR anywhere, so its 907 committed rows
-# have no major to name even in principle.
+# `unknown` is lib.sh's OWN word for a field the harness did not set, used there for an
+# unset suite and part, and it is a REAL case rather than a courtesy: PGC_MAJOR is set in
+# pgc_setup, and 14 suites need no cluster so never call it. Measured on a full pg18
+# matrix, 544 of 6753 records carry it -- audit, concurrency, decode_interrupts,
+# hilbert_curve, objstore_stash_recovery, phase2-6, smoke, unique_conc, update_conc,
+# wal_envelope. None of the three suites the ledger covers today is one.
 MAJOR_UNKNOWN = "unknown"
 _MAJOR = re.compile(r"^(?:[0-9]+|unknown)$")
 
@@ -264,6 +271,20 @@ def read_ledger(path):
     Keyed on the part as well as the name: harness_selftest sources 40-odd parts
     into one shell and phrases its premises to be COPIED, so a name-only key is a
     key of check NAMES rather than of checks.
+
+    AND NOT ON THE MAJOR, which is the third field's job instead (#1010). A check's
+    existence depends on the major, so the ledger must record WHERE a check exists; it
+    does not follow that the major belongs in the key. Measured on a full matrix at
+    4d7c75ae, 6367 of 6472 checks are identical on PG15 and PG18, so a (major, check)
+    key would hold five copies of one observation for 98% of the file. Keeping the key
+    here is also what keeps `checks_never_observed_red` counting CHECKS rather than
+    pairs.
+
+    The majors field is a SET and it accumulates in `merge`. `unknown` is a member of
+    it like any number: PGC_MAJOR is set in pgc_setup, and 14 suites need no cluster so
+    never call it -- 544 of 6753 records on a full pg18 matrix. None of the three suites
+    the ledger covers today is one, so every migrated row names real majors; the token
+    matters for the suites coverage reaches next.
     """
     rows = {}
     p = pathlib.Path(path)
@@ -491,13 +512,22 @@ def cmd_orphan_scan(args):
     as present would make a single-suite run certify the whole ledger, so they are
     counted OUT LOUD as `not checked` instead.
 
-    WHY THIS REPORTS AND IS NOT WIRED INTO THE GATE. Measured, not assumed: part
-    340 records ONE skip under a DIFFERENT name ("the unreadable-source refusal")
-    when the box has no non-root user to read as, rather than skipping its two
-    named arms. On such a box two committed rows have no matching record and are
-    not removed checks, so a gate refusing on absence would redden a correct run.
-    Arming this needs those branches to record a SKIP under the names they stand
-    in for -- the same conversion #965 made for the eleven timeout paths.
+    WHY THIS REPORTS AND IS NOT WIRED INTO THE GATE. The blocker this paragraph used
+    to name has been REMOVED and the paragraph is kept because the conclusion has not
+    changed. Part 340 recorded ONE skip under a DIFFERENT name ("the unreadable-source
+    refusal") when the box had no non-root user to read as, rather than skipping its
+    two named arms; on such a box two committed rows had no matching record and were
+    not removed checks, so a gate refusing on absence would have reddened a correct
+    run. #994 and #998 made the conversion -- part 340 now calls check_skip under each
+    premise's own name, and the stand-in survives only in a comment explaining what it
+    used to do.
+
+    So the stated precondition is met, and arming this is now a DECISION rather than a
+    dependency. It is not taken here, because "the one blocker I measured is gone" is
+    not the same claim as "no blocker remains", and the second needs its own run across
+    the parts that skip. Nothing in the tree invokes this subcommand -- not
+    run_all_versions.sh, not either workflow -- so the direction #1010 fixes in it is
+    latent today and the fix is a precondition for arming rather than a live repair.
 
     A ROW CARRYING HISTORY IS NEVER PRUNED. The catalogue of what has been seen
     red is the thing this ledger exists to be, and no run can recreate it. Dropping

@@ -2408,8 +2408,9 @@ hold 6472 x 5 = 32,360 rows to express 105 keys' worth of difference. Keeping th
 its own name.
 
 The set accumulates, for the reason the mutation column and last-red both do: merging a PG15
-log after a PG18 log must not make the check stop existing on 18. `unknown` is a token in the
-set like any other, and the common one.
+log after a PG18 log must not make the check stop existing on 18. `unknown` is a member of the
+set like any number: `PGC_MAJOR` is set in `pgc_setup`, and 14 suites need no cluster so never
+call it -- 544 of 6753 records on a full pg18 matrix.
 
 ### `test_a_run_speaks_only_for_the_majors_the_row_claims`
 

@@ -663,10 +663,10 @@ def test_a_record_that_does_not_name_its_major_is_not_evidence(tmp_path, expect)
                     "--registered", reg, good)[1], 1,
                "a record naming its major reaches the gate's own verdict")
 
-    # `unknown` is the emitter's word for a field the harness never set, and it is a
-    # REAL case rather than a courtesy: harness_selftest does not reference PGC_MAJOR
-    # anywhere, so its 907 rows have no major to name even in principle. It must be
-    # accepted and it must stay distinguishable from a number.
+    # `unknown` is the emitter's word for a field the harness never set, and it is a REAL
+    # case rather than a courtesy: PGC_MAJOR is set in pgc_setup, and 14 suites need no
+    # cluster so never call it -- measured, 544 of 6753 records on a full pg18 matrix. It
+    # must be accepted and it must stay distinguishable from a number.
     unk = _w(tmp_path, "unk.log",
              "RESULT\tdemo\tpart1\tfirst check\tPASS\tunknown\t\nchecks run: 1\n")
     expect.num(_run("gate", "--ledger", ledger, "--budget", budget,
@@ -731,9 +731,8 @@ def test_a_rows_major_set_accumulates_rather_than_replacing(tmp_path, expect):
     expect.num(len(_rows(ledger)), 2,
                "two checks are two rows, whatever the majors: the key is not the major")
 
-    # `unknown` is a token in the set like any other. harness_selftest never references
-    # PGC_MAJOR, so every record it emits carries it, and those rows must not multiply
-    # either.
+    # `unknown` is a token in the set like any other, and what a suite needing no cluster
+    # emits: PGC_MAJOR is set in pgc_setup and 14 suites never call it.
     runk = _w(tmp_path, "ru.log",
               "RESULT\tdemo\tpart1\teverywhere\tPASS\tunknown\t\nchecks run: 1\n")
     _run("merge", "--ledger", ledger, "--date", "2026-09-12", runk)

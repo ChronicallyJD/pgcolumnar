@@ -85,9 +85,17 @@ true until the next version shipped.
   decides which checks can exist.
 
   `unknown` is the one non-numeric value, and it is lib.sh's own word for a field the
-  harness did not set (it already uses it for an unset suite and part). It is a real
-  case rather than a courtesy: `harness_selftest` never references `PGC_MAJOR`, so every
-  record it emits says `unknown` truthfully -- 907 of the 1155 committed ledger rows.
+  harness did not set (it already uses it for an unset suite and part). It is a real case
+  rather than a courtesy: `PGC_MAJOR` is set in `pgc_setup`, and 14 suites need no cluster
+  so never call it. Measured on a full pg18 matrix, 544 of 6753 records carry it --
+  `audit`, `concurrency`, `decode_interrupts`, `hilbert_curve`, `objstore_stash_recovery`,
+  `phase2`-`phase6`, `smoke`, `unique_conc`, `update_conc`, `wal_envelope`.
+
+  It is ORDER-DEPENDENT in a suite that sources parts into one shell: a record emitted
+  before the first `pgc_setup` says `unknown` and one after it names the major.
+  `harness_selftest` is that shape, 10 of its 46 parts call `pgc_setup`, and on pg18 all
+  916 of its records named the major -- so the first setup precedes the first record
+  today, and a part added ahead of it would change that.
 
   The ledger itself is unchanged in SHAPE: it still keys on `(suite, part, name)` and
   discards the major. Keying on it is #1010's second step, and it needs a migration this

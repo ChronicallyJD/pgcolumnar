@@ -204,9 +204,10 @@ check "a second major is ADDED to the set, sorted, not written over the first" 	
 check "and a check the second run never mentioned keeps the majors it claimed" 	"$(awk -F'	' '$3=="pg18 only"{print $4}' "$_lw/maj.tsv")" "18"
 check "two checks stay two rows whatever the majors, because the key is not the major" 	"$(grep -c . "$_lw/maj.tsv")" "2"
 
-# `unknown` is a token in the set like any other, and the COMMON one: this very
-# suite's runner never references PGC_MAJOR, so every record harness_selftest emits
-# carries it.
+# `unknown` is a token in the set like any other, and a real case: PGC_MAJOR is set in
+# pgc_setup, and 14 suites need no cluster so never call it -- 544 of 6753 records on a
+# full pg18 matrix. This suite is NOT one of them: 10 of its 46 parts call pgc_setup and
+# they share one shell, so its records name the major.
 _led_run merge --ledger "$_lw/maj.tsv" --date 2026-09-12 "$_lw/munk.log" >/dev/null
 check "a harness that named no major adds its own token rather than a number" 	"$(awk -F'	' '$3=="both majors"{print $4}' "$_lw/maj.tsv")" "15;18;unknown"
 
