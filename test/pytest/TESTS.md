@@ -2253,6 +2253,8 @@ outside `pgc_record`'s vocabulary, an empty check name, one record against
 absorbed as evidence a log that does not parse, which is how an observation gets
 attributed to a check that never ran. Five refusals and a control, because five
 arms all reporting rc=2 prove nothing if the tool has started refusing everything.
+The BOGUS-verdict refusal names the verdict, so a field-count failure cannot satisfy
+the arm.
 
 ### `test_last_red_may_only_move_forward`
 
