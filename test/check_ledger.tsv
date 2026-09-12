@@ -322,9 +322,7 @@ harness_selftest	330-the-incomplete-path-must-run-whole	control: and the major r
 harness_selftest	330-the-incomplete-path-must-run-whole	control: the same loop leaves a passing suite passing	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	every function the collect loop calls is defined here	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: all five runner functions were extracted, not empty ranges	never	-
-harness_selftest	330-the-incomplete-path-must-run-whole	premise: all three runner functions were extracted, not empty ranges	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: and all five are callable	never	-
-harness_selftest	330-the-incomplete-path-must-run-whole	premise: and all three are callable	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: and each extraction ends at its own closing brace	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: the major-verdict branch was extracted, not an empty range	never	-
 harness_selftest	330-the-incomplete-path-must-run-whole	premise: the runner's collect loop was extracted, not an empty range	never	-
@@ -655,6 +653,10 @@ harness_selftest	400-a-check-result-must-be-machine	the same ratio check, ENABLE
 harness_selftest	400-a-check-result-must-be-machine	the same timing check, ENABLED, emits one record and passes	never	-
 harness_selftest	400-a-check-result-must-be-machine	the sweep finds a check inside a PIPED loop	never	-
 harness_selftest	410-a-check-must-have-been-red	--mutation across two failing checks in one run is refused	never	-
+harness_selftest	410-a-check-must-have-been-red	--prune REFUSES the whole prune when any orphan carries history	never	-
+harness_selftest	410-a-check-must-have-been-red	--prune removes NOTHING from a part that skipped	never	-
+harness_selftest	410-a-check-must-have-been-red	--prune removes a historyless orphan and says which	never	-
+harness_selftest	410-a-check-must-have-been-red	a before-log and an after-log together are refused, as rename-scan refuses them	never	-
 harness_selftest	410-a-check-must-have-been-red	a before-log and an after-log together are refused, not silently empty	never	-
 harness_selftest	410-a-check-must-have-been-red	a budget stating no census is not refused, because absence is not a contradiction	never	-
 harness_selftest	410-a-check-must-have-been-red	a budget that does not exist at the prior is a note, not a refusal	never	-
@@ -670,6 +672,7 @@ harness_selftest	410-a-check-must-have-been-red	a date that is not a date is ref
 harness_selftest	410-a-check-must-have-been-red	a deliberate break says so with --mutation	never	-
 harness_selftest	410-a-check-must-have-been-red	a gate over a nonexistent log is an integrity failure, not a pass	never	-
 harness_selftest	410-a-check-must-have-been-red	a later green run does not erase an observation	never	-
+harness_selftest	410-a-check-must-have-been-red	a ledger row no record in its own part matches is named an orphan	never	-
 harness_selftest	410-a-check-must-have-been-red	a log carrying a FAIL is refused when no reason is given	never	-
 harness_selftest	410-a-check-must-have-been-red	a name that appeared while another disappeared is reported as a rename	never	-
 harness_selftest	410-a-check-must-have-been-red	a named mutation is recorded against the check that reddened	never	-
@@ -679,6 +682,9 @@ harness_selftest	410-a-check-must-have-been-red	a ref that exists with the budge
 harness_selftest	410-a-check-must-have-been-red	a ref that exists without the budget is still the bootstrap case	never	-
 harness_selftest	410-a-check-must-have-been-red	a refusal keeps the regenerate-the-ledger wording	never	-
 harness_selftest	410-a-check-must-have-been-red	a rename in one part survives an addition in another	never	-
+harness_selftest	410-a-check-must-have-been-red	a row in a part that SKIPPED is reported as unprunable, not as an orphan	never	-
+harness_selftest	410-a-check-must-have-been-red	a row in a part the run does not contain is not called an orphan	never	-
+harness_selftest	410-a-check-must-have-been-red	a run that emits every row in its parts is clean	never	-
 harness_selftest	410-a-check-must-have-been-red	a run whose checks are all ledgered passes the gate	never	-
 harness_selftest	410-a-check-must-have-been-red	a second mutation ACCUMULATES rather than replacing the first	never	-
 harness_selftest	410-a-check-must-have-been-red	a stale prior is named WITH its distance from HEAD	never	-
@@ -688,23 +694,28 @@ harness_selftest	410-a-check-must-have-been-red	an empty check name is one too, 
 harness_selftest	410-a-check-must-have-been-red	an empty log is one too, because there is nothing to reconcile	never	-
 harness_selftest	410-a-check-must-have-been-red	an integrity failure says regenerating will not help	never	-
 harness_selftest	410-a-check-must-have-been-red	an older observation does not overwrite a newer one	never	-
+harness_selftest	410-a-check-must-have-been-red	an orphan carrying history is reported as carrying it	never	-
+harness_selftest	410-a-check-must-have-been-red	and --prune does NOT turn that 1 into a 0, because it pruned nothing	never	-
 harness_selftest	410-a-check-must-have-been-red	and CI collects from the retained path rather than the deleted one	never	-
 harness_selftest	410-a-check-must-have-been-red	and a genuine observation says so with --reds-are-real	never	-
 harness_selftest	410-a-check-must-have-been-red	and a level prior carries no distance, so zero is silent	never	-
 harness_selftest	410-a-check-must-have-been-red	and a log that does not reconcile with its own checks run:	never	-
 harness_selftest	410-a-check-must-have-been-red	and a newer one does	never	-
+harness_selftest	410-a-check-must-have-been-red	and a prune with nothing left to remove is clean, not an error	never	-
 harness_selftest	410-a-check-must-have-been-red	and a raise against that base ref is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	and a record missing its verdict	never	-
 harness_selftest	410-a-check-must-have-been-red	and an empty mutation is a placeholder, not an empty last field	never	-
 harness_selftest	410-a-check-must-have-been-red	and an undated merge does not erase a known date	never	-
 harness_selftest	410-a-check-must-have-been-red	and it copies them BEFORE removing the build directory, which is the only order that works	never	-
 harness_selftest	410-a-check-must-have-been-red	and it entered as debt, not as an observation nothing made	never	-
+harness_selftest	410-a-check-must-have-been-red	and it is REFUSED, not merely printed	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is a different sentence from the refusal, not the same one twice	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is named, so the author knows which one	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is that case that says the change introduces the file	never	-
 harness_selftest	410-a-check-must-have-been-red	and it is the new one that is named, not the one already ledgered	never	-
 harness_selftest	410-a-check-must-have-been-red	and it names the verdict, so the author knows which record	never	-
 harness_selftest	410-a-check-must-have-been-red	and it runs before the build directory is removed, which is the only place it can	never	-
+harness_selftest	410-a-check-must-have-been-red	and it says so rather than declining silently	never	-
 harness_selftest	410-a-check-must-have-been-red	and it says the change introduces the file rather than raising anything	never	-
 harness_selftest	410-a-check-must-have-been-red	and it says the ref does not resolve, rather than claiming the file is new	never	-
 harness_selftest	410-a-check-must-have-been-red	and it says why, rather than falling back to something weaker	never	-
@@ -720,6 +731,8 @@ harness_selftest	410-a-check-must-have-been-red	and the census line it always pr
 harness_selftest	410-a-check-must-have-been-red	and the comparison passes when the ceiling did not rise	never	-
 harness_selftest	410-a-check-must-have-been-red	and the gate prints that it compared them	never	-
 harness_selftest	410-a-check-must-have-been-red	and the history it is about to lose travels with it	never	-
+harness_selftest	410-a-check-must-have-been-red	and the history it would lose is printed with it	never	-
+harness_selftest	410-a-check-must-have-been-red	and the ledger is one row shorter afterwards	never	-
 harness_selftest	410-a-check-must-have-been-red	and the message says how to fix it, because regenerating is the intended action	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names both values	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal names how many failed, so the author can narrow the run	never	-
@@ -727,26 +740,41 @@ harness_selftest	410-a-check-must-have-been-red	and the refusal names the check 
 harness_selftest	410-a-check-must-have-been-red	and the refusal names the raise	never	-
 harness_selftest	410-a-check-must-have-been-red	and the refusal quotes the claim beside the measurement	never	-
 harness_selftest	410-a-check-must-have-been-red	and the runner names no remote at that call site	never	-
+harness_selftest	410-a-check-must-have-been-red	and the scan states how many rows it could not speak about	never	-
+harness_selftest	410-a-check-must-have-been-red	and the summary keeps the two apart, so a zero orphan count is not a clean bill	never	-
 harness_selftest	410-a-check-must-have-been-red	auto refuses when GITHUB_BASE_REF names a ref that is not here	never	-
 harness_selftest	410-a-check-must-have-been-red	auto uses the base ref when it resolves, and names it	never	-
 harness_selftest	410-a-check-must-have-been-red	auto with no base ref and no upstream is an integrity failure	never	-
 harness_selftest	410-a-check-must-have-been-red	both failure arms fail the major	never	-
 harness_selftest	410-a-check-must-have-been-red	but that suite is counted as not covered, which is the debt	never	-
 harness_selftest	410-a-check-must-have-been-red	but the gate says so, so the skip is visible rather than silent	never	-
+harness_selftest	410-a-check-must-have-been-red	control: a prune that leaves nothing outstanding returns 0	never	-
 harness_selftest	410-a-check-must-have-been-red	control: a well-formed log still merges	never	-
 harness_selftest	410-a-check-must-have-been-red	control: an all-PASS log still merges with no flag at all	never	-
+harness_selftest	410-a-check-must-have-been-red	control: and that one did prune, so 0 is not a refusal in disguise	never	-
+harness_selftest	410-a-check-must-have-been-red	control: and the ledger really is shorter afterwards	never	-
+harness_selftest	410-a-check-must-have-been-red	control: the row in the part the run never mentioned SURVIVES the prune	never	-
 harness_selftest	410-a-check-must-have-been-red	control: the same log merges with a different reason, so the refusal above is --mutation-across-two-checks and not the log	never	-
+harness_selftest	410-a-check-must-have-been-red	control: the same two rows ARE pruned when that part's record is a PASS	never	-
 harness_selftest	410-a-check-must-have-been-red	each says what was wrong with the input	never	-
 harness_selftest	410-a-check-must-have-been-red	every committed row has five fields	never	-
 harness_selftest	410-a-check-must-have-been-red	every row has five fields and no trailing tab	never	-
+harness_selftest	410-a-check-must-have-been-red	it is still a finding, so the scan does not return success	never	-
 harness_selftest	410-a-check-must-have-been-red	lowering it is allowed, which is the direction the burn-down goes	never	-
 harness_selftest	410-a-check-must-have-been-red	merging a green run records both checks	never	-
 harness_selftest	410-a-check-must-have-been-red	nor is one merely removed	never	-
 harness_selftest	410-a-check-must-have-been-red	once the suite is covered, a new check in it IS refused	never	-
 harness_selftest	410-a-check-must-have-been-red	one --mutation cannot be attributed across several runs at once	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: and it is a file git has never seen, which is the case that used to fail open	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and it really pruned nothing -- the rows are all still there	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and it reported all four of its categories, so a zero is a measurement	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: and the nobudget branch does not, which is the bootstrap shape	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and the refusal removed NOTHING -- the row is still there	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and the run the scan is given holds only one of them	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and the skipped run emits exactly one of them, as a SKIP	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: and the two arms it stands in for are still named in the ledger	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: both are never, so this ledger's census is two	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: that part has rows the skipped run cannot speak for	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the budget is a tracked file too	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the budget was restored byte-exact	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the check has history before the rename	never	-
@@ -754,24 +782,33 @@ harness_selftest	410-a-check-must-have-been-red	premise: the fixture ledger hold
 harness_selftest	410-a-check-must-have-been-red	premise: the fixture log names checks the real ledger already knows	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the gate's status block was found in the runner	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the hasbudget branch carries the budget	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the ledger holds all three of that part's rows	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the ledger holds all three rows before the scan	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger is not empty, so the partition means something	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger itself is a tracked file, not a variable	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the ledger tool exists	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the orphan about to be pruned carries no history	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the orphan now carries a date and a mutation	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the raised copy really does carry a higher ceiling	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the real budget is inside a git repository	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the scratch prior really is three commits behind	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the scratch repo has a committed ceiling and no upstream	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the scratch repo has a prior ceiling committed	never	-
+harness_selftest	410-a-check-must-have-been-red	premise: the skip-loop sweep is present, so its counts can be read	never	-
 harness_selftest	410-a-check-must-have-been-red	premise: the workflow file is where this part thinks it is	never	-
 harness_selftest	410-a-check-must-have-been-red	raising the ceiling above its committed value is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	raising the ceiling in the tracked file is refused	never	-
 harness_selftest	410-a-check-must-have-been-red	regenerating the ledger lets the new check through	never	-
 harness_selftest	410-a-check-must-have-been-red	the budget names a ceiling and a census, and says which is which	never	-
 harness_selftest	410-a-check-must-have-been-red	the ceiling refuses being exceeded	never	-
+harness_selftest	410-a-check-must-have-been-red	the check the run still emits is not called an orphan	never	-
 harness_selftest	410-a-check-must-have-been-red	the committed census matches the committed ledger	never	-
 harness_selftest	410-a-check-must-have-been-red	the distance travels with a refusal too, not only with a pass	never	-
+harness_selftest	410-a-check-must-have-been-red	the four categories account for every ledger row	never	-
 harness_selftest	410-a-check-must-have-been-red	the gate refuses to run without the registered suite list	never	-
 harness_selftest	410-a-check-must-have-been-red	the ledger partitions into observed and never	never	-
+harness_selftest	410-a-check-must-have-been-red	the orphan scan stays a REPORT while any skip loop cannot be compared to its arms	never	-
+harness_selftest	410-a-check-must-have-been-red	the refusal says why, rather than only that it refused	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner asks the tool to resolve the prior rather than naming one	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner captures the gate's status rather than only its success	never	-
 harness_selftest	410-a-check-must-have-been-red	the runner invokes the ledger gate	never	-
@@ -779,6 +816,7 @@ harness_selftest	410-a-check-must-have-been-red	the runner keeps the logs somewh
 harness_selftest	410-a-check-must-have-been-red	the runner passes --against to the gate	never	-
 harness_selftest	410-a-check-must-have-been-red	the same check in two logs is two runs, not a duplicate	never	-
 harness_selftest	410-a-check-must-have-been-red	the same name twice in ONE log is a duplicate, and is named	never	-
+harness_selftest	410-a-check-must-have-been-red	the scan reports a finding on a skipped part	never	-
 harness_selftest	410-a-check-must-have-been-red	the stable check is not reported	never	-
 harness_selftest	410-a-check-must-have-been-red	the suites job fetches the PR base for the ceiling comparison	never	-
 harness_selftest	420-a-deleted-part-must-be-visible	and every name in the manifest is a part on disk, so a deletion reddens	never	-
