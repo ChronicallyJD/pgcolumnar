@@ -2285,6 +2285,46 @@ true until the next version shipped.
   which is the process serial already used. The in-test control (a body that
   concludes nothing) is unchanged in both modes.
 
+- A collection-time vacuity refusal is no longer also reported as a silent loss (#991).
+
+  The layer refused a run and then contradicted itself:
+
+      ERROR: the pgColumnar vacuity layer refuses this run: a bare skip is refused ...
+      VACUITY: 1 collected test(s) never reported an outcome, so the run lost them
+               silently: tmp/test_offender.py::test_one_offending_arm
+
+  **The run did not lose it silently. It refused it loudly, one line above.** So a reader who
+  typed one bare `@pytest.mark.skip` got the correct diagnosis and then a second finding
+  telling them a test vanished without saying so -- and the natural response is to go looking
+  for a lost test that was never lost.
+
+  `collected - reported` is the right set difference and the wrong **meaning**: a silent loss
+  is when nobody said anything, and here the layer itself is what stopped the run. The guard
+  whose whole subject is a silent loss was firing on the one event that is its opposite.
+
+  **One assignment covers all five refusal sites**, because #963 gave the layer a single
+  chokepoint: `_collection_usage_error` records the refusal, and the reconciliation in
+  `_RunShape.pytest_sessionfinish` skips the missing-outcome problem when it is set. Only that
+  problem. The setup-skip problem still prints -- a fixture removing every test that depends on
+  it is not something a refusal accounts for, and the two are independent findings.
+
+  **Serial was the only path left.** #963 clears `items[:]` in the worker, so the controller's
+  `collected` set is already empty under `-n` and the contradiction cannot arise there:
+
+      main   serial   refusal + the silent-loss line
+      main   xdist    no refusal at all            (that was #963)
+      #963   serial   refusal + the silent-loss line   <- what this closes
+      #963   xdist    refusal, no line
+
+  The second arm is the control and the first is worth nothing without it: an item collected
+  and never reported, with **no** refusal anywhere, is still named and still reddens the run.
+  Dropping a problem from a reconciliation is one edit away from dropping the guard. The
+  fixture removes an item after the layer's hook recorded it and without deselecting it, which
+  is the shape of a crashed xdist worker -- `pytest_deselected` is what tells a deliberate
+  subset from a loss, and nothing calls it there.
+
+  No shell check moved, so no ledger change: `harness_selftest` is 907 checks on both trees.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added

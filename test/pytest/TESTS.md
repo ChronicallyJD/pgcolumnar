@@ -264,6 +264,25 @@ a fix that moved the wrong hook reddens here.
 | `test_a_bare_skip_refusal_keeps_its_reason_under_xdist` | collection skip: rc 4, sentence, no INTERNALERROR, serial and `-n 2` |
 | `test_a_broad_except_refusal_keeps_its_reason_under_xdist` | the same for a second collection-time rule, so the defect is the hook |
 | `test_an_in_test_vacuity_refusal_is_unchanged_under_xdist` | **control**: a body that concludes nothing stays rc 1 with the sentence |
+| `test_a_collection_refusal_is_not_also_reported_as_a_silent_loss` | a refusal is not ALSO reported as `lost them silently`, serial and `-n 2` |
+| `test_a_genuine_silent_loss_is_still_reported` | **control**: an item collected and never reported, with no refusal, is still named |
+
+**A loud refusal is not a silent loss (#991).** A collection-time refusal printed its
+sentence and then, directly beneath it, `VACUITY: N collected test(s) never reported an
+outcome, so the run lost them silently`. The run did not lose them silently — it refused
+them loudly, one line above — so a reader who typed one bare skip got the right diagnosis
+plus a second finding sending them after a test that was never lost. `collected - reported`
+is the right set difference and the wrong *meaning*: a silent loss is when nobody said
+anything, and here the layer itself stopped the run.
+
+Every refusal goes through `_collection_usage_error`, so recording it there covers all five
+call sites with one assignment, and the reconciliation skips **only** that problem. The
+setup-skip problem still prints: a fixture removing every test that depends on it is not
+something a refusal accounts for. The control above is what keeps dropping a problem from
+becoming dropping the guard — it is one edit away.
+
+Serial was the only path left after #963, because clearing `items[:]` in the worker already
+emptied the controller's `collected` set under `-n`.
 
 A worker records the sentence on `workeroutput` and clears the items so no ids
 cross. The controller re-raises `UsageError` from `pytest_testnodedown`, which
