@@ -2237,6 +2237,26 @@ A global positional pairing misses a real rename whenever unrelated movement in 
 part shifts the ordering. Given a before-log and an after-log together the vanished name
 is present in the union, so the scan **refuses** rather than silently finding nothing.
 
+### `test_an_orphan_row_is_named_and_the_unscanned_rows_are_counted`
+
+`rename-scan` pairs an appearance with a disappearance, so an **unpaired** disappearance
+— a check deleted, or renamed in a run where nothing appeared — printed `vanished=N` and
+refused nothing. Two rows in the committed ledger named checks that no longer existed;
+the census counted both and every run returned 0.
+
+The assertion that matters is the **scope**. A row in a part the run does not contain is
+not an orphan, because the run cannot speak about it — counting those as present would
+let a one-suite log certify the whole ledger. So the scan states how many rows it could
+not speak about, and this test pins that number as well as the orphan it found.
+
+### `test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history`
+
+The catalogue of what has been seen red is what the ledger exists to be, and no run can
+recreate it. `--prune` therefore refuses the **whole** prune when any orphan carries
+history, rather than removing the safe ones and leaving a partial job for whoever reads
+the output. A historyless orphan is removed and named as it goes; the row in the part the
+run never mentioned survives, which is the control that the scope holds under a write.
+
 ### `test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers`
 
 The suite restriction is the *meaning* of `suites_not_covered`, not a softening: without
