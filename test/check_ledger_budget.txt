@@ -38,7 +38,13 @@ suites_not_covered 249
 #   HOW TO RE-DERIVE IT, written here because a changelog entry got it wrong and a
 #   derivation is only useful where the number is:
 #
-#       awk -F'\t' '$4=="never"' test/check_ledger.tsv | wc -l
+#       awk -F'\t' '$5=="never"' test/check_ledger.tsv | wc -l
+#
+#   FIELD 5, not 4, since #1010 inserted the majors a row claims as field 4. The number
+#   this counts did NOT change meaning: the key is still (suite, part, name), so a row is
+#   still one check and this still counts checks. That is why the major is a set in a
+#   field rather than part of the key -- under a (major, check) key this would count PAIRS
+#   and the name above would be false.
 #
 #   Rows whose LAST-RED is `never`, not the row count. The two agree only while
 #   nothing has ever been observed red, so a plain `grep -c` overcounts by exactly

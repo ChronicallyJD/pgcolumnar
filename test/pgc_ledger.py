@@ -128,7 +128,32 @@ def _newer(current, incoming):
         return incoming
     return max(current, incoming) if incoming not in rank else current
 NONE = "-"
-FIELDS = 5
+
+# suite, part, name, MAJORS, last-red, mutations.
+#
+# THE MAJOR IS A FIELD, NOT PART OF THE KEY (#1010), and that is the whole design. A
+# check's EXISTENCE depends on the major -- analyze_differential.sh:61 emits ONE record on
+# PG15-17 and N on PG18+, and fk_referencing.sh:287 emits DIFFERENT CHECK NAMES in its two
+# branches -- so the ledger has to record WHERE a check exists. It does not follow that the
+# major belongs in the key.
+#
+# Measured on a full matrix at 4d7c75ae, 252 suites on PG15 and PG18: 6367 of 6472 checks
+# are identical on both majors and 105 exist on exactly one. Keying on the major would hold
+# 6472 x 5 = 32,360 rows to express those 105 -- about 247 duplicate rows for every row
+# that differs, each a second copy of one observation, which is the shape
+# `a-repeated-measurement-must-be-idempotent` is about.
+#
+# Keeping the key at (suite, part, name) also keeps `checks_never_observed_red` counting
+# CHECKS. Under a (major, check) key it would count PAIRS, and "5800 checks" in a tree with
+# 1150 of them is a number that lies by its own name -- the defect check_ledger_budget.txt
+# exists to argue against.
+#
+# A SET, sorted and ";"-separated: "15;18". `unknown` is a token in it like any other,
+# and the common one -- harness_selftest never references PGC_MAJOR, so all 907 of its
+# rows carry it. NO WILDCARD: "every major observed" would change meaning the day a major
+# is added to the matrix, inheriting a claim nothing measured.
+FIELDS = 6
+MAJOR_SEP = ";"
 
 
 class LedgerError(Exception):
@@ -234,7 +259,7 @@ def read_records(paths, *, require_nonempty=True):
 
 
 def read_ledger(path):
-    """{(suite, part, name): [last_red, {mutations}]}.
+    """{(suite, part, name): [{majors}, last_red, {mutations}]}.
 
     Keyed on the part as well as the name: harness_selftest sources 40-odd parts
     into one shell and phrases its premises to be COPIED, so a name-only key is a
@@ -250,23 +275,37 @@ def read_ledger(path):
         f = line.split("\t")
         if len(f) != FIELDS:
             raise LedgerError(f"{path}:{n}: a ledger row needs {FIELDS} fields, got {len(f)}")
-        muts = set() if f[4] == NONE else {m for m in f[4].split(";") if m}
-        rows[(f[0], f[1], f[2])] = [f[3] or NEVER, muts]
+        # EVERY token validated, not just the first. A ledger is hand-edited far more
+        # often than a log is generated, so the typed-into file needs the check at least
+        # as much. A free-form --date was accepted verbatim once and a typo became an
+        # authoritative observation; a major decides which checks can exist.
+        majors = {m for m in f[3].split(MAJOR_SEP) if m}
+        if not majors:
+            raise LedgerError(
+                f"{path}:{n}: a row names no major, so it says nothing about where its "
+                f"check exists")
+        for m in sorted(majors):
+            if not _MAJOR.match(m):
+                raise LedgerError(
+                    f"{path}:{n}: major {m!r} is neither a number nor "
+                    f"{MAJOR_UNKNOWN!r}, so this row names no version it applies to")
+        muts = set() if f[5] == NONE else {m for m in f[5].split(";") if m}
+        rows[(f[0], f[1], f[2])] = [majors, f[4] or NEVER, muts]
     return rows
 
 
 def write_ledger(path, rows):
     lines = []
-    for (suite, part, name), (red, muts) in sorted(rows.items()):
+    for (suite, part, name), (majors, red, muts) in sorted(rows.items()):
         # No trailing tab. An empty last field is trailing whitespace on every
         # row, which `git diff --check` reports and which made 614 of them.
-        lines.append("\t".join((suite, part, name, red,
+        lines.append("\t".join((suite, part, name, MAJOR_SEP.join(sorted(majors)), red,
                                 ";".join(sorted(muts)) if muts else NONE)))
     pathlib.Path(path).write_text("\n".join(lines) + ("\n" if lines else ""))
 
 
 def _by_run(paths):
-    """[(path, {(suite, part, name): [verdicts]})] -- one entry per LOG.
+    """[(path, {(suite, part, name): [(verdict, major)]})] -- one entry per LOG.
 
     Per log, because the same check appearing in two logs is two RUNS of it, while
     twice in one log is a duplicate name sharing a ledger row. Merging the logs
@@ -275,8 +314,8 @@ def _by_run(paths):
     runs = []
     for p in paths:
         seen = {}
-        for suite, part, name, verdict, _major in read_records([p]):
-            seen.setdefault((suite, part, name), []).append(verdict)
+        for suite, part, name, verdict, major in read_records([p]):
+            seen.setdefault((suite, part, name), []).append((verdict, major))
         runs.append((p, seen))
     return runs
 
@@ -309,7 +348,8 @@ def cmd_merge(args):
     # Measured on #918: a two-FAIL log merged with --mutation MUTATION_A recorded
     # it against both. Reported by @linuxhikerpm.
     if args.mutation:
-        failed = sorted({key for _p, seen in runs for key, vs in seen.items() if "FAIL" in vs})
+        failed = sorted({key for _p, seen in runs for key, vs in seen.items()
+                         if any(v == "FAIL" for v, _m in vs)})
         if len(failed) > 1:
             listed = "\n".join(f"      {s}\t{p}\t{n}" for s, p, n in failed[:6])
             more = "" if len(failed) <= 6 else f"\n      ... and {len(failed) - 6} more"
@@ -339,7 +379,8 @@ def cmd_merge(args):
     # Refused BEFORE any row is built, so a declined merge is never half-applied.
     if not args.mutation and not args.reds_are_real:
         reddened = sorted({key for _p, seen in runs
-                           for key, vs in seen.items() if "FAIL" in vs})
+                           for key, vs in seen.items()
+                           if any(v == "FAIL" for v, _m in vs)})
         if reddened:
             listed = "\n".join(f"      {s}\t{p}\t{n}" for s, p, n in reddened[:6])
             more = "" if len(reddened) <= 6 else f"\n      ... and {len(reddened) - 6} more"
@@ -352,29 +393,39 @@ def cmd_merge(args):
                 f"this is a genuine observation of the code under test.")
 
     for path, seen in runs:
-        for key, verdicts in sorted(seen.items()):
+        for key, pairs in sorted(seen.items()):
+            verdicts = [v for v, _m in pairs]
             if key not in rows:
                 # A check this ledger has never seen enters as DEBT. A green run
                 # has observed nothing go red, so merging one must never record a
                 # red observation.
-                rows[key] = [NEVER, set()]
+                rows[key] = [set(), NEVER, set()]
+            # THE MAJOR SET ACCUMULATES, for the reason the mutation column and
+            # last-red both do: merging a PG15 log after a PG18 log must not make the
+            # check stop existing on 18. A plain assignment was measured doing exactly
+            # that to last-red on #918, silently, and the order a human merges logs in
+            # is not a fact about the code.
+            rows[key][0].update(m for _v, m in pairs)
             if "FAIL" in verdicts:
-                rows[key][0] = _newer(rows[key][0], args.date)
+                rows[key][1] = _newer(rows[key][1], args.date)
                 if args.mutation:
                     # A SET. Keeping only the last one records the most recent
                     # attack rather than the catalogue this column exists to
                     # become.
-                    rows[key][1].add(args.mutation)
-        for key, verdicts in sorted(seen.items()):
+                    rows[key][2].add(args.mutation)
+        for key, pairs in sorted(seen.items()):
+            verdicts = [v for v, _m in pairs]
             if len(verdicts) > 1:
                 print(f"    duplicate check name in one run, so one ledger row covers "
                       f"{len(verdicts)}: {key[0]}\t{key[1]}\t{key[2]}")
 
     write_ledger(args.ledger, rows)
     seen_all = {k for _, s in runs for k in s}
-    red = sum(1 for v in rows.values() if v[0] != NEVER)
+    red = sum(1 for v in rows.values() if v[1] != NEVER)
+    majors = sorted(set().union(*(v[0] for v in rows.values())) if rows else set())
     print(f"  ledger: rows={len(rows)} | runs={len(runs)}, distinct checks this merge={len(seen_all)}, "
           f"observed red ever={red}, never={len(rows) - red}")
+    print(f"    majors the ledger now claims rows for: {', '.join(majors) or 'none'}")
     return 0
 
 
@@ -398,9 +449,14 @@ def cmd_rename_scan(args):
             "the union of a before-log and an after-log hides the disappearance")
     rows = read_ledger(args.ledger)
     now = set(runs[0][1])
+    # The majors this run actually observed. A row claiming only another major is not a
+    # candidate for a rename here: pairing its disappearance with an appearance would
+    # report a rename between two checks that were never the same check.
+    run_majors = {m for pairs in runs[0][1].values() for _v, m in pairs}
 
     parts = {(s, p) for s, p, _ in now}
-    known = {k for k in rows if (k[0], k[1]) in parts}
+    known = {k for k in rows
+             if (k[0], k[1]) in parts and (rows[k][0] & run_majors)}
 
     rc = 0
     n_app = n_van = 0
@@ -410,11 +466,12 @@ def cmd_rename_scan(args):
         n_app += len(app)
         n_van += len(van)
         for new, old in zip(app, van):
-            was = rows.get((part[0], part[1], old), [NEVER, set()])[0]
+            was = rows.get((part[0], part[1], old), [set(), NEVER, set()])[1]
             print(f"    possible rename: {old} -> {new} "
                   f"(in {part[0]}/{part[1]}, history: last red {was})")
             rc = 1
-    print(f"  rename scan: appeared={n_app}, vanished={n_van}")
+    print(f"  rename scan: appeared={n_app}, vanished={n_van}, "
+          f"majors this run observed={', '.join(sorted(run_majors)) or 'none'}")
     return rc
 
 
@@ -473,8 +530,15 @@ def cmd_orphan_scan(args):
     THE EXIT CODES, stated because a caller only ever sees the code:
 
         0   nothing left to report: no orphan and nothing unprunable
-        1   something is still there -- an orphan, or a row this run cannot speak for
+        1   something is still there -- an orphan, or a row in a part that SKIPPED
         2   an integrity failure, or a prune refused because history would be lost
+
+    `not checked` does NOT set 1, and since #1010 that is the difference between a usable
+    tool and one that always returns 1. A run observes ONE major, so every row claiming
+    only another major is a row it does not contain. Outstanding means "this run found
+    something wrong with a row it could see", and a row from another major is not that.
+    The earlier wording said "a row this run cannot speak for", which describes both
+    categories and matched only one.
 
     `--prune` returning 0 when it had pruned NOTHING was the first version's subtler
     bug, reported by @jdatcmd in review. A caller that scans, sees 1, re-runs with
@@ -491,26 +555,47 @@ def cmd_orphan_scan(args):
     verdicts = runs[0][1]
     now = set(verdicts)
 
+    # THE MAJORS THIS RUN OBSERVED (#1010). This is the direction the missing dimension
+    # actually broke. A row the ledger claims only for PG18 looks exactly like a deleted
+    # check to a PG15 run, and the fourth category already says the true thing about it:
+    # "this run does not contain them, so it cannot speak about them". So no new category
+    # and no grandfather rule -- the scope gains an intersection and the row lands in
+    # `not checked`.
+    #
+    # It was saved until now only by the SKIP rule, and that was luck.
+    # analyze_differential emits a check_skip on PG15-17, so its part was unprunable;
+    # fk_referencing:287 emits `check` in its older-major branch and has no SKIP at all,
+    # so once that suite is seeded a PG15 run would have called its two PG17+ checks
+    # deleted. Measured at 4d7c75ae: 24 keys shared, 2 only on PG18, 1 only on PG15.
+    #
+    # AN INTERSECTION, not equality: a row claiming 15;18 is in scope on a PG15 run AND on
+    # a PG18 run. That is the point of the set -- a stronger claim is held to both tests.
+    run_majors = {m for pairs in verdicts.values() for _v, m in pairs}
+
     parts = {(s, p) for s, p, _ in now}
     # A part holding ANY SKIP cannot speak about absence: see the docstring.
-    skipped_parts = {(s, p) for (s, p, _), v in verdicts.items() if "SKIP" in v}
-    checkable = {k for k in rows if (k[0], k[1]) in parts}
+    skipped_parts = {(s, p) for (s, p, _), v in verdicts.items()
+                     if any(x == "SKIP" for x, _m in v)}
+    checkable = {k for k in rows
+                 if (k[0], k[1]) in parts and (rows[k][0] & run_majors)}
     unchecked = sorted(set(rows) - checkable)
     absent = sorted(checkable - now)
     orphans = [k for k in absent if (k[0], k[1]) not in skipped_parts]
     unprunable = [k for k in absent if (k[0], k[1]) in skipped_parts]
 
     with_history = [k for k in orphans
-                    if rows[k][0] != NEVER or rows[k][1]]
+                    if rows[k][1] != NEVER or rows[k][2]]
     historyless = [k for k in orphans if k not in with_history]
 
     for k in orphans:
-        last, muts = rows[k]
+        majors, last, muts = rows[k]
         if k in with_history:
             print(f"    ORPHAN CARRYING HISTORY: {k[0]}\t{k[1]}\t{k[2]} "
-                  f"(last red {last}, mutations: {';'.join(sorted(muts)) or NONE})")
+                  f"(claims {MAJOR_SEP.join(sorted(majors))}, last red {last}, "
+                  f"mutations: {';'.join(sorted(muts)) or NONE})")
         else:
-            print(f"    orphan: {k[0]}\t{k[1]}\t{k[2]} (no history)")
+            print(f"    orphan: {k[0]}\t{k[1]}\t{k[2]} "
+                  f"(claims {MAJOR_SEP.join(sorted(majors))}, no history)")
 
     # The parts the run never mentioned, named rather than counted alone: a number
     # with no names is a number nobody can act on.
@@ -531,6 +616,8 @@ def cmd_orphan_scan(args):
         for k in unprunable[:5]:
             print(f"      {k[0]}\t{k[1]}\t{k[2]}")
 
+    print(f"  orphan scan: majors this run observed="
+          f"{', '.join(sorted(run_majors)) or 'none'}")
     print(f"  orphan scan: parts in the run={len(parts)}, rows in those parts={len(checkable)}, "
           f"orphans={len(orphans)} ({len(with_history)} carrying history), "
           f"unprunable={len(unprunable)}, not checked={len(unchecked)}")
@@ -563,7 +650,8 @@ def cmd_orphan_scan(args):
         return 1 if unprunable else 0
 
     for k in historyless:
-        print(f"    pruned: {k[0]}\t{k[1]}\t{k[2]}")
+        print(f"    pruned: {k[0]}\t{k[1]}\t{k[2]} "
+              f"(claimed {MAJOR_SEP.join(sorted(rows[k][0]))})")
         del rows[k]
     write_ledger(args.ledger, rows)
     print(f"  orphan prune: removed {len(historyless)} row(s), the ledger now holds {len(rows)}")
@@ -742,8 +830,9 @@ def _committed_budget(path, ref):
 def cmd_gate(args):
     rows = read_ledger(args.ledger)
     budget = read_budget(args.budget)
-    seen = {k for k, _, _ in ((k, None, None) for k in
-                              {(s, p, n) for s, p, n, _, _m in read_records(args.logs)})}
+    # The records, WITH the major each was observed under: the refusal is about a
+    # (check, major) pair even though the ledger is keyed on the check.
+    records = sorted({(s, p, n, m) for s, p, n, _v, m in read_records(args.logs)})
 
     rc = 0
 
@@ -760,9 +849,24 @@ def cmd_gate(args):
     # It tightens on its own as suites are seeded, and the ceiling is what forces
     # that direction.
     covered_suites = {k[0] for k in rows}
-    unknown = sorted(k for k in seen - set(rows) if k[0] in covered_suites)
-    for suite, part, name in unknown:
-        print(f"    not in the ledger: {suite}\t{part}\t{name}")
+    # AND THE SAME ARGUMENT FOR THE MAJOR (#1010). The gate cannot refuse a new check on a
+    # major it holds no rows for, for the identical reason it cannot in a suite it has
+    # never seen: it has no idea which of that major's checks are new. Adding PG20 to the
+    # matrix would otherwise redden every check at once, which is a gate somebody turns
+    # off -- the failure this issue family exists to prevent. It tightens on its own the
+    # moment one run on that major is merged.
+    covered_majors = set().union(*(v[0] for v in rows.values())) if rows else set()
+    unknown = []
+    for key in records:
+        if key[0] not in covered_suites or key[3] not in covered_majors:
+            continue
+        # A row is a claim about WHERE the check exists, so a known check seen on a major
+        # its row does not name is refused too: widening that claim is a ledger edit a
+        # reviewer should see, not something a run does silently.
+        if key[3] not in rows.get((key[0], key[1], key[2]), [set()])[0]:
+            unknown.append(key)
+    for suite, part, name, major in unknown:
+        print(f"    not in the ledger: {suite}\t{part}\t{name}\t(on major {major})")
     if unknown:
         print(f"    {len(unknown)} check(s) the ledger has never seen. Regenerate it with:")
         print(f"      python3 test/pgc_ledger.py merge --ledger {args.ledger} --date <today> <log>")
@@ -771,9 +875,19 @@ def cmd_gate(args):
     # A CENSUS, not a ceiling. Bounding it deadlocks: every new check enters as
     # `never`, so the only way to land one would be to raise a number the design
     # says may only fall.
-    never = sum(1 for v in rows.values() if v[0] == NEVER)
+    never = sum(1 for v in rows.values() if v[1] == NEVER)
     print(f"  ledger census: rows={len(rows)} | never observed red={never}, "
           f"ever red={len(rows) - never}, new this run={len(unknown)}")
+    # THE MAJORS, reported beside the census because the restriction above is invisible
+    # otherwise -- a gate that quietly enforces less than it claims is what the ledger
+    # design refuses. A run on an uncovered major must SAY so rather than pass quietly.
+    run_majors = sorted({k[3] for k in records})
+    print(f"  ledger majors: covered={', '.join(sorted(covered_majors)) or 'none'} | "
+          f"this run observed {', '.join(run_majors) or 'none'}")
+    for m in run_majors:
+        if m not in covered_majors:
+            print(f"    the ledger holds no row for major {m}, so it cannot refuse a new "
+                  f"check there -- merge one run on it and this tightens")
 
     # THE CENSUS IS COMPARED, NOT ONLY PRINTED (#952). Reporting is not enforcing:
     # the line above stated the true number while the budget claimed another, and
