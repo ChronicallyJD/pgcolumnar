@@ -76,7 +76,8 @@ behaviour, the source of that number is named.
 - [28. test_docs_join_clustering.py: the runtime filter's layout precondition](#28-test_docs_join_clusteringpy-the-runtime-filters-layout-precondition)
 - [29. test_join_vector_agg.py: ungrouped fold over a unique-key join](#29-test_join_vector_aggpy-ungrouped-fold-over-a-unique-key-join)
 - [30. test_differential.py: the heap oracle, type matrix](#30-test_differentialpy-the-heap-oracle-type-matrix)
-- [31. test_stats_privilege.py: stats is readable only by a caller who may read the table](#31-test_stats_privilegepy-stats-is-readable-only-by-a-caller-who-may-read-the-table)
+- [31. test_native_ownership.py: every maintenance function is owner-only](#31-test_native_ownershippy-every-maintenance-function-is-owner-only)
+- [32. test_stats_privilege.py: stats is readable only by a caller who may read the table](#32-test_stats_privilegepy-stats-is-readable-only-by-a-caller-who-may-read-the-table)
 
 ## 1. How to read a test in here
 
@@ -2257,6 +2258,8 @@ outside `pgc_record`'s vocabulary, an empty check name, one record against
 absorbed as evidence a log that does not parse, which is how an observation gets
 attributed to a check that never ran. Five refusals and a control, because five
 arms all reporting rc=2 prove nothing if the tool has started refusing everything.
+The BOGUS-verdict refusal names the verdict, so a field-count failure cannot satisfy
+the arm.
 
 ### `test_last_red_may_only_move_forward`
 
@@ -2939,7 +2942,58 @@ Four columns of four types in one WHERE, where a per-column arm cannot reach: th
 combines their skip decisions, and a predicate right alone can be wrong in conjunction.
 
 
-## 31. test_stats_privilege.py: stats is readable only by a caller who may read the table
+## 31. test_native_ownership.py: every maintenance function is owner-only
+
+Port of `test/native_ownership.sh` (#432). The maintenance functions rewrite data,
+reclaim space, or take strong locks, so they are owner-only like VACUUM and CLUSTER.
+
+### Two things the bash suite cannot assert
+
+**The SQLSTATE, not the message.** `native_ownership.sh` greps the output for
+`must be owner`. `CLAUDE.md` states the rule that breaks: *"Assert SQLSTATE, not
+error text: 42501 comes only from `aclcheck_error`."* The refusal is
+`aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_TABLE, ...)` at
+`src/columnar_vacuum.c:189` and `:205`. A text grep passes whatever code the server
+attached, so the day a refusal is raised as 22023 the bash suite stays green and
+every client switching on SQLSTATE breaks.
+
+**It does not conflate refusal with login.** The bash suite runs each call through a
+separate `psql` as a role that must be able to connect; if that role could not log
+in, the grep finds nothing and the arm fails for a reason unrelated to ownership.
+`SET ROLE` changes the effective user for permission checks without authenticating.
+
+A third arm states the ordering the bash comment asserts in prose: the check fires
+before the work, so a non-owner is refused for a projection that does not exist
+rather than told it is missing.
+
+### The premise arm, and what measuring it corrected
+
+Every refusal arm carries `premise: alice reaches the table`. `pgc_conn` puts each
+test in a private schema, and without USAGE on it the refusals would be about
+something else.
+
+**What that something else is turned out not to be what the docstring first said.**
+Measured by removing the grant: alice gets `42P01 relation "n" does not exist`,
+because an unqualified name resolves through `search_path` and an unusable schema is
+skipped. So the arms FAIL rather than falsely pass, and the premise's value is that
+it fails first and names reachability. The false-pass case is real but narrower: a
+QUALIFIED reference into a schema without USAGE raises `42501 permission denied for
+schema`, the ownership refusal's own SQLSTATE from a different check.
+
+| test | what it pins |
+| --- | --- |
+| `test_non_owner_is_refused_with_42501` | nine arms, one per function, each 42501 and each carrying the reachability premise |
+| `test_the_owner_is_allowed` | the control: a gate that refused everyone would satisfy all nine |
+| `test_the_check_fires_before_the_work` | a non-owner is refused for a projection that does not exist |
+
+### compare_to_bash.py cannot grade this pair
+
+Both sides build their names at runtime -- bash as `non-owner refused: ${1%%(*}`,
+pytest as an f-string -- so the tool reports `PORT IS INCOMPLETE` for a port that is
+complete. Measured across the corpus: **81 of 253 suites** carry at least one
+interpolated check name, 252 of 4345 names overall. The verdict is a false red for a
+third of the suites, which bounds how much of #432's parity the tool can certify.
+## 32. test_stats_privilege.py: stats is readable only by a caller who may read the table
 
 Port of `test/stats_privilege.sh` (#560, ported for #432).
 

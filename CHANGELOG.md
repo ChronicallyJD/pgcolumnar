@@ -18,6 +18,33 @@ true until the next version shipped.
 
 ### Added
 
+- `native_ownership.sh` has a pytest twin, and it asserts the SQLSTATE (#432).
+
+  Nine maintenance and DDL functions, each refused to a non-owner with 42501 rather
+  than with a grep for `must be owner`. `CLAUDE.md` already states the rule: 42501
+  comes only from `aclcheck_error`, and the refusal is
+  `aclcheck_error(ACLCHECK_NOT_OWNER, ...)` at `columnar_vacuum.c:189` and `:205`. A
+  text grep passes whatever code the server attached.
+
+  It also stops conflating refusal with login: the bash suite runs each call as a role
+  that must be able to connect, so a role that could not log in fails the arm for a
+  reason unrelated to ownership. `SET ROLE` changes the effective user without
+  authenticating.
+
+  A third arm states the ordering the bash comment asserts in prose: the check fires
+  before the work, so a non-owner is refused for a projection that does not exist.
+
+  THE PREMISE ARM CORRECTED ITS OWN DOCSTRING. Every refusal carries `premise: alice
+  reaches the table`, because each test runs in a private schema. Measured by removing
+  the grant, alice gets `42P01 relation does not exist` rather than the 42501 I had
+  claimed: an unqualified name resolves through `search_path` and an unusable schema
+  is skipped, so the arms fail rather than falsely pass. The false-pass case needs a
+  QUALIFIED reference, which raises 42501 for the schema.
+
+  AND THE PARITY TOOL CANNOT GRADE THIS PAIR. Both sides build names at runtime, so
+  `compare_to_bash.py` reports `PORT IS INCOMPLETE` for a complete port. Measured: 81
+  of 253 suites carry at least one interpolated check name. That bounds how much of
+  #432's parity the tool can certify, and it is a false red rather than a false green.
 - `stats_privilege.sh` has a pytest twin, and it asserts the SQLSTATE (#432).
 
   The bash suite decides the refusal with `grep -c 'permission denied for table'`.
@@ -816,6 +843,8 @@ true until the next version shipped.
   rather than measured. It is the gap to close if the default is ever doubted.
 
 ### Fixed
+
+- A BOGUS-verdict ledger record is refused by naming the verdict, not by field count (#1013).
 
 - The star-schema join how-to names clustering on the join key (#752).
 

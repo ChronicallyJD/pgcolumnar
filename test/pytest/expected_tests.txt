@@ -50,6 +50,10 @@ guard_tests 277
 #
 # The rate is the point. The ungated half grew by 67 tests in the time this took to review,
 # which is the argument for gating it rather than a detail about it.
-# 166 -> 169 when test_stats_privilege.py landed: the premises, who may read, and
-# the no-privilege refusal.
-cluster_tests 169
+# 166 -> 177 when test_native_ownership.py landed: nine parametrized refusal arms,
+# the owner control, and the check-ordering arm.
+cluster_tests 180
+# 177 -> 180 when test_stats_privilege.py landed, on top of
+# test_native_ownership.py's 166 -> 177. DERIVED by collection on the merged
+# tree, not 169 + 11: both branches bumped this from 166 and the union left two
+# lines, which is exactly the staleness #1018's enforcement exists to catch.
