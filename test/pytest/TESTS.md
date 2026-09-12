@@ -296,6 +296,8 @@ the general case was hand-rolled.
 | `test_a_conftest_cannot_switch_off_the_broad_except_scan` | the same hatch, a second scan |
 | `test_a_conftest_cannot_switch_off_the_raises_scan` | and a third |
 | `test_the_refusal_names_the_binding_that_changed` | an honest run, refused, naming the conftest's name |
+| `test_a_conftest_cannot_stub_an_expect_method_so_a_false_claim_passes` | a conftest replacing `Expect.num` **on the class** with a stub that still counts is refused at collection, naming `Expect.num` |
+| `test_stubbing_the_recorder_still_fails_closed_by_count` | **control**: stubbing `_record` still fails via count 0, so the public-method snapshot did not swallow the recorder's own protection |
 | `test_a_new_attribute_on_the_layer_is_not_a_rebind` | the control: a check that fires on anything is not a check |
 | `test_the_rebind_does_not_leak_into_this_session` | the binding is restored, so `pytester` does not poison the outer run |
 
@@ -317,6 +319,12 @@ them changed, which covers names added after it was written. It is a cost guard,
 a lock: the criterion #924 set is that silencing a rule must cost more than stating a
 reason. **The shell harness needs no equivalent** — `selftest/260` greps `lib.sh` from
 a separate process and never sources the file it judges.
+
+**#967 closes the class, not the instance.** `pgc_vacuity.Expect.num = stub` is
+refused at collection. `expect.num = stub` on the instance, or a subclass yielded
+by an overridden `expect` fixture, still keep the count and drop the comparison:
+`Expect.__dict__` is unchanged, so the snapshot cannot see them. A stub that still
+records satisfies the zero-assertion backstop. Those two routes stay #967.
 
 
 **Two failed queries are not two observable arms.** `query_error()` produces a value
