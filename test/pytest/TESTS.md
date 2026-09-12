@@ -75,8 +75,8 @@ behaviour, the source of that number is named.
 - [27. test_skip_loop_arms.py: a skipped arm records under its own name](#27-test_skip_loop_armspy-a-skipped-arm-records-under-its-own-name)
 - [28. test_docs_join_clustering.py: the runtime filter's layout precondition](#28-test_docs_join_clusteringpy-the-runtime-filters-layout-precondition)
 - [29. test_join_vector_agg.py: ungrouped fold over a unique-key join](#29-test_join_vector_aggpy-ungrouped-fold-over-a-unique-key-join)
-- [30. test_differential.py: the heap oracle, type matrix](#30-test_differentialpy-the-heap-oracle-type-matrix)
 - [31. test_native_ownership.py: every maintenance function is owner-only](#31-test_native_ownershippy-every-maintenance-function-is-owner-only)
+- [30. test_differential.py: the heap oracle, all seven parts](#30-test_differentialpy-the-heap-oracle-all-seven-parts)
 - [32. test_stats_privilege.py: stats is readable only by a caller who may read the table](#32-test_stats_privilegepy-stats-is-readable-only-by-a-caller-who-may-read-the-table)
 
 ## 1. How to read a test in here
@@ -2841,17 +2841,20 @@ join.
 A non-equi join clause is the same kind of extra Join Filter. EXPLAIN has no
 vectorized agg node. The sum matches a heap twin.
 
-## 30. test_differential.py: the heap oracle, type matrix
+## 30. test_differential.py: the heap oracle, all seven parts
 
 The governing property of `test/differential.sh`, and the reason it is the largest suite in
 the tree: load the same data into a heap table and a columnar one, and every query must
 answer identically. Heap is the oracle, so this catches encode/decode, null-handling and
 chunk-skipping bugs **generically** rather than one at a time.
 
-This is **part 1** of that port -- the type matrix. Twenty columns covering every type the
-suite exercises, 12,000 rows, a **different null modulus per column** so no two columns
-share a null pattern, small chunk-group and stripe limits so there is something to skip. The
-boundary, encoding, bloom and aggregate parts are separate slices.
+This is the **whole suite** ported -- all seven parts, in the order the bash suite runs them:
+the type matrix, the boundary conditions, the lightweight encodings, aggregates over nulls and
+deletes, bloom equality skipping, a wide projection, and the covering `count(*)`.
+
+Part 1, the type matrix, is twenty columns covering every type the suite exercises, 12,000
+rows, a **different null modulus per column** so no two columns share a null pattern, and
+small chunk-group and stripe limits so there is something to skip.
 
 Names are the bash suite's character for character, which is what lets `compare_to_bash.py`
 diff the two harnesses by property. A port that renames a check asserts the same thing and
@@ -2993,6 +2996,127 @@ pytest as an f-string -- so the tool reports `PORT IS INCOMPLETE` for a port tha
 complete. Measured across the corpus: **81 of 253 suites** carry at least one
 interpolated check name, 252 of 4345 names overall. The verdict is a false red for a
 third of the suites, which bounds how much of #432's parity the tool can certify.
+## Part 2: boundary conditions
+
+Part 1 asks whether the two access methods agree about DATA. Part 2 asks whether they agree
+at the SIZES where the format's structure changes. Each fixture is built per test rather than
+shared, because a different geometry each time is the whole point -- a module fixture would
+have to pick one.
+
+### `test_an_empty_table_agrees_and_the_agreement_is_not_vacuous`
+
+`empty scan` compares two empty results, which `pgc_set_hash` renders as `EMPTY` on both
+sides. That is not nothing -- a scan that invented a row would break it -- but the vacuity
+layer refuses it by default, so the reason is stated and a **positive control** is added: the
+same query returns a row once one exists. `empty count` and `empty agg` are not vacuous,
+because 0 and a row of NULLs are values.
+
+### `test_a_single_row_agrees`
+
+One row is the smallest geometry that stores anything: a stripe, a chunk group and a value
+stream all of length one. A format that assumes a full vector anywhere breaks here.
+
+### `test_the_chunk_group_boundary_is_exact_and_the_data_survives_it`
+
+N-1, N, N+1 around a 100-row limit, for two limits. The GROUP COUNT is asserted as well as
+the data, because the data can agree while the geometry is wrong: a writer that never closes
+a group produces one group and the right rows, and only the count says so.
+
+### `test_the_stripe_boundary_is_exact_and_the_data_survives_it`
+
+The same question one level up, at 1000 -- the floor `set_options` enforces, so the smallest
+legal stripe and the most boundaries per row. It is also below one 1024-value vector, which
+#1017 measures as a compression cliff; that is a SIZE question and this is a CORRECTNESS one.
+
+### `test_a_column_that_is_entirely_null_agrees`
+
+A column with no values has no zone-map minimum or maximum, and a scan treating a missing
+range as "matches nothing" loses every row of the TABLE rather than of the column. `minmax`
+is the arm that sees it.
+
+### `test_a_whole_chunk_group_that_is_null_agrees`
+
+The case a column-wide NULL cannot reach: skip decisions are per group, so a null group
+between two non-null ones is where a wrong "cannot match" prunes live rows. The range arm
+straddles the boundary deliberately.
+
+### `test_the_empty_string_stays_distinct_from_null`
+
+A varlena column stores `''` as a zero-length value and NULL as a bit, so a decoder that
+loses the bitmap returns `''` where NULL was. Both counts are asserted, not just the total,
+because they move in opposite directions.
+
+### `test_a_wide_row_of_sixty_one_columns_agrees`
+
+Sixty-one columns, where a per-column offset error shows and a narrow table hides it. Its
+premise arm counts columns **via `regclass`**, not `information_schema.columns` by name: the
+unqualified form counts every table called `t_col` in every schema, including the module
+fixture's, and reported 81.
+
+## Parts 3 to 7
+
+### `test_the_integer_encodings_round_trip`
+
+Four shapes in one table, each the input a different encoding is chosen for: constant deltas
+for delta-of-delta, four distinct values for a dictionary, one value for a constant column, and
+a hash-spread bigint for none of them. One table rather than four, because the verdict is per
+column and a writer applying one column's to another would pass a single-shape table.
+`compression => 'none'` so the codec cannot compress the damage away.
+
+### `test_the_float_and_timestamp_encodings_round_trip`
+
+Gorilla on a random walk and delta-of-delta on a fixed interval. **This fixture is why `_pair`
+generates once and copies**: measured on its own generator, 2000 rows, regenerated gives 2000
+rows differing and copied gives 0. min/max rather than sum for the floats, because a float sum
+has no single right answer -- part 1 measures three from heap alone by row order.
+
+### `test_the_dictionary_encoding_round_trips_including_varlena`
+
+Four values, six values, and an md5 per row in one table, so the per-column verdict is visible.
+`GROUP BY` is the arm a whole-row comparison cannot replace: it reads the column through the
+grouping path rather than the projection path.
+
+### `test_an_uncompressed_table_still_round_trips`
+
+Encoding is independent of the codec. Without this arm every encoding above is only read back
+through a codec, and a bug the codec happens to mask would never show.
+
+### `test_aggregates_agree_with_nulls_and_deletes_present`
+
+A row group carrying a delete cannot be answered from the value stream, so the scan falls back
+per group -- and a fallback that double-counts shows in `count(*)` while every other arm stays
+green. The delete is asserted to have removed exactly 400 rows, because a DELETE that matched
+nothing would leave the fast path untested.
+
+### `test_bloom_equality_agrees_on_numeric_and_uuid_keys`
+
+Hash-spread keys, so min/max cannot prune and only a bloom can. **The spread is asserted**, not
+assumed: each chunk's key range must span at least 90,000 of the domain, because a fixture that
+quietly became ordered would make every arm here pass on zone maps alone and say nothing about
+blooms. The absent-value probe is derived from the data rather than guessed.
+
+### `test_text_bloom_equality_agrees_including_a_mismatched_collation`
+
+**The bash arm probes a value that is not there, and it is the subtlest unfalsifiable arm this
+port found.** `tk` is `'k' || ((g*2654435761)%50000)` over 16,000 rows of a 50,000-wide domain,
+so 32% of values appear and `tk = 'k100'` matches 0 rows -- measured. A bloom wrongly pushed
+under a mismatched collation would skip the chunks holding the match and also return 0, so the
+one defect the arm exists to detect produces the answer it expects. The port probes a present
+value and adds the direction it must fail in.
+
+### `test_a_selective_filter_with_a_wide_projection_agrees`
+
+Four selectivities from one row to most. `wide nomatch` is the second arm in the file that
+cannot fail alone, and gets the same treatment as `empty scan`: a stated reason and a positive
+control at a value that is present.
+
+### `test_a_covering_count_agrees_with_the_path_on_and_off`
+
+An UPDATE appends the new row and masks the old, so the stored per-group count and the visible
+count diverge -- which is the arithmetic the metadata path has to get right and a plain scan
+gets right for free. Run both ways through `enable_vectorization`, which is what distinguishes
+"the fast path is correct" from "the fast path was not taken". `SET` on the connection rather
+than the bash suite's `ALTER DATABASE`, which exists because each psql there is a new session.
 ## 32. test_stats_privilege.py: stats is readable only by a caller who may read the table
 
 Port of `test/stats_privilege.sh` (#560, ported for #432).
