@@ -635,6 +635,11 @@ cp "$PGC_TESTDIR/lib.sh" "$PGC_TESTDIR/portlib.sh" "$PGC_TESTDIR/pgc_fingerprint
 	"$_fp_harness/" 2>/dev/null
 chmod -R a+rX "$_fp"
 
+# INITIALISED BEFORE BLOCK 1, because the arms block below reads it in an `elif`
+# and `_fp_base` is assigned only inside block 1's `else`. Under `set -uo pipefail`
+# an unassigned read kills the suite, which is why the branch below used to be a
+# bare `:` -- and that `:` is what silently dropped five arms (#994 review).
+_fp_base=""
 _fp_user=""
 if [ "$(id -u)" -ne 0 ]; then
 	_fp_user="-"			# already unprivileged; read in this shell
@@ -708,9 +713,13 @@ fi
 # loudly -- never running them against a reader that is broken for a reason they
 # do not describe. The premises stay FAILED in that case, so the suite is still
 # red and still says why.
-if [ -z "$_fp_user" ]; then
-	:					# already skipped above
-elif [ -z "$_fp_base" ] || [ "$_fp_base" = harness-unreadable ] \
+# NO `: # already skipped above` BRANCH. There was one, and it was wrong: "above"
+# skipped the three PREMISES, not these five arms, so on a box with no non-root
+# user five arms produced no record at all -- indistinguishable from five deleted
+# checks, which is the whole of #994. With `_fp_base` initialised empty the `elif`
+# below fires and skips all five under their own names, and its list already names
+# them, so nothing is duplicated.
+if [ -z "$_fp_base" ] || [ "$_fp_base" = harness-unreadable ] \
 		|| [ "$_fp_base" != "$(pgc_source_fingerprint "$_fp/tree")" ]; then
 	for _fp_n in "an unreadable b.c yields no fingerprint, not a wrong one" \
 			"an unreadable c.c yields no fingerprint, not a wrong one" \

@@ -243,7 +243,24 @@ PYINT
 			"-3500000,0,1250000"
 	fi
 else
-	check_skip "the foreign-producer FLBA cases" "SKIP  pyarrow not available; foreign-producer FLBA cases skipped" "pyarrow not available"
+	# ONE SKIP PER ARM, UNDER THE ARM'S OWN NAME (#994). This is the OUTER gate:
+	# without pyarrow none of the ten arms in the `then` branch runs, and a single
+	# skip named for none of them left all ten with no record. Only one branch ever
+	# fires, so naming the six that the inner gate also names duplicates nothing.
+	for _fl_o in "pyarrow uuid reads as uuid" \
+			"pyarrow decimal128 values are exact" \
+			"crafted out-of-range scale is rejected, not decoded" \
+			"backend survived the crafted scale" \
+			"INT32-backed DECIMAL reads" \
+			"INT64-backed DECIMAL reads" \
+			"INT32-backed DECIMAL keeps its null" \
+			"parquet_schema advises numeric for an INT32 DECIMAL" \
+			"parquet_schema advises numeric for an INT64 DECIMAL" \
+			"an INT64 DECIMAL still binds to bigint as the unscaled integer"; do
+		check_skip "$_fl_o" \
+			"SKIP  $_fl_o (pyarrow not available)" \
+			"pyarrow not available"
+	done
 fi
 
 pgc_summary

@@ -503,12 +503,26 @@ true until the next version shipped.
   skip, so the skip would have recorded a key no real run emits. That name is now
   stable and the collation it names moves into the display, which is not the key.
 
+  Six sites, not four, and 19 arms. Two arms go through `ansp`, which records
+  under its first argument. Two sites hold their arms in the `then` branch with
+  the skip in the `else`, which a classifier looking only forward reads as having
+  no arms at all.
+
+  `340` also skipped five arms behind a branch whose comment said they had
+  already been skipped above. Above had skipped the three premises, not these
+  five, so on a box with no non-root user five arms produced no record.
+
   A new selftest part asserts every skip loop names exactly the arms its sibling
   branch would emit. The loop duplicates those names, so a rename desynchronises
   them silently and the skip records under a name nothing emits, which is the
   failure this change exists to remove. That is not hypothetical: writing this,
   a name from another open PR's rename went into the loop, and the comparison is
   what caught it.
+
+  The part reports what it did not compare. One loop's sibling arm is generated
+  by a loop of its own, so a literal comparison would be wrong in both
+  directions. That loop is the one this change repairs, and it is not covered.
+  A total of zero mismatches would otherwise read as a corpus in agreement.
 
   This is the precondition for arming the orphan guard in #983. Until a skipped
   arm records under its own name, absence cannot mean removal.
