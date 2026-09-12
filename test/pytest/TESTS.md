@@ -2398,6 +2398,42 @@ checks a log before merging it, so a major the tool validates and then drops can
 audited. Asserted on the FIELD rather than a substring: `18` appears inside a check name
 or a reason just as happily.
 
+### `test_a_rows_major_set_accumulates_rather_than_replacing`
+
+A check exists on a SET of majors, and the set is a row's field rather than part of its key
+(#1010). Keying on the major would store one fact once per major: measured on a full matrix
+at `4d7c75ae`, 6367 of 6472 checks are identical on PG15 and PG18, so `(major, check)` would
+hold 6472 x 5 = 32,360 rows to express 105 keys' worth of difference. Keeping the key at
+`(suite, part, name)` is also what keeps `checks_never_observed_red` counting CHECKS, true to
+its own name.
+
+The set accumulates, for the reason the mutation column and last-red both do: merging a PG15
+log after a PG18 log must not make the check stop existing on 18. `unknown` is a member of the
+set like any number: `PGC_MAJOR` is set in `pgc_setup`, and 14 suites need no cluster so never
+call it -- 544 of 6753 records on a full pg18 matrix.
+
+### `test_a_run_speaks_only_for_the_majors_the_row_claims`
+
+A PG15 run cannot orphan a check the ledger says exists only on PG18. This is the direction
+the missing dimension actually broke; `gate` is not it, because a PG18-only check never
+appears in a PG15 log and the gate stays correct by never being asked.
+
+Until #1010 it was saved only by the SKIP rule, and that was luck:
+`analyze_differential` emits a `check_skip` on PG15-17 so its part was unprunable, while
+`fk_referencing:287` emits `check` in its older-major branch and has no SKIP at all. The
+fixture therefore carries **no skip**, or the arm would prove the wrong mechanism. The scope
+is an INTERSECTION, so a row claiming `15;18` is checked on both -- a stronger claim held to
+both tests -- and the control deletes a check on its own major to show that a real
+disappearance is still named.
+
+### `test_the_gate_cannot_refuse_a_check_on_a_major_it_has_never_seen`
+
+The same argument as `suites_not_covered`, one dimension over. The gate cannot refuse a new
+check in a suite it has never seen, and a major it holds no rows for is the identical
+problem: adding PG20 would make every check new at once and redden the whole run, which is a
+gate somebody turns off. The control shows a new check IS refused on a covered major, so the
+arm does not merely prove the gate refuses nothing.
+
 ## 24. test_loop_coverage_premise.py: a loop that never ran asserted nothing
 
 **Why this file exists.** `assert-inside-a-loop-over-zero-rows` in VACUITY_MODES.md 3.5
