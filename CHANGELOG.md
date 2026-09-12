@@ -1816,6 +1816,39 @@ true until the next version shipped.
   the extracted block holds one and the premise passes. The static caller sweep catches
   it -- injected, both the premise and the arm report `got [4] want [3]`.
 
+- The hilbert premises name the table they digest, so five checks stop sharing three
+  ledger keys (#982, third of eight).
+
+  `hilbert_cluster` held the second-largest loss: a premise repeated before four separate
+  arms, and two pairs of `(d)` checks repeated across two fixtures. Measured against a
+  control run on clean `main`:
+
+      clean main    181 records   176 distinct keys   3 colliding   5 lost
+      this branch   181 records   181 distinct keys   0 colliding   0 lost
+
+  The record count is unchanged, so this renames and nothing else.
+
+  **A third form of the rule, and the files keep supplying them.** #984 said a continuation
+  carries the discriminator its headline interpolates; #989 added that where the headline
+  names none either, it gains one. Here *nothing* interpolates anything -- all eight sites
+  are hand-written -- so the discriminator comes from the check's own **value expression**:
+
+      premise: the plan being digested here is the columnar custom scan too
+        "$(pgc_is_columnar_scan 'SELECT * FROM s3hi')"     -> ... digested for s3hi ...
+        "$(pgc_is_columnar_scan 'SELECT * FROM s5hi')"     -> ... digested for s5hi ...
+        "$(pgc_is_columnar_scan 'SELECT * FROM s6t')"      -> ... digested for s6t ...
+        "$(pgc_is_columnar_scan 'SELECT * FROM av_hi')"    -> ... digested for av_hi ...
+
+  That keeps the name and the assertion in agreement, which is worth more than brevity: a
+  reader can check one against the other without leaving the line. The word doing the
+  colliding was `here`, which named the site to someone reading top to bottom and named
+  nothing at all to a key.
+
+  The two `(d)` pairs take the table their own `count(*)` and `physlayout` name --
+  `moved s4d1's layout`, `no row was lost from s4d2` -- for the same reason.
+
+  No ledger change: `hilbert_cluster` is not one of the two suites the ledger covers.
+
 ## [1.0-alpha3] - 2026-09-02
 
 ### Added
