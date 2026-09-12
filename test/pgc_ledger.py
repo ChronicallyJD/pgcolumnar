@@ -416,6 +416,18 @@ def cmd_orphan_scan(args):
     It is deliberately conservative: one skipped timing check blocks pruning that
     whole part. Prune is a rare, deliberate act; a refusal costs a sentence and a
     deletion costs history no run can recreate.
+
+    THE EXIT CODES, stated because a caller only ever sees the code:
+
+        0   nothing left to report: no orphan and nothing unprunable
+        1   something is still there -- an orphan, or a row this run cannot speak for
+        2   an integrity failure, or a prune refused because history would be lost
+
+    `--prune` returning 0 when it had pruned NOTHING was the first version's subtler
+    bug, reported by @jdatcmd in review. A caller that scans, sees 1, re-runs with
+    `--prune` and sees 0 reads "it pruned them" -- when nothing was pruned and nothing
+    could be. Prose covers a human; a script sees only the code. So 0 now means the
+    ledger and the run agree, and anything outstanding keeps the 1 the scan gave.
     """
     runs = _by_run(args.logs)
     if len(runs) > 1:
@@ -493,14 +505,17 @@ def cmd_orphan_scan(args):
         return 2
 
     if not historyless:
-        return 0
+        # Nothing WAS pruned. If anything is still outstanding the caller must not read
+        # that as success, so the scan's own verdict stands.
+        return 1 if unprunable else 0
 
     for k in historyless:
         print(f"    pruned: {k[0]}\t{k[1]}\t{k[2]}")
         del rows[k]
     write_ledger(args.ledger, rows)
     print(f"  orphan prune: removed {len(historyless)} row(s), the ledger now holds {len(rows)}")
-    return 0
+    # Pruning some of it is not finishing it.
+    return 1 if unprunable else 0
 
 
 def read_budget(path):

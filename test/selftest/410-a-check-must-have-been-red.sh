@@ -370,6 +370,31 @@ check "the four categories account for every ledger row" \
 	"$(_led_run orphan-scan --ledger "$_lw/orph.tsv" "$_lw/o_after.log" \
 		| grep -c 'classification lost rows')" "0"
 
+# ---- and the exit code cannot say "done" when nothing was done --------------
+#
+# The first version returned 0 from `--prune` whenever it pruned nothing, including
+# when everything it found was unprunable. A caller that scans, sees 1, re-runs with
+# `--prune` and sees 0 reads "it pruned them" -- when nothing was pruned and nothing
+# could be. Prose covers a human; a script sees only the code. Reported by @jdatcmd
+# in review.
+
+: > "$_lw/rc.tsv"
+_led_run merge --ledger "$_lw/rc.tsv" --date 2026-09-01 "$_lw/sk_full.log" >/dev/null
+check "premise: that part has rows the skipped run cannot speak for" \
+	"$(wc -l < "$_lw/rc.tsv" | tr -d ' ')" "3"
+check "the scan reports a finding on a skipped part" \
+	"$(_led_rc orphan-scan --ledger "$_lw/rc.tsv" "$_lw/sk_skipped.log")" "1"
+check "and --prune does NOT turn that 1 into a 0, because it pruned nothing" \
+	"$(_led_rc orphan-scan --prune --ledger "$_lw/rc.tsv" "$_lw/sk_skipped.log")" "1"
+check "premise: and it really pruned nothing -- the rows are all still there" \
+	"$(wc -l < "$_lw/rc.tsv" | tr -d ' ')" "3"
+# CONTROL: 0 still means 0. A prune with nothing outstanding must report success, or
+# the code says "work remains" forever and nobody can use it in a script either.
+check "control: a prune that leaves nothing outstanding returns 0" \
+	"$(_led_rc orphan-scan --prune --ledger "$_lw/rc.tsv" "$_lw/sk_pass.log")" "0"
+check "control: and that one did prune, so 0 is not a refusal in disguise" \
+	"$(wc -l < "$_lw/rc.tsv" | tr -d ' ')" "1"
+
 # WHY THIS REPORTS AND DOES NOT GATE -- pinned to the PRECONDITION, not to one
 # instance of it.
 #
