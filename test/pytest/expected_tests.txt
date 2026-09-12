@@ -36,7 +36,9 @@
 # test_mutation_ledger.py. That is the mechanism doing its job rather than a nuisance: had
 # it not moved, the job would have failed with "collected 274 test(s) but expected 272" and
 # named the drift instead of running a different suite than the one declared.
-guard_tests 277
+# 282 -> 284: two arms about TESTS.md's own numbering, added with the fix for the
+# out-of-order contents list #1023's merge left behind. Re-derived by collection.
+guard_tests 284
 
 # The complement: tests that need the driver and a throwaway cluster. Until #1016 these ran
 # in no CI job at all -- a quarter of the corpus, green when somebody ran them by hand and
