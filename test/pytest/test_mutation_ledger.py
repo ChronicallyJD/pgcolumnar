@@ -29,10 +29,10 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOL = REPO / "test" / "pgc_ledger.py"
 RUNNER = REPO / "test" / "run_all_versions.sh"
 
-GREEN = ("RESULT\tdemo\tpart1\tfirst check\tPASS\t\n"
-         "RESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n")
-RED = ("RESULT\tdemo\tpart1\tfirst check\tFAIL\t\n"
-       "RESULT\tdemo\tpart1\tsecond check\tPASS\t\nchecks run: 2\n")
+GREEN = ("RESULT\tdemo\tpart1\tfirst check\tPASS\t18\t\n"
+         "RESULT\tdemo\tpart1\tsecond check\tPASS\t18\t\nchecks run: 2\n")
+RED = ("RESULT\tdemo\tpart1\tfirst check\tFAIL\t18\t\n"
+       "RESULT\tdemo\tpart1\tsecond check\tPASS\t18\t\nchecks run: 2\n")
 
 
 def _run(*args, cwd=None):
@@ -134,8 +134,8 @@ def test_two_runs_of_a_check_are_not_a_duplicate_of_it(tmp_path, expect):
                "the same check in two logs is two runs, not a duplicate")
 
     twice = _w(tmp_path, "twice.log",
-               "RESULT\tdemo\tpart1\tsame\tPASS\t\n"
-               "RESULT\tdemo\tpart1\tsame\tFAIL\t\nchecks run: 2\n")
+               "RESULT\tdemo\tpart1\tsame\tPASS\t18\t\n"
+               "RESULT\tdemo\tpart1\tsame\tFAIL\t18\t\nchecks run: 2\n")
     out, _ = _run("merge", "--reds-are-real", "--ledger", _w(tmp_path, "l2.tsv", ""), "--date", "2026-09-10", twice)
     expect.num(out.count("duplicate check name in one run, so one ledger row covers 2: "
                          "demo\tpart1\tsame"), 1,
@@ -152,12 +152,12 @@ def test_renames_are_grouped_by_part_and_scanned_against_one_run(tmp_path, expec
     """
     ledger = _w(tmp_path, "l.tsv", "")
     before = _w(tmp_path, "b.log",
-                "RESULT\tdemo\tpartA\told A\tFAIL\t\n"
-                "RESULT\tdemo\tpartB\tstable B\tPASS\t\nchecks run: 2\n")
+                "RESULT\tdemo\tpartA\told A\tFAIL\t18\t\n"
+                "RESULT\tdemo\tpartB\tstable B\tPASS\t18\t\nchecks run: 2\n")
     after = _w(tmp_path, "a.log",
-               "RESULT\tdemo\tpartA\tnew A\tPASS\t\n"
-               "RESULT\tdemo\tpartB\tstable B\tPASS\t\n"
-               "RESULT\tdemo\tpartB\tadded B\tPASS\t\nchecks run: 3\n")
+               "RESULT\tdemo\tpartA\tnew A\tPASS\t18\t\n"
+               "RESULT\tdemo\tpartB\tstable B\tPASS\t18\t\n"
+               "RESULT\tdemo\tpartB\tadded B\tPASS\t18\t\nchecks run: 3\n")
     _run("merge", "--reds-are-real", "--ledger", ledger, "--date", "2026-09-01", before)
 
     out, rc = _run("rename-scan", "--ledger", ledger, after)
@@ -188,11 +188,11 @@ def test_an_orphan_row_is_named_and_the_unscanned_rows_are_counted(tmp_path, exp
     """
     ledger = _w(tmp_path, "l.tsv", "")
     before = _w(tmp_path, "b.log",
-                "RESULT\tdemo\tpart1\tstill here\tPASS\t\n"
-                "RESULT\tdemo\tpart1\tgone tomorrow\tPASS\t\n"
-                "RESULT\tdemo\tpartZ\telsewhere\tPASS\t\nchecks run: 3\n")
+                "RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\n"
+                "RESULT\tdemo\tpart1\tgone tomorrow\tPASS\t18\t\n"
+                "RESULT\tdemo\tpartZ\telsewhere\tPASS\t18\t\nchecks run: 3\n")
     after = _w(tmp_path, "a.log",
-               "RESULT\tdemo\tpart1\tstill here\tPASS\t\nchecks run: 1\n")
+               "RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\nchecks run: 1\n")
     _run("merge", "--ledger", ledger, "--date", "2026-09-01", before)
     expect.num(len(_rows(ledger)), 3, "premise: the ledger holds all three rows")
 
@@ -221,14 +221,14 @@ def test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history(tmp_p
     partial job for whoever reads the output.
     """
     after = _w(tmp_path, "a.log",
-               "RESULT\tdemo\tpart1\tstill here\tPASS\t\nchecks run: 1\n")
+               "RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\nchecks run: 1\n")
 
     plain = _w(tmp_path, "plain.tsv", "")
     _run("merge", "--ledger", plain, "--date", "2026-09-01",
          _w(tmp_path, "p.log",
-            "RESULT\tdemo\tpart1\tstill here\tPASS\t\n"
-            "RESULT\tdemo\tpart1\tgone tomorrow\tPASS\t\n"
-            "RESULT\tdemo\tpartZ\telsewhere\tPASS\t\nchecks run: 3\n"))
+            "RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\n"
+            "RESULT\tdemo\tpart1\tgone tomorrow\tPASS\t18\t\n"
+            "RESULT\tdemo\tpartZ\telsewhere\tPASS\t18\t\nchecks run: 3\n"))
     out, rc = _run("orphan-scan", "--prune", "--ledger", plain, after)
     expect.num(out.count("pruned: demo\tpart1\tgone tomorrow"), 1,
                "a historyless orphan is pruned, and named as it goes")
@@ -244,8 +244,8 @@ def test_prune_drops_a_historyless_orphan_and_refuses_one_carrying_history(tmp_p
     _run("merge", "--reds-are-real", "--mutation", "drop the guard", "--ledger", hist,
          "--date", "2026-09-01",
          _w(tmp_path, "h.log",
-            "RESULT\tdemo\tpart1\tstill here\tPASS\t\n"
-            "RESULT\tdemo\tpart1\tgone tomorrow\tFAIL\t\nchecks run: 2\n"))
+            "RESULT\tdemo\tpart1\tstill here\tPASS\t18\t\n"
+            "RESULT\tdemo\tpart1\tgone tomorrow\tFAIL\t18\t\nchecks run: 2\n"))
     expect.text({r[2]: r[3] for r in _rows(hist)}["gone tomorrow"], "2026-09-01",
                 "premise: the orphan now carries a date")
 
@@ -280,12 +280,12 @@ def test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal(tmp_pa
     ledger = _w(tmp_path, "l.tsv", "")
     _run("merge", "--ledger", ledger, "--date", "2026-09-01",
          _w(tmp_path, "full.log",
-            "RESULT\tdemo\tpart1\tarm one\tPASS\t\n"
-            "RESULT\tdemo\tpart1\tarm two\tPASS\t\n"
-            "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 3\n"))
+            "RESULT\tdemo\tpart1\tarm one\tPASS\t18\t\n"
+            "RESULT\tdemo\tpart1\tarm two\tPASS\t18\t\n"
+            "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t18\t\nchecks run: 3\n"))
     expect.num(len(_rows(ledger)), 3, "premise: the ledger holds all three rows")
     skipped = _w(tmp_path, "skipped.log",
-                 "RESULT\tdemo\tpart1\tthe whole thing\tSKIP\tno fixture on this box\n"
+                 "RESULT\tdemo\tpart1\tthe whole thing\tSKIP\t18\tno fixture on this box\n"
                  "checks run: 1\n")
 
     out, rc = _run("orphan-scan", "--ledger", ledger, skipped)
@@ -302,7 +302,7 @@ def test_a_part_that_skipped_is_unprunable_because_absence_is_not_removal(tmp_pa
                "and it says so rather than declining silently")
 
     passed = _w(tmp_path, "pass.log",
-                "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t\nchecks run: 1\n")
+                "RESULT\tdemo\tpart1\tthe whole thing\tPASS\t18\t\nchecks run: 1\n")
     out, _ = _run("orphan-scan", "--prune", "--ledger", ledger, passed)
     expect.num(out.count("removed 2 row(s)"), 1,
                "control: the same rows ARE pruned when that part's record is a PASS")
@@ -321,7 +321,7 @@ def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect
     reg = _w(tmp_path, "reg", "demo\nother\n")
     _run("merge", "--ledger", ledger, "--date", "2026-09-10", _w(tmp_path, "g.log", GREEN))
 
-    other = _w(tmp_path, "o.log", "RESULT\tother\tpartX\tsomething\tPASS\t\nchecks run: 1\n")
+    other = _w(tmp_path, "o.log", "RESULT\tother\tpartX\tsomething\tPASS\t18\t\nchecks run: 1\n")
     b1 = _w(tmp_path, "b1.txt", "suites_not_covered 1\n")
     out, rc = _run("gate", "--ledger", ledger, "--budget", b1, "--registered", reg, other)
     expect.num(rc, 0, "a check in an uncovered suite is not refused")
@@ -329,8 +329,8 @@ def test_the_gate_refuses_a_new_check_only_in_a_suite_it_covers(tmp_path, expect
 
     _run("merge", "--ledger", ledger, "--date", "2026-09-10", other)
     other2 = _w(tmp_path, "o2.log",
-                "RESULT\tother\tpartX\tsomething\tPASS\t\n"
-                "RESULT\tother\tpartX\tnewly added\tPASS\t\nchecks run: 2\n")
+                "RESULT\tother\tpartX\tsomething\tPASS\t18\t\n"
+                "RESULT\tother\tpartX\tnewly added\tPASS\t18\t\nchecks run: 2\n")
     b0 = _w(tmp_path, "b0.txt", "suites_not_covered 0\n")
     out, rc = _run("gate", "--ledger", ledger, "--budget", b0, "--registered", reg, other2)
     expect.num(rc, 1, "once the suite is covered, a new check in it IS refused")
@@ -508,9 +508,9 @@ def test_a_log_that_does_not_parse_is_not_evidence(tmp_path, expect):
     cases = {
         "no reason field": "RESULT\tdemo\tpart1\ta name\tPASS\nchecks run: 1\n",
         "a verdict the emitter cannot emit": "RESULT\tdemo\tpart1\ta name\tBOGUS\t\nchecks run: 1\n",
-        "an empty check name": "RESULT\tdemo\tpart1\t\tPASS\t\nchecks run: 1\n",
-        "a count that disagrees with the records": "RESULT\tdemo\tpart1\ta name\tPASS\t\nchecks run: 2\n",
-        "no count at all": "RESULT\tdemo\tpart1\ta name\tPASS\t\n",
+        "an empty check name": "RESULT\tdemo\tpart1\t\tPASS\t18\t\nchecks run: 1\n",
+        "a count that disagrees with the records": "RESULT\tdemo\tpart1\ta name\tPASS\t18\t\nchecks run: 2\n",
+        "no count at all": "RESULT\tdemo\tpart1\ta name\tPASS\t18\t\n",
     }
     for label, text in cases.items():
         log = _w(tmp_path, "bad.log", text)
@@ -561,8 +561,8 @@ def test_a_mutation_names_one_check_not_every_casualty(tmp_path, expect):
     """
     led = _w(tmp_path, "l.tsv", "")
     two = _w(tmp_path, "two.log",
-             "RESULT\tdemo\tpart1\tthe target\tFAIL\t\n"
-             "RESULT\tdemo\tpart1\tcollateral\tFAIL\t\nchecks run: 2\n")
+             "RESULT\tdemo\tpart1\tthe target\tFAIL\t18\t\n"
+             "RESULT\tdemo\tpart1\tcollateral\tFAIL\t18\t\nchecks run: 2\n")
     out, rc = _run("merge", "--ledger", led, "--date", "2026-09-10", "--mutation", "M", two)
     expect.num(rc, 2, "--mutation across two failing checks in one run is refused")
     expect.num(out.count("2 checks failed"), 1,
@@ -619,3 +619,79 @@ def test_a_reconciling_log_with_a_red_is_not_evidence_on_its_own(tmp_path, expec
     green = _w(tmp_path, "green.log", GREEN)
     expect.num(_run("merge", "--ledger", led4, "--date", "2026-09-10", green)[1], 0,
                "control: an all-PASS log still merges with no flag at all")
+
+
+def test_a_record_that_does_not_name_its_major_is_not_evidence(tmp_path, expect):
+    """A log can only be trusted about the major it says it came from (#1010).
+
+    The record carried suite, part, name, verdict and reason, so the major was
+    whatever the caller asserted. That is the `--date not-a-date` failure one field
+    over: a PG15 log merged as PG18 is misattributed silently, and a ledger whose
+    subject is provenance cannot take the major on trust from its invoker.
+
+    A check's EXISTENCE depends on the major -- analyze_differential emits one record
+    on PG15-17 and N on PG18+, and fk_referencing's two branches emit different check
+    NAMES -- so the major is not decoration on the record, it is part of what the
+    record identifies.
+    """
+    ledger = _w(tmp_path, "l.tsv", "")
+    budget = _w(tmp_path, "b.txt", "suites_not_covered 0\n")
+    reg = _w(tmp_path, "reg", "demo\n")
+
+    # The OLD six-field record. It has to stop reconciling, or the new field is
+    # optional and a log without it keeps being merged on the caller's word.
+    old = _w(tmp_path, "old.log",
+             "RESULT\tdemo\tpart1\tfirst check\tPASS\t\nchecks run: 1\n")
+    out, rc = _run("gate", "--ledger", ledger, "--budget", budget,
+                   "--registered", reg, old)
+    expect.num(rc, 2, "a record with no major field is an integrity failure")
+    expect.num(out.count("major"), 1, "and the message says the major is what is missing")
+
+    # A major that is not a major. Refused for the same reason a free-form --date was:
+    # stored verbatim, it becomes an attribution nothing measured.
+    for bad in ("eighteen", "18.2", "", "pg18"):
+        log = _w(tmp_path, "bad.log",
+                 f"RESULT\tdemo\tpart1\tfirst check\tPASS\t{bad}\t\nchecks run: 1\n")
+        out, rc = _run("gate", "--ledger", ledger, "--budget", budget,
+                       "--registered", reg, log)
+        expect.num(rc, 2, f"the major [{bad}] is not a major, so this log is not evidence")
+
+    # And the good form reconciles, or the arm above proves only that everything fails.
+    good = _w(tmp_path, "good.log",
+              "RESULT\tdemo\tpart1\tfirst check\tPASS\t18\t\nchecks run: 1\n")
+    expect.num(_run("gate", "--ledger", ledger, "--budget", budget,
+                    "--registered", reg, good)[1], 1,
+               "a record naming its major reaches the gate's own verdict")
+
+    # `unknown` is the emitter's word for a field the harness never set, and it is a
+    # REAL case rather than a courtesy: harness_selftest does not reference PGC_MAJOR
+    # anywhere, so its 907 rows have no major to name even in principle. It must be
+    # accepted and it must stay distinguishable from a number.
+    unk = _w(tmp_path, "unk.log",
+             "RESULT\tdemo\tpart1\tfirst check\tPASS\tunknown\t\nchecks run: 1\n")
+    expect.num(_run("gate", "--ledger", ledger, "--budget", budget,
+                    "--registered", reg, unk)[1], 1,
+               "a record whose harness never set a major says so and is still evidence")
+
+
+def test_the_census_reports_the_major_it_read(tmp_path, expect):
+    """Read and discarded is indistinguishable from not read at all (#1010).
+
+    `census` is the subcommand that prints what the tool parsed out of a log, and it
+    is how a human checks a log before merging it. A major the tool validates and then
+    drops cannot be audited, and a field nobody can see is a field that goes wrong
+    silently -- measured twice on this tool already (`vanished=N` refusing nothing,
+    and a census that was printed but never compared).
+    """
+    log = _w(tmp_path, "c.log",
+             "RESULT\tdemo\tpart1\tfirst check\tPASS\t18\t\n"
+             "RESULT\tdemo\tpart1\tsecond check\tFAIL\t18\t\n"
+             "RESULT\tdemo\tpart2\tthird check\tPASS\tunknown\t\nchecks run: 3\n")
+    out, rc = _run("census", log)
+    expect.num(rc, 0, "the census reads a log that names its majors")
+    # The FIELD, not a substring. `18` appears inside a check name or a reason just as
+    # happily, and a count that matches anywhere is a claim about the whole line.
+    majors = [l.split("\t")[4] for l in out.splitlines() if l.count("\t") == 4]
+    expect.num(majors.count("18"), 2, "and prints the major for each record that has one")
+    expect.num(majors.count("unknown"), 1,
+               "and prints `unknown` where the harness set none")

@@ -34,7 +34,7 @@ check "and that place is pgc_record" \
 # ---- the record line itself -------------------------------------------------
 #
 # Tab separated, so a name containing spaces survives. Five columns after the
-# RESULT marker: suite, part, name, verdict, reason. The reason carries phase 1's
+# RESULT marker: suite, part, name, verdict, major, reason. The reason carries phase 1's
 # REASON_CODE, which is what makes this more than a reformat: an unrunnable check
 # is distinguishable from a passing one without parsing prose. The verdict is one
 # of PASS, FAIL, UNRUN or SKIP.
@@ -57,6 +57,30 @@ check "and its verdict field says PASS" \
 	"$(_rec check "a name" x x | cut -f5)" "PASS"
 check "and its name field is the check's name, spaces intact" \
 	"$(_rec check "a name" x x | cut -f4)" "a name"
+
+# THE MAJOR FIELD (#1010). A check's existence depends on the major --
+# analyze_differential.sh emits one record on PG15-17 and N on PG18+, and
+# fk_referencing.sh's two branches emit different check NAMES -- so a record that
+# does not name its major identifies a check only partly, and the ledger keyed on it
+# would take the major from whoever invoked the tool.
+#
+# Driven through the emitter with PGC_MAJOR SET and UNSET, because those are two
+# different claims and an arm that only ever runs one of them cannot tell a field
+# that reads the variable from a field hardcoded to either answer.
+check "and its major field carries the server major it ran under" \
+	"$( ( PGC_MAJOR=18; _rec check "a name" x x ) | cut -f6)" "18"
+
+check "and a different major reaches the same field, so it is read not hardcoded" \
+	"$( ( PGC_MAJOR=15; _rec check "a name" x x ) | cut -f6)" "15"
+
+# `unknown` is not a courtesy: harness_selftest -- this very suite -- never
+# references PGC_MAJOR, so every record it emits takes this branch, and the word is
+# lib.sh's own for an unset field (it uses it for suite and part two lines above).
+check "and a harness that set no major says unknown rather than an empty field" \
+	"$( ( unset PGC_MAJOR; _rec check "a name" x x ) | cut -f6)" "unknown"
+
+check "and the reason still follows the major, so nothing shifted onto it" \
+	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f7)" "MISSING_DEPENDENCY"
 
 # ---- and WHICH PART asked it ------------------------------------------------
 #
@@ -87,7 +111,7 @@ check "an unrunnable check emits exactly one record" \
 check "and its verdict field says UNRUN, which is neither of the other two" \
 	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f5)" "UNRUN"
 check "and the REASON_CODE travels in the reason field, not in prose" \
-	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f6)" "MISSING_DEPENDENCY"
+	"$(_rec check_unrunnable "a name" MISSING_DEPENDENCY "no jq" | cut -f7)" "MISSING_DEPENDENCY"
 
 # A reason code the enum does not contain is already a FAIL. It must record that
 # verdict, not the one it was asked for.
@@ -166,23 +190,23 @@ eval "$(sed -n '/^pgc_reconcile_records()/,/^}/p' "$_rv")"
 check "premise: it is callable" "$(type -t pgc_reconcile_records)" "function"
 
 _rl="$PGC_WORKDIR/rec.log"
-printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nRESULT\ts\tp\tb\tPASS\t18\t\nchecks run: 2\n' > "$_rl"
 check "a log whose records match its stated count reconciles" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "ok"
 
-printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nchecks run: 2\n' > "$_rl"
 check "a log with fewer records than it claims is caught" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 check "and the two numbers are named, not just the verdict" \
 	"$(pgc_reconcile_records "$_rl" 2>&1 | grep -c 'records=1 .*checks run: 2')" "1"
 
-printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nRESULT\ts\tp\tc\tPASS\t\nchecks run: 2\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nRESULT\ts\tp\tb\tPASS\t18\t\nRESULT\ts\tp\tc\tPASS\t18\t\nchecks run: 2\n' > "$_rl"
 check "a log with more records than it claims is caught too" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 
 # A log with no `checks run:` line at all did not reach its summary. That is a
 # different fault from a miscount and must not read as a clean reconciliation.
-printf 'RESULT\ts\tp\ta\tPASS\t\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\n' > "$_rl"
 check "a log that never stated a count is not silently accepted" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "mismatch"
 
@@ -197,7 +221,7 @@ check "the runner calls the record reconciliation, not merely defines it" \
 # The control comes FIRST and is asserted, because five arms that all say
 # "mismatch" prove nothing if the function has simply started refusing
 # everything. That is the shape this suite exists to catch.
-printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 1\n' > "$_rl"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nchecks run: 1\n' > "$_rl"
 check "control: a well-formed record still reconciles" \
 	"$(pgc_reconcile_records "$_rl" >/dev/null 2>&1 && echo ok || echo mismatch)" "ok"
 
@@ -210,19 +234,35 @@ check "a record missing fields does not reconcile" \
 	"$(_rq_bad "$(printf 'RESULT\ts\tp\ta')")" "mismatch"
 
 check "a record carrying extra fields does not reconcile" \
-	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tPASS\tr\textra\tmore')")" "mismatch"
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tPASS\t18\tr\textra\tmore')")" "mismatch"
 
 check "a verdict pgc_record cannot emit does not reconcile" \
-	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tBOGUS\t')")" "mismatch"
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tBOGUS\t18\t')")" "mismatch"
 
 check "an empty check name does not reconcile" \
-	"$(_rq_bad "$(printf 'RESULT\ts\tp\t\tPASS\t')")" "mismatch"
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\t\tPASS\t18\t')")" "mismatch"
+
+# A MAJOR THAT IS NOT A MAJOR does not reconcile (#1010). Validated rather than
+# stored: a free-form --date was accepted verbatim once and a typo became an
+# observation date the ledger treated as authoritative. A major is worse, because
+# it decides which checks can exist at all.
+#
+# Four shapes, and the empty one matters most: an emitter that loses the value
+# entirely produces it, and an arm that only tries `eighteen` would pass over it.
+for _rq_m in eighteen 18.2 pg18 ''; do
+	check "the major [$_rq_m] is not a major, so that record does not reconcile" \
+		"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tPASS\t%s\t' "$_rq_m")")" "mismatch"
+done
+unset _rq_m
+
+check "control: unknown IS a major the reconciler accepts, or the four above prove nothing" \
+	"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\tPASS\tunknown\t')")" "ok"
 
 # The four verdicts are the emitter's own list. If pgc_record grows a fifth and
 # this one does not, this arm goes red rather than the vocabulary drifting.
 for _rq_v in PASS FAIL UNRUN SKIP; do
 	check "the reconciliation accepts the verdict $_rq_v, which pgc_record emits" \
-		"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\t%s\t' "$_rq_v")")" "ok"
+		"$(_rq_bad "$(printf 'RESULT\ts\tp\tn\t%s\t18\t' "$_rq_v")")" "ok"
 done
 unset -f _rq_bad
 unset _rq_v
@@ -456,7 +496,7 @@ check "a suite that skipped every check did not pass" \
 
 eval "$(sed -n '/^pgc_reconcile_records()/,/^}/p' "$_rv")"
 _pl="$PGC_WORKDIR/piped.log"
-printf 'RESULT\ts\tp\ta\tPASS\t\nRESULT\ts\tp\tb\tPASS\t\nRESULT\ts\tp\tc\tPASS\t\nchecks run: 1\n' > "$_pl"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nRESULT\ts\tp\tb\tPASS\t18\t\nRESULT\ts\tp\tc\tPASS\t18\t\nchecks run: 1\n' > "$_pl"
 check "more records than counted checks names the cause, not just the arithmetic" \
 	"$(pgc_reconcile_records "$_pl" 2>&1 | grep -c 'a check ran in a subshell')" "1"
 check "and still reports the two numbers" \
@@ -464,7 +504,7 @@ check "and still reports the two numbers" \
 
 # Fewer records than checks is the OPPOSITE fault -- a counted check that emitted
 # no record -- and must not be described as a subshell.
-printf 'RESULT\ts\tp\ta\tPASS\t\nchecks run: 3\n' > "$_pl"
+printf 'RESULT\ts\tp\ta\tPASS\t18\t\nchecks run: 3\n' > "$_pl"
 check "fewer records than counted checks is not described as a subshell" \
 	"$(pgc_reconcile_records "$_pl" 2>&1 | grep -c 'a check ran in a subshell')" "0"
 check "and names its own cause instead" \
