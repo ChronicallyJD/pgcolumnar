@@ -96,6 +96,20 @@ check "premise: the controller's stamp block was extracted exactly once" \
 # Counting `if (` at ANY indent is what distinguishes them: the real block has one,
 # the nested shape has two. Cheaper than teaching the anchor to track depth, and it
 # fails closed -- a shape this does not understand is refused rather than driven.
+#
+# THE REPAIR, WHEN THIS EVENTUALLY FIRES ON A LEGITIMATE CHANGE: teach the anchor
+# depth. DO NOT LOOSEN THE COUNT.
+#
+# It refuses legitimate nesting as well as the case it exists for, because it cannot
+# tell them apart -- that is the price of not tracking depth. So one day someone adds
+# a real nested subshell to the controller, this fires, and the cheapest-looking fix
+# is `-ge 1`. That reinstates EXACTLY the hole this closes: a write inside a deeper
+# subshell leaves the opener on the outer block, which holds one one-tab `if (` and
+# one stamp write, so every premise here passes on a block wider than the call site.
+# Measured when this was written: eight lines out, all premises green.
+#
+# Named beside the premise for the same reason the unset `start` above is named: a
+# guard that fires on a valid change invites a repair that looks like tidying up.
 check "premise: nothing opens a deeper subshell inside the extracted block" \
 	"$(printf '%s\n' "$_c961_block" | grep -cE '^[[:space:]]*if \($')" "1"
 check "premise: and it holds exactly one stamp write" \
