@@ -18,6 +18,29 @@ true until the next version shipped.
 
 ### Added
 
+- `stats_privilege.sh` has a pytest twin, and it asserts the SQLSTATE (#432).
+
+  The bash suite decides the refusal with `grep -c 'permission denied for table'`.
+  `CLAUDE.md` names the rule: 42501 comes only from `aclcheck_error`, and a grep for
+  "permission denied" is also satisfied by other refusals -- `permission denied for
+  schema` among them, which is the exact confusion measured while porting
+  `native_ownership`. The port asserts 42501 AND that the message names the table.
+
+  Real logins rather than `SET ROLE`, because session-opening is a property this
+  suite tests and `SET ROLE` would assert it away.
+
+  SCOPE, MEASURED. Across the corpus, 50 suites already assert a refusal by SQLSTATE
+  and 3 assert both. Only FOUR assert by text with no SQLSTATE anywhere:
+  `native_ownership`, `stats_privilege`, `projection_privilege` and
+  `rls_direct_storage`. Two are now ported; the class closes at four, not at the
+  whole corpus.
+
+  A HELPER TURNED A DRIVER DETAIL INTO A PRODUCT CLAIM. psycopg3 returns the FIRST
+  statement's result for a multi-statement execute, so `SET search_path ...; SELECT`
+  hands back the SET's empty result. The first version collapsed that into a 0 and
+  the arm reported "the OWNER cannot read its stats". Every call site now asserts the
+  error is None rather than folding it into a value.
+
 - The mutation ledger records WHICH MAJORS each check exists on (#1010).
 
       suite<TAB>part<TAB>name<TAB>majors<TAB>last-red<TAB>mutations

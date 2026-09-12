@@ -50,4 +50,6 @@ guard_tests 277
 #
 # The rate is the point. The ungated half grew by 67 tests in the time this took to review,
 # which is the argument for gating it rather than a detail about it.
-cluster_tests 166
+# 166 -> 169 when test_stats_privilege.py landed: the premises, who may read, and
+# the no-privilege refusal.
+cluster_tests 169
