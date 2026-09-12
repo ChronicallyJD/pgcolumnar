@@ -141,12 +141,30 @@ class LedgerError(Exception):
 # forbids, and the drift is caught by the arm that plants each verdict instead.
 VERDICTS = ("PASS", "FAIL", "UNRUN", "SKIP")
 
-# RESULT plus suite, part, name, verdict, reason.
-RECORD_FIELDS = 6
+# RESULT plus suite, part, name, verdict, major, reason.
+RECORD_FIELDS = 7
+
+# THE MAJOR A RECORD WAS OBSERVED UNDER, and the one word that means "the harness
+# never set one" (#1010).
+#
+# A check's EXISTENCE depends on the major, so the major is part of what a record
+# identifies rather than decoration on it: analyze_differential.sh:61 emits ONE
+# record on PG15-17 and N on PG18+, and fk_referencing.sh:287 emits DIFFERENT CHECK
+# NAMES in its two branches, so the two majors' key sets are disjoint. A grep for
+# PGC_MAJOR does not find all of them either -- native_repack.sh,
+# pg19_vacuum_options.sh and native_dml.sh gate on server_version_num and never
+# mention it -- which is why this is a field and not a convention.
+#
+# `unknown` is lib.sh's OWN word for a field the harness did not set, used there for
+# an unset suite and part, and it is a REAL case rather than a courtesy:
+# harness_selftest never references PGC_MAJOR anywhere, so its 907 committed rows
+# have no major to name even in principle.
+MAJOR_UNKNOWN = "unknown"
+_MAJOR = re.compile(r"^(?:[0-9]+|unknown)$")
 
 
 def read_records(paths, *, require_nonempty=True):
-    """[(suite, part, name, verdict)] for every RESULT line in the given logs.
+    """[(suite, part, name, verdict, major)] for every RESULT line in the given logs.
 
     Fails closed, and VALIDATES rather than merely counting. `len(f) < 5` accepted
     a record missing its reason, a verdict outside the emitter's vocabulary, an
@@ -181,7 +199,7 @@ def read_records(paths, *, require_nonempty=True):
             if len(f) != RECORD_FIELDS:
                 raise LedgerError(
                     f"{p}:{n}: a record has {RECORD_FIELDS - 1} fields -- suite, part, "
-                    f"name, verdict, reason; got {len(f) - 1}")
+                    f"name, verdict, major, reason; got {len(f) - 1}")
             if not f[1] or not f[2] or not f[3]:
                 raise LedgerError(
                     f"{p}:{n}: a record with an empty suite, part or name names no check")
@@ -189,7 +207,18 @@ def read_records(paths, *, require_nonempty=True):
                 raise LedgerError(
                     f"{p}:{n}: verdict {f[4]!r} is not one of {', '.join(VERDICTS)}, "
                     f"so this log was not written by pgc_record")
-            out.append((f[1], f[2], f[3], f[4]))
+            # THE MAJOR IS VALIDATED, not stored verbatim. A free-form --date was
+            # accepted once and a typo became an authoritative observation date;
+            # this is the same field one column over, and the consequence is worse
+            # because a major decides WHICH CHECKS CAN EXIST. `eighteen`, `18.2`
+            # and `pg18` are not majors, and a log carrying one is not evidence
+            # about any major at all.
+            if not _MAJOR.match(f[5]):
+                raise LedgerError(
+                    f"{p}:{n}: major {f[5]!r} is neither a number nor "
+                    f"{MAJOR_UNKNOWN!r}, so this record names no version it was "
+                    f"observed under")
+            out.append((f[1], f[2], f[3], f[4], f[5]))
             found += 1
         if require_nonempty and found == 0:
             raise LedgerError(f"{p}: no RESULT records, so there is nothing to reconcile")
@@ -246,15 +275,15 @@ def _by_run(paths):
     runs = []
     for p in paths:
         seen = {}
-        for suite, part, name, verdict in read_records([p]):
+        for suite, part, name, verdict, _major in read_records([p]):
             seen.setdefault((suite, part, name), []).append(verdict)
         runs.append((p, seen))
     return runs
 
 
 def cmd_census(args):
-    for suite, part, name, verdict in read_records(args.logs):
-        print(f"{suite}\t{part}\t{name}\t{verdict}")
+    for suite, part, name, verdict, major in read_records(args.logs):
+        print(f"{suite}\t{part}\t{name}\t{verdict}\t{major}")
     return 0
 
 
@@ -714,7 +743,7 @@ def cmd_gate(args):
     rows = read_ledger(args.ledger)
     budget = read_budget(args.budget)
     seen = {k for k, _, _ in ((k, None, None) for k in
-                              {(s, p, n) for s, p, n, _ in read_records(args.logs)})}
+                              {(s, p, n) for s, p, n, _, _m in read_records(args.logs)})}
 
     rc = 0
 

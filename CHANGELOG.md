@@ -18,6 +18,49 @@ true until the next version shipped.
 
 ### Added
 
+- A check record names the PostgreSQL major it was observed under (#1010).
+
+      RESULT<TAB>suite<TAB>part<TAB>name<TAB>verdict<TAB>major<TAB>reason
+
+  A CHECK'S EXISTENCE DEPENDS ON THE MAJOR, so a record that does not name one
+  identifies a check only partly. `test/analyze_differential.sh:61` emits ONE record on
+  PG15-17 and N on PG18+; `test/fk_referencing.sh:287` emits DIFFERENT CHECK NAMES in
+  its two branches, so the two majors' key sets are disjoint. Measured on a full matrix
+  at `4d7c75ae`: `analyze_differential`, `analyze_function`, `native_repack` and
+  `pg19_vacuum_options` each emit exactly 1 record on PG15 against a suite's worth on
+  PG18.
+
+  A grep for `PGC_MAJOR` does not find all of them, which is why this is a field rather
+  than a convention: `test/native_repack.sh:48`, `test/pg19_vacuum_options.sh:34` and
+  `test/native_dml.sh:61` gate on `server_version_num` and never mention it.
+
+  Before this the tool could only learn the major from whoever invoked it, which is the
+  `--date not-a-date` failure one field over: a PG15 log merged as PG18 is misattributed
+  and nothing in the log can contradict it. The major is VALIDATED rather than stored --
+  `eighteen`, `18.2`, `pg18` and an empty field are each refused -- because a major
+  decides which checks can exist.
+
+  `unknown` is the one non-numeric value, and it is lib.sh's own word for a field the
+  harness did not set (it already uses it for an unset suite and part). It is a real
+  case rather than a courtesy: `harness_selftest` never references `PGC_MAJOR`, so every
+  record it emits says `unknown` truthfully -- 907 of the 1155 committed ledger rows.
+
+  The ledger itself is unchanged in SHAPE: it still keys on `(suite, part, name)` and
+  discards the major. Keying on it is #1010's second step, and it needs a migration this
+  change does not.
+
+      checks_never_observed_red   1155 -> 1164
+      suites_not_covered          249 (unchanged; no suite was seeded)
+
+  The nine rows are part 400's new arms: four emitter arms driving `pgc_record` with
+  `PGC_MAJOR` set to two different values and unset, one that the reason still follows
+  the major, and five reconciler arms -- four invalid majors and the `unknown` control
+  that keeps them from passing because the reconciler started refusing everything.
+  RE-DERIVED from the committed file by the derivation the budget file states, not
+  computed from 1155:
+
+      awk -F'\t' '$4=="never"' test/check_ledger.tsv | wc -l
+
 - The mutation ledger covers a third suite: `differential`, 204 checks (#752).
 
       suites_not_covered          250 -> 249

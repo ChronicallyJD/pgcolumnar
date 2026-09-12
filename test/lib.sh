@@ -1173,11 +1173,24 @@ pgc_record() {	# pgc_record VERDICT NAME DISPLAY [REASON]
 	local _nl_name="${_name//$'\t'/ }" _nl_reason="${_reason//$'\t'/ }"
 	_nl_name="${_nl_name//$'\n'/ }"; _nl_reason="${_nl_reason//$'\n'/ }"
 	_nl_name="${_nl_name//$'\r'/ }"; _nl_reason="${_nl_reason//$'\r'/ }"
-	printf 'RESULT\t%s\t%s\t%s\t%s\t%s\n' \
+	# THE MAJOR THIS CHECK WAS OBSERVED UNDER (#1010). A check's EXISTENCE depends
+	# on it -- analyze_differential.sh emits one record on PG15-17 and N on PG18+,
+	# and fk_referencing.sh's two branches emit different check NAMES -- so a
+	# record that does not name its major identifies a check only partly, and the
+	# ledger keyed on it has to take the major from whoever invoked the tool. That
+	# is the `--date not-a-date` failure one field over: a PG15 log merged as PG18
+	# is misattributed and nothing in the log can contradict it.
+	#
+	# `unknown` is this function's OWN word for a field the harness did not set,
+	# already used two lines down for an unset suite and part, and it is a REAL
+	# case rather than a courtesy: harness_selftest never references PGC_MAJOR, so
+	# every one of its records says `unknown` truthfully.
+	printf 'RESULT\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 		"${PGC_SUITE:-unknown}" \
 		"${_part:-${PGC_SUITE:-unknown}}" \
 		"${_nl_name}" \
 		"$_v" \
+		"${PGC_MAJOR:-unknown}" \
 		"${_nl_reason}"
 }
 

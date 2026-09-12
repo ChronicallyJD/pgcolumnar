@@ -974,10 +974,17 @@ pgc_reconcile_records() {	# pgc_reconcile_records LOGFILE -> 0 ok, 1 mismatch
 	_bad="$(awk -F'\t' '
 		/^RESULT	/ {
 			n++
-			if (NF != 6)                       { why[n] = "has " NF-1 " fields, want 5"; bad++; next }
+			if (NF != 7)                       { why[n] = "has " NF-1 " fields, want 6"; bad++; next }
 			if ($2 == "" || $3 == "" || $4 == "") { why[n] = "has an empty suite, part or name"; bad++; next }
 			if ($5 != "PASS" && $5 != "FAIL" && $5 != "UNRUN" && $5 != "SKIP") {
 				why[n] = "has verdict \"" $5 "\", which pgc_record cannot emit"; bad++; next
+			}
+			# THE MAJOR IS VALIDATED, not merely present (#1010). Stored verbatim a
+			# typo becomes a version the ledger then treats as authoritative --
+			# exactly what a free-form --date did -- and a major decides WHICH
+			# CHECKS CAN EXIST, so the consequence is larger here than for a date.
+			if ($6 !~ /^([0-9]+|unknown)$/) {
+				why[n] = "has major \"" $6 "\", which is neither a number nor \"unknown\""; bad++; next
 			}
 		}
 		END {
