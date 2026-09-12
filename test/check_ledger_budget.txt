@@ -15,7 +15,7 @@
 #
 #   Adding a check to a suite that is already covered does not move it, which is
 #   what makes it safe to bound.
-suites_not_covered 250
+suites_not_covered 249
 #
 # checks_never_observed_red -- A CENSUS. NOT a ceiling, and it must not become
 #   one.
@@ -34,4 +34,4 @@ suites_not_covered 250
 #   Without that it is a hand-maintained count that drifts, which is the failure
 #   this repository has spent a day proving. It is not a ceiling; it is a
 #   measurement that must be true.
-checks_never_observed_red 951
+checks_never_observed_red 1155
