@@ -2139,11 +2139,14 @@ true until the next version shipped.
   unreachable whenever no endpoint is configured, because the s3 branch demands one first
   -- and the arms could then say nothing without an object-store fixture.
 
-  Eight arms in `test/objstore_userinfo.sh`, five of them refusals and **three of them
-  controls**, because the first probe of this gap proved nothing: with no credentials every
-  s3 URL returned `28000`, the clean one included, so a userinfo refusal was
-  indistinguishable from an unreachable object store. The controls hold that a clean URL
-  still reaches the endpoint demand, that a malformed URL still gets the bucket/key
+  **Twelve arms** added to `test/objstore_userinfo.sh` -- five refusals and **seven
+  controls**, taking the file from 7 checks to 19 -- because
+  the first probe of this gap proved nothing: with no credentials every s3 URL returned
+  `28000`, the clean one included, so a userinfo refusal was indistinguishable from an
+  unreachable object store.
+
+  The controls hold that a clean URL still reaches the endpoint demand **and that the
+  message names `AWS_ENDPOINT_URL`**, that a malformed URL still gets the bucket/key
   refusal, and that an `@` in the KEY is left alone.
 
 - The matrix runner's accounting breakdown says which LINE it means, because the old
@@ -2177,6 +2180,13 @@ true until the next version shipped.
   either a new ledger row or a rename that would orphan an existing one, and `main` has no
   tool to remove an orphan until #983 lands -- so the sequencing is written into the arm's
   comment rather than quietly skipped.
+  That positive matcher matters more than it looks: `28000` is raised by **three** different
+  demands in `os_resolve_s3` -- a missing endpoint, a missing credential, and the
+  authorization refusal -- so a control that sees `28000` and no `userinfo` has pinned
+  nothing about which one fired. The `gs://` control makes the point concretely: its `28000`
+  is the **credential** demand, because `gs` defaults its endpoint to the interop host and
+  never reaches the endpoint demand at all. Same code, different cause, and only a matcher
+  that names the variable can tell them apart.
 
 ## [1.0-alpha3] - 2026-09-02
 
