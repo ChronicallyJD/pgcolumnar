@@ -264,9 +264,22 @@ class Cluster:
             )
 
     def start(self):
-        _asroot(["pg_ctl", "-D", str(self.datadir), "-l",
-                 str(self.datadir / "server.log"), "-w", "start"],
-                self.bindir, self.datadir)
+        log = self.datadir / "server.log"
+        try:
+            _asroot(["pg_ctl", "-D", str(self.datadir), "-l", str(log), "-w", "start"],
+                    self.bindir, self.datadir)
+        except RuntimeError as e:
+            # `pg_ctl` says "Examine the log output." and then nothing examined it, so a
+            # cluster that would not start produced fifty identical errors naming the
+            # command and not one naming the cause. Measured on a GitHub runner: fifty
+            # errors, every one of them `pg_ctl: could not start server`, and the reason
+            # was in a file nobody read.
+            #
+            # lib.sh has had pgc_start_log_report since #537 for exactly this, and the
+            # two harnesses are meant to be parallel in FUNCTIONALITY. This is that
+            # function's job on this side, written here rather than called across the
+            # boundary.
+            raise RuntimeError(f"{e}\n{_start_log_report(log)}") from e
         self._started = True
 
     def stop(self):
@@ -562,6 +575,35 @@ def _run(argv, check=True):
     if check and proc.returncode != 0:
         raise RuntimeError(f"{argv!r} failed rc={proc.returncode}: {proc.stderr.strip()}")
     return proc.stdout
+
+
+# What the server log says about a cluster that would not start.
+#
+# FATAL lines first, with their line numbers, then a tail, and it SAYS SO when it found
+# neither: silence here reads as "there was nothing to say", which was the whole complaint
+# in #537. lib.sh's pgc_start_log_report is the same function on the other side; neither
+# calls the other, because the harnesses stay independent.
+_START_FATAL = re.compile(r"FATAL|PANIC|could not|No space|Permission denied", re.I)
+
+
+def _start_log_report(log, fatal_lines=5, tail_lines=20):
+    try:
+        text = pathlib.Path(log).read_text(errors="replace")
+    except OSError as e:
+        return f"---- server log unreadable at {log}: {e} ----"
+    if not text.strip():
+        return f"---- server log absent or empty at {log} ----"
+    lines = text.splitlines()
+    fatal = [f"  {n}: {l}" for n, l in enumerate(lines, 1) if _START_FATAL.search(l)]
+    out = []
+    if fatal:
+        out.append("---- why the cluster would not start ----")
+        out.extend(fatal[:fatal_lines])
+    else:
+        out.append("---- no FATAL in the server log; its tail follows ----")
+    out.append(f"---- server log tail ({log}) ----")
+    out.extend(f"  {l}" for l in lines[-tail_lines:])
+    return "\n".join(out)
 
 
 def _asroot(argv, bindir, datadir, check=True):

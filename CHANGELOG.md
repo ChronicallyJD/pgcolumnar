@@ -146,6 +146,18 @@ true until the next version shipped.
   Field 5 because the entry above inserted the majors as field 4. At the moment this
   change landed on its own it was field 4; both ship in the same release, so the form
   here is the one that works on the shipped tree.
+- A pytest cluster that will not start now says why (#1016).
+
+  `pg_ctl` prints "Examine the log output." and nothing examined it, so a cluster that
+  failed to start produced fifty identical errors naming the COMMAND and not one naming
+  the cause -- measured on a GitHub runner, fifty `pg_ctl: could not start server` and the
+  reason sitting in a file nobody read. `lib.sh` has had `pgc_start_log_report` since #537
+  for exactly this; the pytest harness had no equivalent, and the two are meant to be
+  parallel in functionality. It reports the FATAL lines with their line numbers, then a
+  tail, and says so explicitly when it found neither -- silence reads as "nothing to say",
+  which was #537's whole complaint. Written on this side rather than called across the
+  boundary, because the harnesses stay independent.
+
 - The 93 pytest tests that needed a cluster now run in CI, and both pytest jobs assert
   how many tests they collected (#1016).
 
