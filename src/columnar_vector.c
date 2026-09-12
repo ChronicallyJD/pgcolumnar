@@ -69,6 +69,8 @@
 #include "optimizer/planner.h"
 #include "optimizer/cost.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/planmain.h"
+#include "parser/parsetree.h"
 #include "optimizer/tlist.h"
 #include "utils/array.h"
 #include "access/sysattr.h"
@@ -627,7 +629,34 @@ typedef struct PgColumnarAggScanState
 	 * state is ended before EXPLAIN runs. Meaningful only when haveStats.
 	 */
 	int			usablePreds;
+
+	/*
+	 * Unique-key inner join fold (#752). joinFactAttno 0 means this node
+	 * is a plain base-relation fold.
+	 */
+	AttrNumber	joinFactAttno;
+	AttrNumber	joinBuildResno;
+	PlanState  *joinBuildState;
+	MemoryContext joinFoldContext;
+	FmgrInfo	joinEqFn;
+	FmgrInfo	joinHashFn;
+	Oid			joinCollation;
+	int16		joinTyplen;
+	bool		joinTypbyval;
+	bool		joinFoldKeysReady;
+	uint32		joinFoldNslots;
+	uint32		joinFoldNkeys;
+	char	   *joinFoldOccupied;
+	uint32	   *joinFoldHashes;
+	Datum	   *joinFoldKeys;
 } PgColumnarAggScanState;
+
+static AttrNumber pgcolumnar_join_fold_key_resno(Plan *plan, Index varno,
+											AttrNumber attno);
+static void pgcolumnar_join_fold_drain(PgColumnarAggScanState *state);
+static void pgcolumnar_join_fold_reset_table(PgColumnarAggScanState *state);
+static bool pgcolumnar_join_fold_lookup(PgColumnarAggScanState *state,
+									   Datum value);
 
 static const CustomExecMethods pgcolumnar_agg_exec_methods;
 static const CustomExecMethods pgcolumnar_agg_parallel_exec_methods;
@@ -799,9 +828,37 @@ PgColumnarPlanAggPath(PlannerInfo *root, RelOptInfo *rel, CustomPath *best_path,
 	cscan->scan.plan.qual = NIL;	/* WHERE is applied inside the scan */
 	cscan->scan.scanrelid = 0;		/* not a base-relation scan */
 	cscan->flags = best_path->flags;
-	cscan->custom_plans = NIL;
+	cscan->custom_plans = custom_plans;
 	cscan->custom_exprs = NIL;
 	cscan->custom_private = best_path->custom_private;
+	if (list_length(best_path->custom_private) >= 7)
+	{
+		Plan	   *dimPlan;
+		AttrNumber	resno;
+		ListCell   *lc;
+		List	   *priv;
+		int			i;
+
+		if (list_length(custom_plans) != 1)
+			elog(ERROR, "pgcolumnar join fold expected one dimension plan");
+		dimPlan = (Plan *) linitial(custom_plans);
+		resno = pgcolumnar_join_fold_key_resno(dimPlan,
+			(Index) intVal(list_nth(best_path->custom_private, 4)),
+			(AttrNumber) intVal(list_nth(best_path->custom_private, 5)));
+		if (!AttributeNumberIsValid(resno))
+			elog(ERROR, "pgcolumnar join fold could not locate the dimension key");
+		priv = NIL;
+		i = 0;
+		foreach(lc, best_path->custom_private)
+		{
+			if (i == 6)
+				priv = lappend(priv, makeInteger((int) resno));
+			else
+				priv = lappend(priv, copyObject(lfirst(lc)));
+			i++;
+		}
+		cscan->custom_private = priv;
+	}
 	cscan->custom_scan_tlist = tlist;	/* defines the output tuple shape */
 	cscan->methods = &pgcolumnar_scan_methods;	/* shared registered methods */
 
@@ -883,6 +940,384 @@ pgcolumnar_parallel_agg_ok(PgColumnarAggKind kind)
 }
 
 /*
+ * Unique-key inner join fold (#752).
+ *
+ * A star-schema inner Hash Join onto a unique dimension is a filter of the
+ * fact table, so the ungrouped vectorized aggregate can keep running. The
+ * dimension child is drained into an exact key set; fact rows whose join key
+ * is absent are skipped. Duplicate-key dimensions, LEFT joins, and a grouped
+ * aggregate over a join are refused and stay on core Agg.
+ */
+static Node *
+pgcolumnar_join_fold_strip(Node *node)
+{
+	while (node != NULL && IsA(node, RelabelType))
+		node = (Node *) ((RelabelType *) node)->arg;
+	return node;
+}
+
+static bool
+pgcolumnar_join_fold_base_scan(Path *path)
+{
+	CustomPath *customPath;
+
+	if (path == NULL || !IsA(path, CustomPath))
+		return false;
+	customPath = (CustomPath *) path;
+	return customPath->methods != NULL &&
+		strcmp(customPath->methods->CustomName, "PgColumnarScan") == 0 &&
+		customPath->custom_private == NIL &&
+		path->param_info == NULL &&
+		!path->parallel_aware &&
+		path->parallel_workers == 0;
+}
+
+static HashPath *
+pgcolumnar_join_fold_as_hashpath(Path *path)
+{
+	if (path == NULL)
+		return NULL;
+	if (IsA(path, HashPath))
+	{
+		HashPath   *hashPath = (HashPath *) path;
+
+		if (hashPath->jpath.jointype == JOIN_INNER &&
+			path->param_info == NULL &&
+			!path->parallel_aware)
+			return hashPath;
+		return NULL;
+	}
+	if (IsA(path, CustomPath))
+	{
+		CustomPath *customPath = (CustomPath *) path;
+		Path	   *child;
+
+		if (customPath->methods == NULL ||
+			strcmp(customPath->methods->CustomName,
+				   "Columnar Runtime Filter Coordinator") != 0)
+			return NULL;
+		if (customPath->custom_paths == NIL)
+			return NULL;
+		child = (Path *) linitial(customPath->custom_paths);
+		return pgcolumnar_join_fold_as_hashpath(child);
+	}
+	return NULL;
+}
+
+static HashPath *
+pgcolumnar_join_fold_hashpath(RelOptInfo *joinrel)
+{
+	ListCell   *lc;
+	HashPath   *hashPath;
+
+	if (joinrel == NULL)
+		return NULL;
+	hashPath = pgcolumnar_join_fold_as_hashpath(joinrel->cheapest_total_path);
+	if (hashPath != NULL)
+		return hashPath;
+	foreach(lc, joinrel->pathlist)
+	{
+		hashPath = pgcolumnar_join_fold_as_hashpath((Path *) lfirst(lc));
+		if (hashPath != NULL)
+			return hashPath;
+	}
+	return NULL;
+}
+
+static bool
+pgcolumnar_join_fold_vars(PlannerInfo *root, HashPath *hashPath,
+						  Var **factVarOut, Var **buildVarOut)
+{
+	RestrictInfo *restrictInfo;
+	OpExpr	 *operatorExpr;
+	Node	   *left;
+	Node	   *right;
+	Var		*factVar;
+	Var		*buildVar;
+	Relids	  factRelids;
+	Relids	  buildRelids;
+	RangeTblEntry *rte;
+	TypeCacheEntry *tce;
+
+	if (list_length(hashPath->path_hashclauses) != 1)
+		return false;
+	restrictInfo = linitial_node(RestrictInfo, hashPath->path_hashclauses);
+	if (!IsA(restrictInfo->clause, OpExpr))
+		return false;
+	operatorExpr = (OpExpr *) restrictInfo->clause;
+	if (list_length(operatorExpr->args) != 2)
+		return false;
+	left = pgcolumnar_join_fold_strip(linitial(operatorExpr->args));
+	right = pgcolumnar_join_fold_strip(lsecond(operatorExpr->args));
+	if (!IsA(left, Var) || !IsA(right, Var))
+		return false;
+	factRelids = hashPath->jpath.outerjoinpath->parent->relids;
+	buildRelids = hashPath->jpath.innerjoinpath->parent->relids;
+	if (bms_is_member(((Var *) left)->varno, factRelids) &&
+		bms_is_member(((Var *) right)->varno, buildRelids))
+	{
+		factVar = (Var *) left;
+		buildVar = (Var *) right;
+	}
+	else if (bms_is_member(((Var *) right)->varno, factRelids) &&
+			 bms_is_member(((Var *) left)->varno, buildRelids))
+	{
+		factVar = (Var *) right;
+		buildVar = (Var *) left;
+	}
+	else
+		return false;
+	if (factVar->varlevelsup != 0 || buildVar->varlevelsup != 0 ||
+		factVar->varattno <= 0 || buildVar->varattno <= 0)
+		return false;
+	if (factVar->vartype != buildVar->vartype)
+		return false;
+	rte = planner_rt_fetch(factVar->varno, root);
+	if (rte == NULL || rte->rtekind != RTE_RELATION ||
+		!PgColumnarIsColumnarRelation(rte->relid))
+		return false;
+	tce = lookup_type_cache(factVar->vartype,
+							TYPECACHE_EQ_OPR | TYPECACHE_HASH_PROC);
+	if (!OidIsValid(tce->eq_opr) || !OidIsValid(tce->hash_proc))
+		return false;
+	*factVarOut = factVar;
+	*buildVarOut = buildVar;
+	return true;
+}
+
+static bool
+pgcolumnar_join_fold_dim_has_key(Path *dimPath, Var *buildVar)
+{
+	ListCell   *lc;
+
+	if (dimPath == NULL || dimPath->pathtarget == NULL)
+		return false;
+	foreach(lc, dimPath->pathtarget->exprs)
+	{
+		Node	   *expr = pgcolumnar_join_fold_strip((Node *) lfirst(lc));
+
+		if (IsA(expr, Var) &&
+			((Var *) expr)->varno == buildVar->varno &&
+			((Var *) expr)->varattno == buildVar->varattno)
+			return true;
+	}
+	return false;
+}
+
+static bool
+pgcolumnar_join_fold_try(PlannerInfo *root, RelOptInfo *joinrel,
+						 Index *factRtiOut, RelOptInfo **factRelOut,
+						 Path **dimPathOut, AttrNumber *factAttnoOut,
+						 Index *buildVarnoOut, AttrNumber *buildAttnoOut)
+{
+	HashPath   *hashPath;
+	Var		*factVar;
+	Var		*buildVar;
+	Path	   *outerPath;
+	Path	   *innerPath;
+	RelOptInfo *innerrel;
+	RelOptInfo *factRel;
+
+	if (bms_num_members(joinrel->relids) != 2)
+		return false;
+	{
+		ListCell   *sjc;
+
+		foreach(sjc, root->join_info_list)
+		{
+			SpecialJoinInfo *sj = (SpecialJoinInfo *) lfirst(sjc);
+
+			if (sj->jointype == JOIN_INNER)
+				continue;
+			if (bms_is_subset(sj->min_lefthand, joinrel->relids) &&
+				bms_is_subset(sj->min_righthand, joinrel->relids))
+				return false;
+		}
+	}
+	hashPath = pgcolumnar_join_fold_hashpath(joinrel);
+	if (hashPath == NULL)
+		return false;
+	outerPath = hashPath->jpath.outerjoinpath;
+	innerPath = hashPath->jpath.innerjoinpath;
+	if (!pgcolumnar_join_fold_base_scan(outerPath))
+		return false;
+	if (innerPath == NULL || innerPath->param_info != NULL)
+		return false;
+	if (!pgcolumnar_join_fold_vars(root, hashPath, &factVar, &buildVar))
+		return false;
+	if (!pgcolumnar_join_fold_dim_has_key(innerPath, buildVar))
+		return false;
+	innerrel = innerPath->parent;
+	if (!innerrel_is_unique(root, joinrel->relids, outerPath->parent->relids,
+							innerrel, JOIN_INNER, hashPath->path_hashclauses,
+							true))
+		return false;
+	factRel = find_base_rel(root, (int) factVar->varno);
+	if (factRel == NULL)
+		return false;
+	*factRtiOut = factVar->varno;
+	*factRelOut = factRel;
+	*dimPathOut = innerPath;
+	*factAttnoOut = factVar->varattno;
+	*buildVarnoOut = buildVar->varno;
+	*buildAttnoOut = buildVar->varattno;
+	return true;
+}
+
+static AttrNumber
+pgcolumnar_join_fold_key_resno(Plan *plan, Index varno, AttrNumber attno)
+{
+	ListCell   *cell;
+
+	foreach(cell, plan->targetlist)
+	{
+		TargetEntry *entry = lfirst_node(TargetEntry, cell);
+		Node	   *expr = pgcolumnar_join_fold_strip((Node *) entry->expr);
+
+		if (IsA(expr, Var) &&
+			((Var *) expr)->varno == varno &&
+			((Var *) expr)->varattno == attno)
+			return entry->resno;
+	}
+	return InvalidAttrNumber;
+}
+
+static void
+pgcolumnar_join_fold_reset_table(PgColumnarAggScanState *state)
+{
+	state->joinFoldOccupied = NULL;
+	state->joinFoldHashes = NULL;
+	state->joinFoldKeys = NULL;
+	state->joinFoldNslots = 0;
+	state->joinFoldNkeys = 0;
+	state->joinFoldKeysReady = false;
+}
+
+static bool
+pgcolumnar_join_fold_eq(PgColumnarAggScanState *state, Datum a, Datum b)
+{
+	return DatumGetBool(FunctionCall2Coll(&state->joinEqFn,
+										  state->joinCollation, a, b));
+}
+
+static uint32
+pgcolumnar_join_fold_hash(PgColumnarAggScanState *state, Datum value)
+{
+	return DatumGetUInt32(FunctionCall1Coll(&state->joinHashFn,
+											state->joinCollation, value));
+}
+
+static void pgcolumnar_join_fold_insert(PgColumnarAggScanState *state,
+										Datum value);
+
+static void
+pgcolumnar_join_fold_grow(PgColumnarAggScanState *state)
+{
+	uint32	  oldSlots = state->joinFoldNslots;
+	char	   *oldOcc = state->joinFoldOccupied;
+	Datum	  *oldKeys = state->joinFoldKeys;
+	uint32	  i;
+
+	state->joinFoldNslots = (oldSlots == 0) ? 16 : oldSlots * 2;
+	state->joinFoldOccupied = (char *) palloc0(state->joinFoldNslots);
+	state->joinFoldHashes = (uint32 *) palloc0(sizeof(uint32) *
+											   state->joinFoldNslots);
+	state->joinFoldKeys = (Datum *) palloc0(sizeof(Datum) *
+											state->joinFoldNslots);
+	state->joinFoldNkeys = 0;
+	for (i = 0; i < oldSlots; i++)
+	{
+		if (oldOcc[i])
+			pgcolumnar_join_fold_insert(state, oldKeys[i]);
+	}
+}
+
+static void
+pgcolumnar_join_fold_insert(PgColumnarAggScanState *state, Datum value)
+{
+	uint32	  h;
+	uint32	  mask;
+	uint32	  i;
+	Datum	   copied;
+
+	if (state->joinFoldNslots == 0 ||
+		state->joinFoldNkeys * 4 > state->joinFoldNslots * 3)
+		pgcolumnar_join_fold_grow(state);
+	copied = datumCopy(value, state->joinTypbyval, state->joinTyplen);
+	h = pgcolumnar_join_fold_hash(state, copied);
+	mask = state->joinFoldNslots - 1;
+	i = h & mask;
+	for (;;)
+	{
+		if (!state->joinFoldOccupied[i])
+		{
+			state->joinFoldOccupied[i] = 1;
+			state->joinFoldHashes[i] = h;
+			state->joinFoldKeys[i] = copied;
+			state->joinFoldNkeys++;
+			return;
+		}
+		if (state->joinFoldHashes[i] == h &&
+			pgcolumnar_join_fold_eq(state, state->joinFoldKeys[i], copied))
+			return;
+		i = (i + 1) & mask;
+	}
+}
+
+static bool
+pgcolumnar_join_fold_lookup(PgColumnarAggScanState *state, Datum value)
+{
+	uint32	  h;
+	uint32	  mask;
+	uint32	  i;
+	uint32	  start;
+
+	if (state->joinFoldNkeys == 0)
+		return false;
+	h = pgcolumnar_join_fold_hash(state, value);
+	mask = state->joinFoldNslots - 1;
+	i = h & mask;
+	start = i;
+	do
+	{
+		if (!state->joinFoldOccupied[i])
+			return false;
+		if (state->joinFoldHashes[i] == h &&
+			pgcolumnar_join_fold_eq(state, state->joinFoldKeys[i], value))
+			return true;
+		i = (i + 1) & mask;
+	} while (i != start);
+	return false;
+}
+
+static void
+pgcolumnar_join_fold_drain(PgColumnarAggScanState *state)
+{
+	MemoryContext old;
+	TupleTableSlot *slot;
+
+	if (state->joinBuildState == NULL || state->joinFoldKeysReady)
+		return;
+	old = MemoryContextSwitchTo(state->joinFoldContext);
+	pgcolumnar_join_fold_reset_table(state);
+	for (;;)
+	{
+		bool		isnull;
+		Datum	   value;
+
+		slot = ExecProcNode(state->joinBuildState);
+		if (TupIsNull(slot))
+			break;
+		value = slot_getattr(slot, state->joinBuildResno, &isnull);
+		if (!isnull)
+			pgcolumnar_join_fold_insert(state, value);
+		CHECK_FOR_INTERRUPTS();
+	}
+	MemoryContextSwitchTo(old);
+	state->joinFoldKeysReady = true;
+}
+
+/*
  * PgColumnarCreateUpperPaths
  *		create_upper_paths_hook: for a plain SELECT agg(col) FROM pgcolumnar_table
  *		[WHERE simple quals] with no grouping or HAVING, add a custom path that
@@ -912,6 +1347,12 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	Path	   *cheapest;
 	CustomPath *cpath;
 	bool		parallelAdded = false;
+	Index		factRti = 0;
+	RelOptInfo *factRel = NULL;
+	Path	   *dimPath = NULL;
+	AttrNumber	joinFactAttno = 0;
+	Index		joinBuildVarno = 0;
+	AttrNumber	joinBuildAttno = 0;
 
 	if (prev_create_upper_paths_hook)
 		prev_create_upper_paths_hook(root, stage, input_rel, output_rel, extra);
@@ -947,15 +1388,35 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 
 	/* plain, ungrouped aggregation only (spec 9) */
 
-	/* a single columnar base relation with no joins */
-	if (input_rel->reloptkind != RELOPT_BASEREL)
+	/*
+	 * A single columnar base relation, or a unique-key inner Hash Join whose
+	 * outer is that relation (#752). A join that would multiply fact rows is
+	 * refused and the ordinary Agg runs.
+	 */
+	if (input_rel->reloptkind == RELOPT_BASEREL)
+	{
+		if (bms_membership(input_rel->relids) != BMS_SINGLETON)
+			return;
+		if (input_rel->relid == 0 ||
+			input_rel->relid >= (Index) root->simple_rel_array_size)
+			return;
+		factRti = input_rel->relid;
+		factRel = input_rel;
+	}
+	else if (input_rel->reloptkind == RELOPT_JOINREL)
+	{
+		if (!pgcolumnar_enable_ungrouped_vector_agg)
+			return;
+		if (!pgcolumnar_join_fold_try(root, input_rel, &factRti, &factRel,
+									  &dimPath, &joinFactAttno,
+									  &joinBuildVarno, &joinBuildAttno))
+			return;
+	}
+	else
 		return;
-	if (bms_membership(input_rel->relids) != BMS_SINGLETON)
+	if (factRti == 0 || factRti >= (Index) root->simple_rel_array_size)
 		return;
-	if (input_rel->relid == 0 ||
-		input_rel->relid >= (Index) root->simple_rel_array_size)
-		return;
-	rte = root->simple_rte_array[input_rel->relid];
+	rte = root->simple_rte_array[factRti];
 	if (rte == NULL || rte->rtekind != RTE_RELATION ||
 		rte->relkind != RELKIND_RELATION)
 		return;
@@ -1046,7 +1507,7 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	i = 0;
 	foreach(lc, aggList)
 	{
-		if (!pgcolumnar_classify_aggref((Aggref *) lfirst(lc), (int) input_rel->relid,
+		if (!pgcolumnar_classify_aggref((Aggref *) lfirst(lc), (int) factRti,
 									  true, false, &specs[i]))
 			return;
 		i++;
@@ -1059,12 +1520,14 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	 * zone-map answerable. A filter, or a sum/avg over int8/float/numeric, needs
 	 * the scan-fold path instead (#289).
 	 */
-	quals = extract_actual_clauses(input_rel->baserestrictinfo, false);
+	quals = extract_actual_clauses(factRel->baserestrictinfo, false);
 
 	needsScan = (quals != NIL);
 	for (i = 0; i < naggs; i++)
 		if (!pgcolumnar_agg_metadata_answerable(specs[i].kind))
 			needsScan = true;
+	if (dimPath != NULL)
+		needsScan = true;
 
 	if (needsScan)
 	{
@@ -1134,7 +1597,7 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 		 * apply it, so a false gate would wrongly return a row. Rare; fall back.
 		 * (Mirrors the grouped path.)
 		 */
-		foreach(rc, input_rel->baserestrictinfo)
+		foreach(rc, factRel->baserestrictinfo)
 			if (lfirst_node(RestrictInfo, rc)->pseudoconstant)
 				return;
 
@@ -1143,7 +1606,7 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 		 * the projected data columns the recheck reads; fall back rather than
 		 * evaluate it against unset slot values.
 		 */
-		pull_varattnos((Node *) quals, input_rel->relid, &whereAtts);
+		pull_varattnos((Node *) quals, factRti, &whereAtts);
 		while ((m = bms_next_member(whereAtts, m)) >= 0)
 			if (m + FirstLowInvalidHeapAttributeNumber <= 0)
 				return;
@@ -1155,14 +1618,14 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 		Relation	rel = table_open(relid, AccessShareLock);
 		TupleDesc	tupdesc = RelationGetDescr(rel);
 
-		PgColumnarCountConvertibleQuals(quals, input_rel->relid, tupdesc,
+		PgColumnarCountConvertibleQuals(quals, factRti, tupdesc,
 									  &npreds, &allConvertible);
 		table_close(rel, AccessShareLock);
 		if (!allConvertible)
 			return;
 	}
 
-	cheapest = input_rel->cheapest_total_path;
+	cheapest = factRel->cheapest_total_path;
 	if (cheapest == NULL)
 		return;
 
@@ -1224,7 +1687,7 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 		ListCell   *pc;
 		Cost		cost;
 
-		foreach(pc, input_rel->pathlist)
+		foreach(pc, factRel->pathlist)
 		{
 			Path	   *p = (Path *) lfirst(pc);
 
@@ -1237,6 +1700,8 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 		if (scanp == NULL)
 			scanp = cheapest;
 		cost = scanp->total_cost + cpu_tuple_cost;
+		if (dimPath != NULL)
+			cost += dimPath->total_cost;
 		cpath->path.startup_cost = cost;
 		cpath->path.total_cost = cost;
 	}
@@ -1318,15 +1783,26 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	}
 	cpath->path.pathkeys = NIL;
 	cpath->flags = 0;
-	cpath->custom_paths = NIL;
+	cpath->custom_paths = (dimPath != NULL) ? list_make1(dimPath) : NIL;
 #if PG_VERSION_NUM >= 170000
 	cpath->custom_restrictinfo = NIL;
 #endif
 	cpath->custom_private =
-		list_make3(makeInteger((int) input_rel->relid),
+		list_make3(makeInteger((int) factRti),
 				   copyObject(quals),
 				   makeConst(OIDOID, -1, InvalidOid, sizeof(Oid),
 							 ObjectIdGetDatum(relid), false, true));
+	if (dimPath != NULL)
+	{
+		cpath->custom_private = lappend(cpath->custom_private,
+									   makeInteger((int) joinFactAttno));
+		cpath->custom_private = lappend(cpath->custom_private,
+									   makeInteger((int) joinBuildVarno));
+		cpath->custom_private = lappend(cpath->custom_private,
+									   makeInteger((int) joinBuildAttno));
+		cpath->custom_private = lappend(cpath->custom_private,
+									   makeInteger(0));
+	}
 	cpath->methods = &pgcolumnar_agg_path_methods;
 
 	/*
@@ -1345,7 +1821,7 @@ PgColumnarCreateUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	 * cheap Gather cost by #133, would wrongly out-cost the genuinely parallel
 	 * plan. Opt-in while it is proven and benchmarked.
 	 */
-	if (needsScan && pgcolumnar_enable_parallel_vector_agg)
+	if (dimPath == NULL && needsScan && pgcolumnar_enable_parallel_vector_agg)
 	{
 		GroupPathExtraData *gpe = (GroupPathExtraData *) extra;
 		bool		parallelOk = (gpe != NULL &&
@@ -2226,6 +2702,15 @@ PgColumnarCreateAggScanState(CustomScan *cscan)
 	state->scanrelid = (Index) intVal(linitial(cscan->custom_private));
 	state->quals = (List *) lsecond(cscan->custom_private);
 	state->relid = DatumGetObjectId(((Const *) lthird(cscan->custom_private))->constvalue);
+	state->joinFactAttno = 0;
+	state->joinBuildResno = 0;
+	if (list_length(cscan->custom_private) >= 7)
+	{
+		state->joinFactAttno =
+			(AttrNumber) intVal(list_nth(cscan->custom_private, 3));
+		state->joinBuildResno =
+			(AttrNumber) intVal(list_nth(cscan->custom_private, 6));
+	}
 
 	/*
 	 * A parallel partial node (#289 phase 5/6) is planned with
@@ -2270,6 +2755,8 @@ PgColumnarCreateAggScanState(CustomScan *cscan)
 	for (i = 0; i < naggs; i++)
 		if (!pgcolumnar_agg_metadata_answerable(state->specs[i].kind))
 			state->scanFold = true;
+	if (state->joinFactAttno > 0)
+		state->scanFold = true;
 
 	return (Node *) state;
 }
@@ -2324,6 +2811,9 @@ PgColumnarBeginAggScan(CustomScanState *node, EState *estate, int eflags)
 			if (state->specs[a].attidx >= 0)
 				state->projected = bms_add_member(state->projected,
 												  state->specs[a].attidx);
+		if (state->joinFactAttno > 0)
+			state->projected = bms_add_member(state->projected,
+										  state->joinFactAttno - 1);
 		if (state->projected == NULL)
 			state->projected = bms_make_singleton(0);
 
@@ -2377,6 +2867,30 @@ PgColumnarBeginAggScan(CustomScanState *node, EState *estate, int eflags)
 	state->nscankeys = PgColumnarCountScanKeys(state->quals, state->scanrelid,
 											 tupdesc);
 
+	if (state->joinFactAttno > 0)
+	{
+		CustomScan *cscan = (CustomScan *) node->ss.ps.plan;
+		Form_pg_attribute att;
+		TypeCacheEntry *tce;
+
+		if (list_length(cscan->custom_plans) != 1)
+			elog(ERROR, "pgcolumnar join fold expected one dimension plan");
+		att = TupleDescAttr(tupdesc, state->joinFactAttno - 1);
+		tce = lookup_type_cache(att->atttypid,
+								TYPECACHE_EQ_OPR_FINFO |
+								TYPECACHE_HASH_PROC_FINFO);
+		fmgr_info_copy(&state->joinEqFn, &tce->eq_opr_finfo,
+					   estate->es_query_cxt);
+		fmgr_info_copy(&state->joinHashFn, &tce->hash_proc_finfo,
+					   estate->es_query_cxt);
+		state->joinTyplen = att->attlen;
+		state->joinTypbyval = att->attbyval;
+		state->joinCollation = att->attcollation;
+		state->joinBuildState = ExecInitNode((Plan *) linitial(cscan->custom_plans),
+										 estate, eflags);
+		node->custom_ps = list_make1(state->joinBuildState);
+	}
+
 	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
 	{
 		table_close(rel, AccessShareLock);
@@ -2394,6 +2908,15 @@ PgColumnarBeginAggScan(CustomScanState *node, EState *estate, int eflags)
 	 */
 	PgColumnarCheckNativeFormatVersion(PgColumnarStorageId(rel),
 									 RelationGetRelationName(rel));
+
+	if (state->joinFactAttno > 0)
+	{
+		state->joinFoldContext =
+			AllocSetContextCreate(estate->es_query_cxt,
+								  "columnar join fold keys",
+								  ALLOCSET_SMALL_SIZES);
+		pgcolumnar_join_fold_drain(state);
+	}
 
 	/* finish setting up min/max comparison info now that we have the tupdesc */
 	for (a = 0; a < state->naggs; a++)
@@ -3574,6 +4097,9 @@ pgcolumnar_native_batch_fold(PgColumnarAggScanState *state, Relation rel,
 	int64		survRows = 0;	/* rows that passed it */
 	bool		deferOn = false;
 
+	if (state->joinFactAttno > 0)
+		return false;
+
 	if (!pgcolumnar_batch_shape_eligible(state, tupdesc, &keys, &nkeys))
 		return false;
 
@@ -4023,6 +4549,14 @@ pgcolumnar_native_scan_agg(PgColumnarAggScanState *state,
 				continue;
 		}
 
+		if (state->joinFactAttno > 0)
+		{
+			int			jk = state->joinFactAttno - 1;
+
+			if (nulls[jk] || !pgcolumnar_join_fold_lookup(state, values[jk]))
+				continue;
+		}
+
 		for (a = 0; a < state->naggs; a++)
 		{
 			PgColumnarAggSpec *spec = &state->specs[a];
@@ -4176,6 +4710,16 @@ PgColumnarEndAggScan(CustomScanState *node)
 	if (state->baseSlot != NULL)
 		ExecDropSingleTupleTableSlot(state->baseSlot);
 	state->baseSlot = NULL;
+	if (state->joinBuildState != NULL)
+	{
+		ExecEndNode(state->joinBuildState);
+		state->joinBuildState = NULL;
+	}
+	if (state->joinFoldContext != NULL)
+	{
+		MemoryContextDelete(state->joinFoldContext);
+		state->joinFoldContext = NULL;
+	}
 	/* the reader is ended inside PgColumnarExecAggScan; the memory contexts are
 	 * children of es_query_cxt and freed with it */
 }
@@ -4212,6 +4756,15 @@ PgColumnarReScanAggScan(CustomScanState *node)
 	 * nsumSet true would make the next scan add to a dangling pointer.
 	 */
 	pgcolumnar_agg_specs_reset(state);
+
+	if (state->joinBuildState != NULL)
+	{
+		ExecReScan(state->joinBuildState);
+		if (state->joinFoldContext != NULL)
+			MemoryContextReset(state->joinFoldContext);
+		pgcolumnar_join_fold_reset_table(state);
+		pgcolumnar_join_fold_drain(state);
+	}
 }
 
 static void
@@ -4221,6 +4774,8 @@ PgColumnarExplainAggScan(CustomScanState *node, List *ancestors, ExplainState *e
 
 	ExplainPropertyInteger("Columnar Vectorized Aggregates", NULL,
 						   state->naggs, es);
+	if (state->joinFactAttno > 0)
+		ExplainPropertyText("Columnar Join Fold", "yes", es);
 	PgColumnarExplainPushedDown(state->nscankeys, es);
 	PgColumnarExplainVectorPredicates(state->npreds, es);
 	if (state->scanFold)

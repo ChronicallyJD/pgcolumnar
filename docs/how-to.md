@@ -482,6 +482,22 @@ EXPLAIN (ANALYZE) SELECT count(*) FROM events;
 surviving rows and decodes the filtered columns. Keep the filter on a sorted or
 bloomed column so chunk-group skipping removes most groups first.
 
+## Fold an aggregate over a unique-key join
+
+An ungrouped aggregate over a unique-key inner Hash Join can keep the
+vectorized fold.
+
+```sql
+SET pgcolumnar.enable_ungrouped_vector_agg = on;
+EXPLAIN (COSTS OFF)
+SELECT count(*), sum(fact.amount)
+FROM fact JOIN dim ON fact.k = dim.k;
+```
+
+**Tuning.** The dimension needs a unique constraint on the join key.
+A duplicate-key dimension keeps the core Agg plan.
+Grouped aggregation over a join is not this path.
+
 ## Measure and introspect
 
 Inspect physical layout, sort quality, and query plans.

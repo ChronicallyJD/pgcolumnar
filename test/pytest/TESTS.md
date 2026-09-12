@@ -73,6 +73,7 @@ behaviour, the source of that number is named.
 - [25. test_join_runtime_filter.py: serial join runtime filter](#25-test_join_runtime_filterpy-serial-join-runtime-filter)
 - [26. test_check_records.py: every counted assertion is a record](#26-test_check_recordspy-every-counted-assertion-is-a-record)
 - [27. test_skip_loop_arms.py: a skipped arm records under its own name](#27-test_skip_loop_armspy-a-skipped-arm-records-under-its-own-name)
+- [28. test_join_vector_agg.py: ungrouped fold over a unique-key join](#28-test_join_vector_aggpy-ungrouped-fold-over-a-unique-key-join)
 
 ## 1. How to read a test in here
 
@@ -2698,3 +2699,27 @@ cheapest to satisfy wrongly: a classifier that filed **everything** as `armless`
 it perfectly. It is load-bearing only because the per-bucket tests assert that a known
 site lands in the right bucket; the identity then says nothing else escaped. Both halves
 or neither.
+
+## 28. test_join_vector_agg.py: ungrouped fold over a unique-key join
+
+Pytest twin of `test/native_join_vector_agg.sh`. The two files are independent:
+each builds its own fixtures and expected values. They share only the public
+EXPLAIN name `Columnar Vectorized Aggregates` and the SQL answers.
+
+### `test_unique_join_keeps_the_ungrouped_fold`
+
+A unique-key inner join is a filter of the fact table. With the ungrouped GUC
+on, EXPLAIN shows `Columnar Vectorized Aggregates`. The GUC-off plan is core
+Agg. The answer matches GUC-off and a heap twin. The dimension holds a subset
+of the fact keys, so a fold that skipped membership would disagree with heap.
+
+### `test_duplicate_dim_keys_refuse_the_join_fold`
+
+Duplicate dimension keys would multiply fact rows. EXPLAIN has no vectorized
+agg node. The answer still matches a heap twin of the same join.
+
+### `test_left_join_refuses_the_join_fold`
+
+A LEFT join is not a fact-table filter. The target list names a dimension
+column so the planner cannot drop the join. EXPLAIN has no vectorized agg
+node. The answer matches a heap twin, including unmatched fact rows.

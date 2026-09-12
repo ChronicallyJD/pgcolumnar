@@ -138,6 +138,7 @@ controlled by a setting in the [Configuration reference](configuration.md):
   avg, min, or max on a supported type.
 - `count(*)` answered from catalog metadata when there is no filter.
 - Join runtime filter: a serial inner Hash Join can skip fact-table groups and reject non-matching rows using the build-side keys.
+- Vectorized aggregate over a unique-key inner Hash Join when the ungrouped fold is on.
 
 #### Reading the filter counters
 
