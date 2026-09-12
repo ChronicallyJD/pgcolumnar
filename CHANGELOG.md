@@ -1848,6 +1848,45 @@ true until the next version shipped.
   `moved s4d1's layout`, `no row was lost from s4d2` -- for the same reason.
 
   No ledger change: `hilbert_cluster` is not one of the two suites the ledger covers.
+- The object-storage loops name the case each iteration tests, so six checks stop
+  sharing three ledger keys (#982, second of eight).
+
+  `objstore_module` lost the most records of any suite to key collapsing: two loops of
+  three iterations each, where the check names did not carry the thing the iteration
+  varies. Measured against a control run on clean `main`:
+
+      clean main    30 records   24 distinct keys   3 colliding   6 lost
+      this branch   30 records   30 distinct keys   0 colliding   0 lost
+
+  The record count is unchanged, so this adds and removes no checks.
+
+  **The two loops show both sub-shapes of the same defect.** In the first, the headline
+  already interpolated the scheme and only the continuation was short:
+
+      check     "a s3 URL reports an object-storage error, not a missing file"
+      check_num "and does NOT report it as a missing file"      <- identical three times
+
+  In the second, *neither* name carried the metacharacter, so three iterations produced
+  one key for each of **two** checks -- the headline collided as well.
+
+  Both are fixed by the rule #984 proposed: the continuation carries the same
+  discriminator its headline names, and where the headline does not name one either, it
+  gains it. The discriminators come from the loop variable by parameter expansion
+  (`${url%%:*}` and stripping the fixed prefix and suffix off the pattern), so they are
+  already in scope:
+
+      a remote glob (*) is handled remotely (an object-storage error, not a local one)
+      and the * glob is NOT reported as a local filesystem miss
+      and the https URL is NOT reported as a missing file
+
+  The first loop's headline now reads its scheme from a variable rather than a `cut`
+  subshell, because both names need it. The resulting check name is byte-identical, so
+  no ledger row moves on account of it.
+
+  No ledger change at all: `objstore_module` is not one of the two suites the ledger
+  covers, so its check names have no rows. That is also why the twenty-four collisions
+  matter for #432 rather than for the census today -- twenty-one of them are in suites
+  that become covered only when the 240 are seeded.
 
 ## [1.0-alpha3] - 2026-09-02
 
