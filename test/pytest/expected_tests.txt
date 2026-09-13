@@ -52,7 +52,11 @@ guard_tests 277
 # which is the argument for gating it rather than a detail about it.
 # 166 -> 177 when test_native_ownership.py landed: nine parametrized refusal arms,
 # the owner control, and the check-ordering arm.
-cluster_tests 202
+cluster_tests 205
+# 177 -> 180 when test_stats_privilege.py landed, on top of
+# test_native_ownership.py's 166 -> 177. DERIVED by collection on the merged
+# tree, not 169 + 11: both branches bumped this from 166 and the union left two
+# lines, which is exactly the staleness #1018's enforcement exists to catch.
 # The rate is the point. The ungated half grew by 67 tests in the time #1016 took to review,
 # which was the argument for gating it. It is gated now, and 166 -> 182 is the first move made
 # with the gate actually watching: this number and the tests land in one commit.

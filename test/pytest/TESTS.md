@@ -77,6 +77,7 @@ behaviour, the source of that number is named.
 - [29. test_join_vector_agg.py: ungrouped fold over a unique-key join](#29-test_join_vector_aggpy-ungrouped-fold-over-a-unique-key-join)
 - [31. test_native_ownership.py: every maintenance function is owner-only](#31-test_native_ownershippy-every-maintenance-function-is-owner-only)
 - [30. test_differential.py: the heap oracle, all seven parts](#30-test_differentialpy-the-heap-oracle-all-seven-parts)
+- [32. test_stats_privilege.py: stats is readable only by a caller who may read the table](#32-test_stats_privilegepy-stats-is-readable-only-by-a-caller-who-may-read-the-table)
 
 ## 1. How to read a test in here
 
@@ -3116,3 +3117,42 @@ count diverge -- which is the arithmetic the metadata path has to get right and 
 gets right for free. Run both ways through `enable_vectorization`, which is what distinguishes
 "the fast path is correct" from "the fast path was not taken". `SET` on the connection rather
 than the bash suite's `ALTER DATABASE`, which exists because each psql there is a new session.
+## 32. test_stats_privilege.py: stats is readable only by a caller who may read the table
+
+Port of `test/stats_privilege.sh` (#560, ported for #432).
+
+`stats()` is SECURITY DEFINER and does its own privilege check, because GRANTing
+SELECT on `pgcolumnar.zone_map` to PUBLIC would publish per-column minimum, maximum
+and sum for every columnar table.
+
+**The trap the suite exists to catch.** Inside a SECURITY DEFINER function the
+effective user is the function owner, so `pg_class_aclcheck(relid, GetUserId(), ...)`
+checks the superuser who installed the extension and returns `ACLCHECK_OK` for every
+relation. It looks like a correct check and refuses nobody.
+
+### What the port asserts that the bash suite cannot
+
+`stats_privilege.sh` decides the refusal with `grep -c 'permission denied for table'`.
+`CLAUDE.md` names the rule: 42501 comes only from `aclcheck_error`, while a grep for
+"permission denied" is also satisfied by other refusals. **`permission denied for
+schema` matches it too**, which is not hypothetical — it is the confusion measured
+while porting `native_ownership`. This port asserts 42501 **and** that the message
+names the table, so neither half carries the arm alone.
+
+**Real logins, not `SET ROLE`.** Unlike the ownership port, session-opening is a
+property this suite tests, so `SET ROLE` would assert it away. Each role connects.
+
+| test | what it pins |
+| --- | --- |
+| `test_the_premises_each_role_is_what_the_suite_assumes` | each premise run BY the role it is about |
+| `test_who_may_read_the_stats` | owner, GRANTed reader and superuser all succeed |
+| `test_a_role_with_no_privilege_is_refused` | the bar: 42501 **and** the table named |
+
+### A helper that turned a driver detail into a product claim
+
+psycopg3 returns the **first** statement's result for a multi-statement execute, so
+`SET search_path ...; SELECT ...` hands back the SET's empty result. The first
+version collapsed that into a 0 and the arm reported *"the OWNER cannot read its
+stats"* — a product failure, from a driver behaviour. The helper now issues the SET
+as its own execute, and every call site asserts the error is `None` rather than
+folding it into a value.
